@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import * as ts from 'typescript/ast';
+import { API, ModuleKind } from 'typescript/sync';
 
 // Extensions CBM routes through a language that Satori deliberately owns
 // elsewhere. Razor (.razor/.cshtml) is markup with embedded C#: CBM only
@@ -107,10 +108,14 @@ function readCbmCatalog() {
 
 async function readSatoriDeclarations() {
     const filename = path.join(repoRoot, 'packages/core/src/languages/capabilities.ts');
-    const compiled = ts.transpileModule(readFileSync(filename, 'utf8'), {
-        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-        fileName: filename,
-    }).outputText;
+    const api = new API({ runExternalCode: false });
+    let compiled;
+    try {
+        compiled = api.transpileModule(readFileSync(filename, 'utf8'), {
+            compilerOptions: { module: ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+            fileName: filename,
+        }).outputText;
+    } finally { api.close(); }
     const module = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
     return module.getLanguageCapabilityDeclarations();
 }

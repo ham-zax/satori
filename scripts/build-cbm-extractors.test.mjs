@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import ts from 'typescript';
+import * as ts from 'typescript/ast';
+import { API } from 'typescript/sync';
 
 const repoRoot = process.cwd();
 const scriptPath = path.join(repoRoot, 'scripts/build-cbm-extractors.mjs');
@@ -11,20 +12,24 @@ const manifestPath = path.join(repoRoot, 'packages/core/assets/cbm-extractor/man
 
 function loadProductionPredicates() {
   const source = fs.readFileSync(scriptPath, 'utf8');
-  const sourceFile = ts.createSourceFile(scriptPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const requiredNames = new Set(['findKnownFailure', 'isMemoryFailureReason']);
-  const functions = new Map();
-  const visit = (node) => {
-    if (ts.isFunctionDeclaration(node) && node.name && requiredNames.has(node.name.text)) {
-      functions.set(node.name.text, source.slice(node.getStart(sourceFile), node.end));
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+  const api = new API({ runExternalCode: false });
+  try {
+    const retained = api.createSourceFile(scriptPath, source, { scriptKind: ts.ScriptKind.JS });
+    const sourceFile = retained.sourceFile;
+    const requiredNames = new Set(['findKnownFailure', 'isMemoryFailureReason']);
+    const functions = new Map();
+    const visit = (node) => {
+      if (ts.isFunctionDeclaration(node) && node.name && requiredNames.has(node.name.text)) {
+        functions.set(node.name.text, source.slice(node.getStart(sourceFile), node.end));
+      }
+      node.forEachChild(visit);
+    };
+    visit(sourceFile);
 
-  assert.deepEqual([...functions.keys()].sort(), [...requiredNames].sort(), 'production predicates must remain available');
-  const declarations = [...functions.values()].join('\n');
-  return vm.runInNewContext(`(() => { ${declarations}\nreturn { findKnownFailure, isMemoryFailureReason }; })()`);
+    assert.deepEqual([...functions.keys()].sort(), [...requiredNames].sort(), 'production predicates must remain available');
+    const declarations = [...functions.values()].join('\n');
+    return vm.runInNewContext(`(() => { ${declarations}\nreturn { findKnownFailure, isMemoryFailureReason }; })()`);
+  } finally { api.close(); }
 }
 
 const { findKnownFailure, isMemoryFailureReason } = loadProductionPredicates();

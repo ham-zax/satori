@@ -5,7 +5,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import * as ts from 'typescript/ast';
+import { API, ModuleKind } from 'typescript/sync';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -68,9 +69,13 @@ function moduleMetadata(filename) {
 }
 async function languageMap() {
     const filename = path.join(repoRoot, 'packages/core/src/languages/cbm-language-map.ts');
-    const compiled = ts.transpileModule(readFileSync(filename, 'utf8'), {
-        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }, fileName: filename,
-    }).outputText;
+    const api = new API({ runExternalCode: false });
+    let compiled;
+    try {
+        compiled = api.transpileModule(readFileSync(filename, 'utf8'), {
+            compilerOptions: { module: ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }, fileName: filename,
+        }).outputText;
+    } finally { api.close(); }
     return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 }
 function grammarDirectories() {

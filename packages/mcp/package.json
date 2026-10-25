@@ -25,8 +25,8 @@
     "build:runtime": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
-    "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix",
+    "lint": "oxlint --config ../../.oxlintrc.json src",
+    "lint:fix": "oxlint --config ../../.oxlintrc.json src --fix",
     "typecheck": "node ../../node_modules/typescript7/bin/tsc --build",
     "start": "tsx src/index.ts",
     "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:-your-api-key-here} VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=${MILVUS_ADDRESS:-localhost:19530} tsx src/index.ts",
@@ -45,18 +45,18 @@
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.0",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@satori-code/core": "workspace:*",
     "chokidar": "^5.0.0",
     "ignore": "^7.0.11",
     "jsonc-parser": "^3.3.1",
     "onnxruntime-node": "1.30.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "7.1.0-beta"
   },
   "files": [
     "dist/**/*.js",

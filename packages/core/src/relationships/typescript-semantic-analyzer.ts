@@ -3,7 +3,8 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import ts from 'typescript';
+import * as ts from '../semantic/typescript-api';
+import { TypeScriptProgramSession } from '../semantic/typescript-program-session';
 
 import {
     TYPESCRIPT_COMPILER_PROVIDER_ID,
@@ -249,8 +250,6 @@ function normalizedCompilerOptions(options: ts.CompilerOptions): Record<string, 
 function inferredCompilerOptions(): ts.CompilerOptions {
     return {
         allowJs: false,
-        allowSyntheticDefaultImports: true,
-        esModuleInterop: true,
         jsx: ts.JsxEmit.Preserve,
         module: ts.ModuleKind.NodeNext,
         moduleResolution: ts.ModuleResolutionKind.NodeNext,
@@ -323,11 +322,14 @@ function resolveExtendsPath(configPath: string, specifier: string): string | und
 }
 
 function configExtendsSpecifiers(configPath: string): string[] {
-    const read = ts.readConfigFile(configPath, ts.sys.readFile);
-    if (read.error || !read.config) return [];
-    const raw = read.config.extends;
-    return (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [])
-        .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    const api = new ts.API({ runExternalCode: false });
+    try {
+        const read = api.readConfigFile(configPath);
+        if (read.error || !read.config || typeof read.config !== 'object') return [];
+        const raw = (read.config as { extends?: unknown }).extends;
+        return (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [])
+            .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    } finally { api.close(); }
 }
 
 function collectConfigChain(configPath: string, seen = new Set<string>()): string[] {
@@ -346,35 +348,19 @@ function resolveProjectReferenceConfig(referencePath: string): string | undefine
     return resolveConfigLike(referencePath);
 }
 
-function parsedConfig(configPath: string): ts.ParsedCommandLine | undefined {
-    const read = ts.readConfigFile(configPath, ts.sys.readFile);
-    if (read.error) return undefined;
-    return ts.parseJsonConfigFileContent(
-        read.config,
-        ts.sys,
-        path.dirname(configPath),
-        undefined,
-        configPath,
-    );
-}
-
 function referencedDeclarationOutputs(configPath: string): string[] {
-    const parsed = parsedConfig(configPath);
-    if (!parsed) return [];
-    const outputs = new Set<string>();
-    for (const fileName of parsed.fileNames) {
-        if (fileName.endsWith('.d.ts') || fileName.endsWith('.d.mts') || fileName.endsWith('.d.cts')) continue;
+    const api = new ts.API({ runExternalCode: false });
+    try {
+        const parsed = api.parseConfigFile(configPath);
+        if (!parsed.options.declaration && !parsed.options.composite) return [];
+        const program = api.createProgram(parsed.fileNames, { ...parsed.options, noEmit: false }, { projectReferences: parsed.projectReferences });
         try {
-            for (const output of ts.getOutputFileNames(parsed, fileName, false)) {
-                if (output.endsWith('.d.ts') || output.endsWith('.d.mts') || output.endsWith('.d.cts')) {
-                    outputs.add(normalizeAbsolute(output));
-                }
-            }
-        } catch {
-            // Invalid/partial reference configuration remains represented by its config identity.
-        }
-    }
-    return [...outputs].sort();
+            // The compiler computes output paths, including declarationDir,
+            // outDir and bundled declarations. Never duplicate those rules.
+            return [...program.getDeclarationEmit(parsed.fileNames).outputFiles.keys()]
+                .filter(file => /\.d\.[cm]?ts$/.test(file)).map(normalizeAbsolute).sort();
+        } finally { program.dispose(); }
+    } finally { api.close(); }
 }
 
 function packageControlFiles(rootPath: string, sourceFiles: readonly string[]): string[] {
@@ -474,80 +460,9 @@ function compilerRootResourceFailure(
     return undefined;
 }
 
-class InferredLanguageServiceSession implements ProgramSession {
-    private readonly versions = new Map<string, number>();
-    private readonly overrides = new Map<string, string>();
-    private readonly languageService: ts.LanguageService;
-    private readonly sourceBudget: TypeScriptSourceBudgetTracker;
-
-    constructor(
-        private readonly rootPath: string,
-        private readonly fileNames: readonly string[],
-        private readonly options: ts.CompilerOptions,
-        resourceBudget: TypeScriptSourceBudget,
-    ) {
-        this.sourceBudget = new TypeScriptSourceBudgetTracker(resourceBudget);
-        const host: ts.LanguageServiceHost = {
-            getCompilationSettings: () => this.options,
-            getCurrentDirectory: () => this.rootPath,
-            getDefaultLibFileName: (compilerOptions) => ts.getDefaultLibFilePath(compilerOptions),
-            getScriptFileNames: () => [...this.fileNames],
-            getScriptSnapshot: (fileName) => {
-                const normalized = normalizeAbsolute(fileName);
-                const override = this.overrides.get(normalized);
-                if (override !== undefined) {
-                    return ts.ScriptSnapshot.fromString(override);
-                }
-                if (!fs.existsSync(normalized)) return undefined;
-                let stat: fs.Stats;
-                try {
-                    stat = fs.statSync(normalized);
-                } catch {
-                    return undefined;
-                }
-                if (!stat.isFile() || !this.sourceBudget.admit(normalized, stat.size)) {
-                    return undefined;
-                }
-                return ts.ScriptSnapshot.fromString(fs.readFileSync(normalized, 'utf8'));
-            },
-            getScriptVersion: (fileName) => String(this.versions.get(normalizeAbsolute(fileName)) ?? 0),
-            fileExists: ts.sys.fileExists,
-            readFile: ts.sys.readFile,
-            readDirectory: ts.sys.readDirectory,
-            directoryExists: ts.sys.directoryExists,
-            getDirectories: ts.sys.getDirectories,
-            realpath: ts.sys.realpath,
-        };
-        this.languageService = ts.createLanguageService(host, ts.createDocumentRegistry());
-    }
-
-    getProgram(): ts.Program {
-        const program = this.languageService.getProgram();
-        if (!program) throw new Error(`TypeScript inferred LanguageService did not create a Program for '${this.rootPath}'.`);
-        return program;
-    }
-
-    getResourceLimitFailure(): string | undefined {
-        return this.sourceBudget.getFailureMessage();
-    }
-
-    updateFile(fileName: string, source: string): void {
-        const normalized = normalizeAbsolute(fileName);
-        if (!this.sourceBudget.admit(normalized, Buffer.byteLength(source, 'utf8'))) {
-            return;
-        }
-        this.overrides.set(normalized, source);
-        this.versions.set(normalized, (this.versions.get(normalized) ?? 0) + 1);
-    }
-
-    invalidateFile(fileName: string): void {
-        const normalized = normalizeAbsolute(fileName);
-        this.overrides.delete(normalized);
-        this.versions.set(normalized, (this.versions.get(normalized) ?? 0) + 1);
-    }
-
-    dispose(): void {
-        this.languageService.dispose();
+class InferredLanguageServiceSession extends TypeScriptProgramSession implements ProgramSession {
+    constructor(rootPath: string, fileNames: readonly string[], options: ts.CompilerOptions, resourceBudget: TypeScriptSourceBudget) {
+        super(rootPath, fileNames, options, new TypeScriptSourceBudgetTracker(resourceBudget));
     }
 }
 
@@ -555,7 +470,7 @@ function sourceFileForProgram(program: ts.Program, absolutePath: string): ts.Sou
     const normalized = normalizeAbsolute(absolutePath);
     const direct = program.getSourceFile(normalized);
     if (direct) return direct;
-    return program.getSourceFiles().find((sourceFile) => normalizeAbsolute(sourceFile.fileName) === normalized);
+    return program.getSourceFileNames().map(name => program.getSourceFile(name)!).find((sourceFile) => normalizeAbsolute(sourceFile.fileName) === normalized);
 }
 
 function unionReverseDependencies(
@@ -623,14 +538,10 @@ function buildReverseDependencies(
         const sourceRelative = plan.relativeFiles[index];
         const sourceFile = sourceFileForProgram(program, sourceAbsolute);
         if (!sourceFile) continue;
-        const preprocessed = ts.preProcessFile(sourceFile.text, true, true);
-        for (const imported of preprocessed.importedFiles) {
-            const resolved = ts.resolveModuleName(
-                imported.fileName,
-                sourceAbsolute,
-                plan.options,
-                ts.sys,
-            ).resolvedModule?.resolvedFileName;
+        for (const imported of sourceFile.imports) {
+            if (!ts.isStringLiteralLikeNode(imported)) continue;
+            const mode = program.getModeForUsageLocation(sourceFile.fileName, imported);
+            const resolved = program.getResolvedModule(sourceFile.fileName, imported.text, mode)?.resolvedFileName;
             if (!resolved) {
                 unresolvedImports = true;
                 continue;
@@ -638,7 +549,7 @@ function buildReverseDependencies(
             const targetRelative = targetOf(resolved);
             if (targetRelative) addEdge(targetRelative, sourceRelative);
         }
-        for (const referenced of preprocessed.referencedFiles) {
+        for (const referenced of sourceFile.referencedFiles) {
             const targetAbsolute = normalizeAbsolute(path.resolve(path.dirname(sourceAbsolute), referenced.fileName));
             if (!sourceFileForProgram(program, targetAbsolute)) unresolvedImports = true;
             const targetRelative = targetOf(targetAbsolute);
@@ -651,10 +562,9 @@ function buildReverseDependencies(
 function sourceCanAffectProjectGlobals(sourceFile: ts.SourceFile): boolean {
     if (sourceFile.isDeclarationFile || !ts.isExternalModule(sourceFile)) return true;
 
-    const preprocessed = ts.preProcessFile(sourceFile.text, true, true);
     if (
-        preprocessed.typeReferenceDirectives.length > 0
-        || preprocessed.libReferenceDirectives.length > 0
+        sourceFile.typeReferenceDirectives.length > 0
+        || sourceFile.libReferenceDirectives.length > 0
     ) {
         return true;
     }
@@ -665,14 +575,14 @@ function sourceCanAffectProjectGlobals(sourceFile: ts.SourceFile): boolean {
         if (
             ts.isModuleDeclaration(node)
             && (
-                (node.flags & ts.NodeFlags.GlobalAugmentation) !== 0
+                (ts.isIdentifier(node.name) && node.name.text === 'global')
                 || ts.isStringLiteral(node.name)
             )
         ) {
             hasGlobalAugmentation = true;
             return;
         }
-        ts.forEachChild(node, visit);
+        node.forEachChild(visit);
     };
     visit(sourceFile);
     return hasGlobalAugmentation;
@@ -691,7 +601,7 @@ function projectGlobalSourceFiles(
             globalFiles.add(plan.relativeFiles[index]);
         }
     }
-    for (const sourceFile of program.getSourceFiles()) {
+    for (const sourceFile of program.getSourceFileNames().map(name => program.getSourceFile(name)!)) {
         const relative = relativeInsideRoot(plan.rootPath, normalizeAbsolute(sourceFile.fileName));
         if (!relative || globalFiles.has(relative) || !manifestPaths.has(relative)) continue;
         if (sourceCanAffectProjectGlobals(sourceFile)) globalFiles.add(relative);
@@ -704,116 +614,12 @@ function diagnosticIdentity(errors: readonly ts.Diagnostic[]): readonly number[]
 }
 
 
-/**
- * Module specifiers of a file's import sites. Missing a site only makes the
- * TS6305 decision fall back to diagnostics; a site that is not an import (a
- * bare require() in a TypeScript file) would make it wrong, so none is added.
- */
-function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLike[] {
-    const specifiers: ts.StringLiteralLike[] = [];
-    const javaScript = /\.[cm]?jsx?$/i.test(sourceFile.fileName);
-    const visit = (node: ts.Node): void => {
-        if (
-            (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-            && node.moduleSpecifier
-            && ts.isStringLiteralLike(node.moduleSpecifier)
-        ) {
-            specifiers.push(node.moduleSpecifier);
-        } else if (
-            ts.isImportEqualsDeclaration(node)
-            && ts.isExternalModuleReference(node.moduleReference)
-            && ts.isStringLiteralLike(node.moduleReference.expression)
-        ) {
-            specifiers.push(node.moduleReference.expression);
-        } else if (
-            ts.isCallExpression(node)
-            && node.arguments.length > 0
-            && ts.isStringLiteralLike(node.arguments[0])
-            && (
-                node.expression.kind === ts.SyntaxKind.ImportKeyword
-                || (javaScript && ts.isIdentifier(node.expression) && node.expression.text === 'require')
-            )
-        ) {
-            specifiers.push(node.arguments[0]);
-        } else if (
-            ts.isImportTypeNode(node)
-            && ts.isLiteralTypeNode(node.argument)
-            && ts.isStringLiteralLike(node.argument.literal)
-        ) {
-            specifiers.push(node.argument.literal);
-        }
-        ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-    return specifiers;
-}
-
-/**
- * Decides, without type-checking every file, whether a project with references
- * would report TS6305 ("Output file has not been built from source file"): the
- * checker reports it when an import resolves to a referenced project's source
- * file whose declaration output is missing.
- *
- * Returns `true` (authority ready) when every referenced source has its
- * declaration output, so TS6305 is impossible; `false` when one of the
- * project's own files imports a referenced source whose output is missing;
- * `undefined` when neither is certain and the caller must use diagnostics.
- */
+/** TypeScript 7 owns reference diagnostics, including declaration output readiness. */
 export function unbuiltReferenceImport(program: ts.Program, projectFiles: readonly string[]): boolean | undefined {
-    const ignoreCase = !ts.sys.useCaseSensitiveFileNames;
-    const key = (fileName: string) => {
-        const normalized = path.resolve(fileName);
-        return ignoreCase ? normalized.toLowerCase() : normalized;
-    };
-    const missingOutputSources = new Set<string>();
-    // A referenced project that emits no declarations still gets TS6305 when
-    // the output the compiler expects is missing; that path is the compiler's
-    // to compute, so such a reference never proves readiness.
-    let unprovenReference = false;
-    // The checker redirects imports into every project of the reference graph,
-    // not only direct references, so walk it transitively.
-    const references = [...(program.getResolvedProjectReferences() ?? [])];
-    const visitedConfigs = new Set<string>();
-    while (references.length > 0) {
-        const reference = references.pop();
-        if (!reference) return undefined;
-        if (visitedConfigs.has(key(reference.sourceFile.fileName))) continue;
-        visitedConfigs.add(key(reference.sourceFile.fileName));
-        references.push(...(reference.references ?? []));
-        for (const sourceFile of reference.commandLine.fileNames) {
-            if (sourceFile.endsWith('.d.ts') || sourceFile.endsWith('.json')) continue;
-            const declarationOutput = ts.getOutputFileNames(reference.commandLine, sourceFile, ignoreCase)
-                .find((output) => output.endsWith('.d.ts') || output.endsWith('.d.mts') || output.endsWith('.d.cts'));
-            if (!declarationOutput) {
-                unprovenReference = true;
-            } else if (!ts.sys.fileExists(declarationOutput)) {
-                missingOutputSources.add(key(sourceFile));
-            }
-        }
-    }
-    if (missingOutputSources.size === 0 && !unprovenReference) return true;
-
-    const options = program.getCompilerOptions();
-    const cache = ts.createModuleResolutionCache(program.getCurrentDirectory(), (name) => (ignoreCase ? name.toLowerCase() : name), options);
-    for (const projectFile of projectFiles) {
-        const sourceFile = program.getSourceFile(projectFile);
-        if (!sourceFile || sourceFile.isDeclarationFile) continue;
-        for (const specifier of moduleSpecifiers(sourceFile)) {
-            // Resolve in the mode the program uses for this import site (import
-            // vs require conditions under Node16/NodeNext).
-            const resolved = ts.resolveModuleName(
-                specifier.text,
-                sourceFile.fileName,
-                options,
-                ts.sys,
-                cache,
-                undefined,
-                program.getModeForUsageLocation(sourceFile, specifier),
-            ).resolvedModule;
-            if (resolved && missingOutputSources.has(key(resolved.resolvedFileName))) return false;
-        }
-    }
-    return undefined;
+    // Retain the established call contract while retiring the JS compiler's
+    // output-name and resolution fast path. Native diagnostics are authoritative.
+    void projectFiles;
+    return !program.getSemanticDiagnostics().some(diagnostic => diagnostic.code === 6305);
 }
 
 export interface TypeScriptSemanticAnalyzerOptions {

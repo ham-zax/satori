@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 
-import ts from 'typescript';
+import * as ts from './typescript-api';
+import { serverFS } from './typescript-api';
+import { TypeScriptProgramSession } from './typescript-program-session';
 
 export interface TypeScriptConfiguredProjectIdentity {
     readonly compilerVersion: string;
@@ -102,14 +104,13 @@ function normalizedReferences(
     return (references ?? [])
         .map((reference) => ({
             path: normalizedPath(reference.path),
-            prepend: reference.prepend ?? false,
             circular: reference.circular ?? false,
         }))
         .sort((left, right) => String(left.path).localeCompare(String(right.path)));
 }
 
 function diagnosticText(diagnostic: ts.Diagnostic): string {
-    return ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+    return diagnostic.text;
 }
 
 /** A tsconfig/jsconfig that cannot be read or parsed as JSON; callers may skip that config. */
@@ -127,10 +128,12 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
     const absoluteConfigPath = normalizedPath(configPath);
     let reads = 0;
     let readFailure: string | undefined;
+    const configReads = new Map<string, string | undefined>();
     // Bound all config/metadata reads through TypeScript's own resolver. The total
     // read budget also bounds extends depth without copying compiler resolution rules.
     const readFile = (fileName: string): string | undefined => {
         if (readFailure) return undefined;
+        if (configReads.has(fileName)) return configReads.get(fileName);
         if (++reads > MAX_TYPESCRIPT_CONFIG_READS) {
             readFailure = `TypeScript config read budget exceeded ${MAX_TYPESCRIPT_CONFIG_READS} files.`;
             return undefined;
@@ -158,236 +161,145 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
             // Match the compiler's UTF-8 and UTF-16 BOM support.
             const encoding = content[0] === 0xff && content[1] === 0xfe ? 'utf-16le'
                 : content[0] === 0xfe && content[1] === 0xff ? 'utf-16be' : 'utf-8';
-            return new TextDecoder(encoding).decode(content);
+            const text = new TextDecoder(encoding).decode(content);
+            configReads.set(fileName, text);
+            return text;
         } catch {
+            configReads.set(fileName, undefined);
             return undefined;
         } finally {
             if (fd !== undefined) fs.closeSync(fd);
         }
     };
-    const configRead = ts.readConfigFile(absoluteConfigPath, readFile);
+    readFile(absoluteConfigPath);
     if (readFailure) throw new TypeScriptConfigReadError(readFailure);
-    if (configRead.error) {
-        throw new TypeScriptConfigReadError(`Unable to read TypeScript config '${absoluteConfigPath}': ${diagnosticText(configRead.error)}`);
-    }
+    const api = new ts.API({
+        runExternalCode: false,
+        fs: {
+            directoryExists: serverFS.useOS, fileExists: serverFS.useOS,
+            getAccessibleEntries: serverFS.useOS, realpath: serverFS.useOS,
+            stat: serverFS.useOS, writeFile: serverFS.noop, removeFile: serverFS.noop,
+            readFile,
+        },
+    });
+    try {
+        const configRead = api.readConfigFile(absoluteConfigPath);
+        if (readFailure) throw new TypeScriptConfigReadError(readFailure);
+        if (configRead.error) {
+            throw new TypeScriptConfigReadError(`Unable to read TypeScript config '${absoluteConfigPath}': ${diagnosticText(configRead.error)}`);
+        }
+        const parsed = api.parseConfigFile(absoluteConfigPath);
+        if (readFailure) throw new TypeScriptConfigReadError(readFailure);
+        // TypeScript owns cycle detection; callers already skip configs with this error type.
+        const cycle = parsed.errors.find(error => error.code === 18000);
+        if (cycle) throw new TypeScriptConfigReadError(diagnosticText(cycle));
 
-    const parsed = ts.parseJsonConfigFileContent(
-        configRead.config,
-        { ...ts.sys, readFile },
-        path.dirname(absoluteConfigPath),
-        undefined,
-        absoluteConfigPath,
-        undefined,
-        undefined,
-        new Map(),
-    );
-    if (readFailure) throw new TypeScriptConfigReadError(readFailure);
-    // TypeScript owns cycle detection; callers already skip configs with this error type.
-    const cycle = parsed.errors.find(error => error.code === 18000);
-    if (cycle) throw new TypeScriptConfigReadError(diagnosticText(cycle));
-
-    const fileNames = parsed.fileNames.map(normalizedPath).sort();
-    const options = {
-        ...parsed.options,
-        noEmit: true,
-    };
-    const optionsIdentity = normalizedCompilerOptions(options);
-    const referenceIdentity = normalizedReferences(parsed.projectReferences);
-    const identityInput = {
-        compilerVersion: ts.version,
-        configPath: absoluteConfigPath,
-        compilerOptions: optionsIdentity,
-        rootFiles: fileNames,
-        projectReferences: referenceIdentity,
-    };
-
-    return {
-        configPath: absoluteConfigPath,
-        fileNames,
-        options,
-        ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),
-        errors: parsed.errors,
-        identity: {
+        const fileNames = parsed.fileNames.map(normalizedPath).sort();
+        const options = {
+            ...parsed.options,
+            noEmit: true,
+        };
+        const optionsIdentity = normalizedCompilerOptions(options);
+        const referenceIdentity = normalizedReferences(parsed.projectReferences);
+        const identityInput = {
             compilerVersion: ts.version,
             configPath: absoluteConfigPath,
-            compilerOptionsHash: hash(optionsIdentity),
-            rootFilesHash: hash(fileNames),
-            projectReferencesHash: hash(referenceIdentity),
-            projectHash: hash(identityInput),
-        },
-    };
+            compilerOptions: optionsIdentity,
+            rootFiles: fileNames,
+            projectReferences: referenceIdentity,
+        };
+
+        return {
+            configPath: absoluteConfigPath,
+            fileNames,
+            options,
+            ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),
+            errors: parsed.errors,
+            identity: {
+                compilerVersion: ts.version,
+                configPath: absoluteConfigPath,
+                compilerOptionsHash: hash(optionsIdentity),
+                rootFilesHash: hash(fileNames),
+                projectReferencesHash: hash(referenceIdentity),
+                projectHash: hash(identityInput),
+            },
+        };
+    } finally { api.close(); }
 }
 
 export class TypeScriptLanguageServiceSession {
     private project: TypeScriptConfiguredProject;
-    private languageService: ts.LanguageService;
-    private readonly fileVersions = new Map<string, number>();
-    private readonly overrides = new Map<string, string>();
-
+    private session: TypeScriptProgramSession;
     private readonly sourceBudget?: TypeScriptSourceBudgetTracker;
 
     constructor(configPath: string, resourceBudget?: TypeScriptSourceBudget) {
         this.project = loadTypeScriptConfiguredProject(configPath);
-        this.sourceBudget = resourceBudget
-            ? new TypeScriptSourceBudgetTracker(resourceBudget)
-            : undefined;
-        this.languageService = this.createLanguageService();
+        this.sourceBudget = resourceBudget ? new TypeScriptSourceBudgetTracker(resourceBudget) : undefined;
+        this.session = this.createSession();
     }
 
-    get identity(): TypeScriptConfiguredProjectIdentity {
-        return this.project.identity;
+    get identity(): TypeScriptConfiguredProjectIdentity { return this.project.identity; }
+    get configuredFiles(): readonly string[] { return this.project.fileNames; }
+    get projectReferences(): readonly ts.ProjectReference[] { return this.project.projectReferences ?? []; }
+    get options(): ts.CompilerOptions { return this.project.options; }
+    getProgram(): ts.Program { return this.session.getProgram(); }
+    getResourceLimitFailure(): string | undefined { return this.session.getResourceLimitFailure(); }
+
+    getDefinitionAtPosition(fileName: string, position: number): readonly { fileName: string; kind: string }[] {
+        const program = this.getProgram();
+        const source = program.getSourceFile(normalizedPath(fileName));
+        if (!source) return [];
+        const checker = program.getProject().checker;
+        const node = ts.getTokenAtPosition(source, position);
+        const symbol = checker.getSymbolAtLocation(node);
+        if (!symbol) return [];
+        const alias = (symbol.flags & ts.SymbolFlags.Alias) !== 0;
+        const target = alias ? checker.getAliasedSymbol(symbol) : symbol;
+        const declarations = checker.isUnknownSymbol(target) ? symbol.declarations : target.declarations;
+        return declarations.flatMap(handle => {
+            const declaration = handle.resolve();
+            return declaration ? [{ fileName: declaration.getSourceFile().fileName, kind: checker.isUnknownSymbol(target) && alias ? 'alias' : 'unknown' }] : [];
+        });
     }
 
-    get configuredFiles(): readonly string[] {
-        return this.project.fileNames;
-    }
-
-    get projectReferences(): readonly ts.ProjectReference[] {
-        return this.project.projectReferences ?? [];
-    }
-
-    get options(): ts.CompilerOptions {
-        return this.project.options;
-    }
-
-    getProgram(): ts.Program {
-        const program = this.languageService.getProgram();
-        if (!program) {
-            throw new Error(`TypeScript LanguageService did not create a Program for '${this.project.configPath}'.`);
-        }
-        return program;
-    }
-
-    getResourceLimitFailure(): string | undefined {
-        return this.sourceBudget?.getFailureMessage();
-    }
-
-    getDefinitionAtPosition(fileName: string, position: number): readonly ts.DefinitionInfo[] {
-        return this.languageService.getDefinitionAtPosition(normalizedPath(fileName), position) ?? [];
-    }
-
-    updateFile(fileName: string, source: string): void {
-        const absoluteFileName = normalizedPath(fileName);
-        const sourceBytes = Buffer.byteLength(source, 'utf8');
-        if (this.sourceBudget && !this.sourceBudget.admit(absoluteFileName, sourceBytes)) {
-            return;
-        }
-        this.overrides.set(absoluteFileName, source);
-        this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
-    }
-
-    /** Makes the next Program re-read `fileName` from disk. */
-    invalidateFile(fileName: string): void {
-        const absoluteFileName = normalizedPath(fileName);
-        this.overrides.delete(absoluteFileName);
-        this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
-    }
-
-    clearFileOverride(fileName: string): void {
-        const absoluteFileName = normalizedPath(fileName);
-        if (this.overrides.delete(absoluteFileName)) {
-            this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
-        }
-    }
+    updateFile(fileName: string, source: string): void { this.session.updateFile(fileName, source); }
+    invalidateFile(fileName: string): void { this.session.invalidateFile(fileName); }
+    clearFileOverride(fileName: string): void { this.session.clearFileOverride(fileName); }
 
     refreshConfiguration(): boolean {
         const next = loadTypeScriptConfiguredProject(this.project.configPath);
-        if (next.identity.projectHash === this.project.identity.projectHash) {
-            return false;
-        }
+        if (next.identity.projectHash === this.project.identity.projectHash) return false;
+        this.session.dispose();
         this.project = next;
         this.sourceBudget?.reset();
-        this.disposeLanguageService();
-        this.languageService = this.createLanguageService();
+        this.session = this.createSession();
         return true;
     }
 
     measureSemanticWalk(fileName: string): TypeScriptSemanticWalkMeasurement {
         const absoluteFileName = normalizedPath(fileName);
-        const sourceFile = this.getProgram().getSourceFile(absoluteFileName);
-        if (!sourceFile) {
-            throw new Error(`File '${absoluteFileName}' is not part of configured project '${this.project.configPath}'.`);
-        }
-
-        const checker = this.getProgram().getTypeChecker();
+        const program = this.getProgram();
+        const sourceFile = program.getSourceFile(absoluteFileName);
+        if (!sourceFile) throw new Error(`TypeScript source '${absoluteFileName}' is not in the configured program.`);
+        const checker = program.getProject().checker;
         const startedAt = performance.now();
         let callCount = 0;
         let resolvedSignatureCount = 0;
-
         const visit = (node: ts.Node): void => {
             if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-                callCount += 1;
-                if (checker.getResolvedSignature(node)) {
-                    resolvedSignatureCount += 1;
-                }
+                callCount++;
+                if (!checker.isUnknownSignature(checker.getResolvedSignature(node))) resolvedSignatureCount++;
             }
-            ts.forEachChild(node, visit);
+            node.forEachChild(visit);
         };
         visit(sourceFile);
-
-        return {
-            fileName: absoluteFileName,
-            callCount,
-            resolvedSignatureCount,
-            durationMs: performance.now() - startedAt,
-        };
+        return { fileName: absoluteFileName, callCount, resolvedSignatureCount, durationMs: performance.now() - startedAt };
     }
 
-    dispose(): void {
-        this.disposeLanguageService();
-    }
+    dispose(): void { this.session.dispose(); }
 
-    /**
-     * TypeScript can list one declaration output twice in a Program (seen with
-     * a project referenced both directly and through another reference), and
-     * LanguageService.dispose then releases it twice and throws. The document
-     * registry is private to this session, so nothing outlives the failed
-     * release; dropping the service frees the rest.
-     */
-    private disposeLanguageService(): void {
-        try {
-            this.languageService.dispose();
-        } catch {
-            // See above: only this session's private registry is affected.
-        }
-    }
-
-    private createLanguageService(): ts.LanguageService {
-        const project = this.project;
-        const host: ts.LanguageServiceHost = {
-            getCompilationSettings: () => project.options,
-            getCurrentDirectory: () => path.dirname(project.configPath),
-            getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
-            getProjectReferences: () => project.projectReferences,
-            getScriptFileNames: () => [...project.fileNames],
-            getScriptSnapshot: (fileName) => {
-                const absoluteFileName = normalizedPath(fileName);
-                const override = this.overrides.get(absoluteFileName);
-                if (override !== undefined) {
-                    return ts.ScriptSnapshot.fromString(override);
-                }
-                if (!fs.existsSync(absoluteFileName)) return undefined;
-                if (this.sourceBudget) {
-                    let stat: fs.Stats;
-                    try {
-                        stat = fs.statSync(absoluteFileName);
-                    } catch {
-                        return undefined;
-                    }
-                    if (!stat.isFile() || !this.sourceBudget.admit(absoluteFileName, stat.size)) {
-                        return undefined;
-                    }
-                }
-                return ts.ScriptSnapshot.fromString(fs.readFileSync(absoluteFileName, 'utf8'));
-            },
-            getScriptVersion: (fileName) => String(this.fileVersions.get(normalizedPath(fileName)) ?? 0),
-            fileExists: ts.sys.fileExists,
-            readFile: ts.sys.readFile,
-            readDirectory: ts.sys.readDirectory,
-            directoryExists: ts.sys.directoryExists,
-            getDirectories: ts.sys.getDirectories,
-            realpath: ts.sys.realpath,
-        };
-        return ts.createLanguageService(host, ts.createDocumentRegistry());
+    private createSession(): TypeScriptProgramSession {
+        return new TypeScriptProgramSession(path.dirname(this.project.configPath), this.project.fileNames,
+            this.project.options, this.sourceBudget, this.project.projectReferences);
     }
 }

@@ -225,7 +225,9 @@ test("debug modes are projected from explicit source-level whitelists", () => {
     assert.equal(rankingKeys.includes("phaseTimingsMs"), false);
     assert.equal(rankingKeys.includes("changedCode"), false);
     assert.equal(rankingKeys.includes("rankingProvenance"), true);
-    assert.equal((build("full").hints?.debugSearch as SearchDebugHint).changedCode?.files[0], "src/a.ts");
+    const full = build("full");
+    assert.ok(full.hints?.debugSearch);
+    assert.equal((full.hints.debugSearch as SearchDebugHint).changedCode?.files[0], "src/a.ts");
 });
 
 test("grouped v3 keeps concrete symbol instances distinct and removes internal grouping identities", () => {

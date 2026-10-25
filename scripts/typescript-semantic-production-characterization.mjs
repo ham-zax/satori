@@ -5,7 +5,9 @@ import process from 'node:process';
 import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 
-import ts from 'typescript';
+import * as ts from 'typescript/ast';
+import { API, ModuleKind, ModuleResolutionKind } from 'typescript/sync';
+import { version } from 'typescript';
 
 import { TypeScriptLanguageServiceSession } from '../packages/core/src/semantic/typescript-configured-project.ts';
 
@@ -54,21 +56,21 @@ function directoryBytes(directory) {
 function measureFullProjectSemanticWalk(session) {
     const configuredFiles = new Set(session.configuredFiles.map((fileName) => path.resolve(fileName)));
     const program = session.getProgram();
-    const checker = program.getTypeChecker();
+    const checker = program.getProject().checker;
     const startedAt = performance.now();
     let fileCount = 0;
     let callCount = 0;
     let resolvedSignatureCount = 0;
 
-    for (const sourceFile of program.getSourceFiles()) {
+    for (const sourceFile of program.getSourceFileNames().map(name => program.getSourceFile(name))) {
         if (sourceFile.isDeclarationFile || !configuredFiles.has(path.resolve(sourceFile.fileName))) continue;
         fileCount += 1;
         const visit = (node) => {
             if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
                 callCount += 1;
-                if (checker.getResolvedSignature(node)) resolvedSignatureCount += 1;
+                if (!checker.isUnknownSignature(checker.getResolvedSignature(node))) resolvedSignatureCount += 1;
             }
-            ts.forEachChild(node, visit);
+            node.forEachChild(visit);
         };
         visit(sourceFile);
     }
@@ -81,66 +83,31 @@ function measureFullProjectSemanticWalk(session) {
     };
 }
 
-function builderAffectedCharacterization() {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-affected-'));
+function snapshotDiagnosticCharacterization() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-snapshot-'));
+    const api = new API({ runExternalCode: false });
     try {
         const dependency = path.join(root, 'dependency.ts');
         const consumer = path.join(root, 'consumer.ts');
-        fs.writeFileSync(
-            dependency,
-            'export function value(): string { return "before"; }\n',
-        );
-        fs.writeFileSync(
-            consumer,
-            'import { value } from "./dependency"; export const result: string = value();\n',
-        );
-
-        const options = {
-            strict: true,
-            target: ts.ScriptTarget.ES2022,
-            module: ts.ModuleKind.NodeNext,
-            moduleResolution: ts.ModuleResolutionKind.NodeNext,
-            incremental: true,
-            noEmit: true,
-        };
-        const createBuilder = (oldProgram) => {
-            const host = ts.createIncrementalCompilerHost(options);
-            return ts.createSemanticDiagnosticsBuilderProgram(
-                [dependency, consumer],
-                options,
-                host,
-                oldProgram,
-            );
-        };
-        const drain = (builder) => {
-            const affected = [];
-            let result;
-            while ((result = builder.getSemanticDiagnosticsOfNextAffectedFile())) {
-                if (result.affected.kind === ts.SyntaxKind.SourceFile) {
-                    const fileName = result.affected.fileName;
-                    if (fileName.startsWith(root)) {
-                        affected.push(path.basename(fileName));
-                    }
-                }
-            }
-            return affected;
-        };
-
-        let builder = createBuilder(undefined);
-        const initialAffected = drain(builder);
-        fs.writeFileSync(
-            dependency,
-            'export function value(): number { return 1; }\n',
-        );
-        const startedAt = performance.now();
-        builder = createBuilder(builder);
-        const affectedAfterDependencyEdit = drain(builder);
-        return {
-            refreshMs: elapsed(startedAt),
-            initialAffected,
-            affectedAfterDependencyEdit,
-        };
+        fs.writeFileSync(dependency, 'export function value(): string { return "before"; }');
+        fs.writeFileSync(consumer, 'import { value } from "./dependency"; export const result: string = value();');
+        const before = api.createSnapshot({ createPrograms: [{ rootFiles: [dependency, consumer], compilerOptions: {
+            strict: true, target: ts.ScriptTarget.ES2022, module: ModuleKind.NodeNext,
+            moduleResolution: ModuleResolutionKind.NodeNext, noEmit: true,
+        } }] });
+        try {
+            const program = before.operation.createdPrograms[0];
+            const initialDiagnostics = program.getSemanticDiagnostics().map(d => d.code);
+            fs.writeFileSync(dependency, 'export function value(): number { return 1; }');
+            const startedAt = performance.now();
+            const after = before.update({ fileNotifications: { changed: [dependency] }, ensurePrograms: [program.id] });
+            try {
+                return { refreshMs: elapsed(startedAt), initialDiagnostics,
+                    diagnosticsAfterDependencyEdit: after.getProgram(program.id).getSemanticDiagnostics().map(d => d.code) };
+            } finally { after.dispose(); }
+        } finally { before.dispose(); }
     } finally {
+        api.close();
         fs.rmSync(root, { recursive: true, force: true });
     }
 }
@@ -156,7 +123,7 @@ function main() {
 
     startedAt = performance.now();
     const initialProgram = session.getProgram();
-    initialProgram.getTypeChecker();
+    initialProgram.getProject().checker;
     const coldProgramMs = elapsed(startedAt);
     const rssAfterCold = rss();
 
@@ -169,14 +136,14 @@ function main() {
 
     startedAt = performance.now();
     const unchangedProgram = session.getProgram();
-    unchangedProgram.getTypeChecker();
+    unchangedProgram.getProject().checker;
     const unchangedProgramMs = elapsed(startedAt);
 
     const changedSource = `${source}\n// semantic-characterization-edit\n`;
     startedAt = performance.now();
     session.updateFile(options.target, changedSource);
     const updatedProgram = session.getProgram();
-    updatedProgram.getTypeChecker();
+    updatedProgram.getProject().checker;
     const oneFileUpdateProgramMs = elapsed(startedAt);
     const rssAfterEdit = rss();
     const changedFileWalk = session.measureSemanticWalk(options.target);
@@ -190,11 +157,11 @@ function main() {
 
     const typescriptRoot = path.dirname(require.resolve('typescript/package.json'));
     const artifact = {
-        version: 1,
-        compilerVersion: ts.version,
+        version: 2,
+        compilerVersion: version,
         project: {
             configPath: options.config,
-            configuredFileCount: initialProgram.getRootFileNames().length,
+            configuredFileCount: session.configuredFiles.length,
             identity: session.identity,
         },
         languageService: {
@@ -212,15 +179,17 @@ function main() {
             unchangedConfigRefreshChangedProject: configChanged,
         },
         memory: {
+            scope: "node-client-only; excludes the native compiler process",
             rssBeforeBytes: rssBefore,
             rssAfterColdBytes: rssAfterCold,
             rssAfterEditBytes: rssAfterEdit,
             coldDeltaBytes: Math.max(0, rssAfterCold - rssBefore),
             editDeltaBytes: Math.max(0, rssAfterEdit - rssAfterCold),
         },
-        affectedFiles: builderAffectedCharacterization(),
+        snapshotDiagnostics: snapshotDiagnosticCharacterization(),
         packaging: {
             typescriptPackageRoot: typescriptRoot,
+            includesPlatformBinary: false,
             installedBytes: directoryBytes(typescriptRoot),
         },
     };

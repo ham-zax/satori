@@ -1,5 +1,6 @@
 import path from 'node:path';
-import ts from 'typescript';
+import * as ts from './typescript-api';
+import { createFileSystemLayer } from './typescript-api';
 
 import { Utf8SourceMap } from '../language-analysis/source-map';
 import type { SourceSpan } from '../language-analysis/types';
@@ -100,20 +101,9 @@ function virtualPathFor(projectPath: string): string {
     return path.posix.join(VIRTUAL_ROOT, normalizeProjectPath(projectPath));
 }
 
-function scriptKindFor(fileName: string): ts.ScriptKind {
-    if (fileName.endsWith('.tsx')) return ts.ScriptKind.TSX;
-    if (fileName.endsWith('.jsx')) return ts.ScriptKind.JSX;
-    if (fileName.endsWith('.js') || fileName.endsWith('.mjs') || fileName.endsWith('.cjs')) {
-        return ts.ScriptKind.JS;
-    }
-    return ts.ScriptKind.TS;
-}
-
 function defaultCompilerOptions(): ts.CompilerOptions {
     return {
         allowJs: false,
-        allowSyntheticDefaultImports: true,
-        esModuleInterop: true,
         jsx: ts.JsxEmit.Preserve,
         module: ts.ModuleKind.NodeNext,
         moduleResolution: ts.ModuleResolutionKind.NodeNext,
@@ -125,64 +115,7 @@ function defaultCompilerOptions(): ts.CompilerOptions {
     };
 }
 
-function buildCompilerHost(
-    filesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-    options: ts.CompilerOptions,
-): ts.CompilerHost {
-    const base = ts.createCompilerHost(options, true);
-    const virtualDirectories = new Set<string>([VIRTUAL_ROOT]);
-
-    for (const fileName of filesByVirtualPath.keys()) {
-        let current = path.posix.dirname(fileName);
-        while (current.startsWith(VIRTUAL_ROOT)) {
-            virtualDirectories.add(current);
-            if (current === VIRTUAL_ROOT) break;
-            current = path.posix.dirname(current);
-        }
-    }
-
-    const normalizeVirtual = (fileName: string): string => path.posix.normalize(fileName.replace(/\\/g, '/'));
-
-    return {
-        ...base,
-        getCurrentDirectory: () => VIRTUAL_ROOT,
-        fileExists: (fileName) => {
-            const normalized = normalizeVirtual(fileName);
-            return filesByVirtualPath.has(normalized) || base.fileExists(fileName);
-        },
-        readFile: (fileName) => {
-            const normalized = normalizeVirtual(fileName);
-            return filesByVirtualPath.get(normalized)?.source ?? base.readFile(fileName);
-        },
-        getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-            const normalized = normalizeVirtual(fileName);
-            const projectFile = filesByVirtualPath.get(normalized);
-            if (projectFile) {
-                return ts.createSourceFile(
-                    normalized,
-                    projectFile.source,
-                    languageVersion,
-                    true,
-                    scriptKindFor(projectFile.projectPath),
-                );
-            }
-            return base.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-        },
-        directoryExists: (directoryName) => (
-            virtualDirectories.has(normalizeVirtual(directoryName))
-            || base.directoryExists?.(directoryName)
-            || false
-        ),
-        realpath: (fileName) => {
-            const normalized = normalizeVirtual(fileName);
-            return filesByVirtualPath.has(normalized) || normalized.startsWith(VIRTUAL_ROOT)
-                ? normalized
-                : (base.realpath?.(fileName) ?? fileName);
-        },
-    };
-}
-
-function resolvedSymbol(checker: ts.TypeChecker, symbol: ts.Symbol | undefined): ts.Symbol | undefined {
+function resolvedSymbol(checker: ts.Checker, symbol: ts.Symbol | undefined): ts.Symbol | undefined {
     let current = symbol;
     const seen = new Set<ts.Symbol>();
     while (current && (current.flags & ts.SymbolFlags.Alias) !== 0 && !seen.has(current)) {
@@ -198,7 +131,7 @@ function declarationName(declaration: ts.Declaration): string | undefined {
     if (ts.isConstructorDeclaration(declaration)) return 'constructor';
     if (!('name' in declaration)) return undefined;
 
-    const name = (declaration as ts.NamedDeclaration).name;
+    const name = (declaration as (ts.Declaration & { readonly name?: ts.DeclarationName })).name;
     if (!name) return undefined;
     if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
         return name.text;
@@ -209,7 +142,7 @@ function declarationName(declaration: ts.Declaration): string | undefined {
 function enclosingClassName(declaration: ts.Declaration): string | undefined {
     let current: ts.Node | undefined = declaration.parent;
     while (current) {
-        if (ts.isClassLike(current)) {
+        if (ts.isClassLikeDeclaration(current)) {
             return current.name?.text;
         }
         current = current.parent;
@@ -250,7 +183,7 @@ function targetKind(declaration: ts.Declaration): TypeScriptSemanticTargetKind |
 function isInsideCallableVariable(declaration: ts.VariableDeclaration): boolean {
     let current: ts.Node | undefined = declaration.parent;
     while (current) {
-        if (ts.isFunctionLike(current)) return true;
+        if (ts.isFunctionLikeDeclaration(current)) return true;
         if (ts.isSourceFile(current)) return false;
         current = current.parent;
     }
@@ -262,13 +195,13 @@ function isSatoriIndexableDeclaration(declaration: ts.Declaration): boolean {
         return !isInsideCallableVariable(declaration);
     }
     if (ts.isPropertyDeclaration(declaration)) {
-        return ts.isClassLike(declaration.parent);
+        return ts.isClassLikeDeclaration(declaration.parent);
     }
     if (ts.isMethodDeclaration(declaration)
         || ts.isGetAccessorDeclaration(declaration)
         || ts.isSetAccessorDeclaration(declaration)
         || ts.isConstructorDeclaration(declaration)) {
-        return ts.isClassLike(declaration.parent);
+        return ts.isClassLikeDeclaration(declaration.parent);
     }
     return ts.isFunctionDeclaration(declaration);
 }
@@ -349,7 +282,7 @@ function uniqueTargets(targets: readonly TypeScriptSemanticTarget[]): TypeScript
 }
 
 function implementationsForSymbol(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     symbol: ts.Symbol | undefined,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): TypeScriptSemanticTarget[] {
@@ -357,7 +290,7 @@ function implementationsForSymbol(
     if (!resolved) return [];
 
     const targets: TypeScriptSemanticTarget[] = [];
-    for (const declaration of resolved.declarations ?? []) {
+    for (const declaration of resolved.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; })) {
         const target = targetFromDeclaration(declaration, projectFilesByVirtualPath);
         if (target) targets.push(target);
     }
@@ -365,18 +298,18 @@ function implementationsForSymbol(
 }
 
 function signatureTarget(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): TypeScriptSemanticTarget | undefined {
     const signature = checker.getResolvedSignature(call);
-    const declaration = signature?.declaration;
+    const declaration = signature?.declaration?.resolve();
     if (!declaration) return undefined;
 
     const direct = targetFromDeclaration(declaration, projectFilesByVirtualPath);
     if (direct) return direct;
 
-    const named = declaration as ts.NamedDeclaration;
+    const named = declaration as (ts.Declaration & { readonly name?: ts.DeclarationName });
     const symbol = named.name ? checker.getSymbolAtLocation(named.name) : undefined;
     const targets = implementationsForSymbol(checker, symbol, projectFilesByVirtualPath);
     return targets.length === 1 ? targets[0] : undefined;
@@ -388,7 +321,7 @@ function callCalleeName(call: ts.CallExpression | ts.NewExpression): string {
     if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
     if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
         const arg = expression.argumentExpression;
-        if (ts.isStringLiteralLike(arg) || ts.isNumericLiteral(arg)) return arg.text;
+        if (ts.isStringLiteralLikeNode(arg) || ts.isNumericLiteral(arg)) return arg.text;
     }
     return expression.getText(call.getSourceFile());
 }
@@ -405,18 +338,18 @@ function callUsesOptionalReceiver(call: ts.CallExpression | ts.NewExpression): b
 }
 
 function propertyNameForExpression(
-    expression: ts.LeftHandSideExpression,
+    expression: ts.Expression,
 ): string | undefined {
     if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
     if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
-        if (ts.isStringLiteralLike(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression)) {
+        if (ts.isStringLiteralLikeNode(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression)) {
             return expression.argumentExpression.text;
         }
     }
     return undefined;
 }
 
-function receiverForExpression(expression: ts.LeftHandSideExpression): ts.Expression | undefined {
+function receiverForExpression(expression: ts.Expression): ts.Expression | undefined {
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
         return expression.expression;
     }
@@ -424,12 +357,12 @@ function receiverForExpression(expression: ts.LeftHandSideExpression): ts.Expres
 }
 
 function collectProjectDispatchContext(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     program: ts.Program,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): ProjectDispatchContext {
     const classTypes: ts.Type[] = [];
-    for (const sourceFile of program.getSourceFiles()) {
+    for (const sourceFile of program.getSourceFileNames().map(name => program.getSourceFile(name)!)) {
         const normalized = path.posix.normalize(sourceFile.fileName.replace(/\\/g, '/'));
         if (!projectFilesByVirtualPath.has(normalized)) continue;
         const visit = (node: ts.Node): void => {
@@ -442,7 +375,7 @@ function collectProjectDispatchContext(
                     }
                 }
             }
-            ts.forEachChild(node, visit);
+            node.forEachChild(visit);
         };
         visit(sourceFile);
     }
@@ -453,7 +386,7 @@ function collectProjectDispatchContext(
 }
 
 function dispatchTargetsForType(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     receiverType: ts.Type,
     propertyName: string,
     dispatchContext: ProjectDispatchContext,
@@ -479,7 +412,7 @@ function dispatchTargetsForType(
 }
 
 function hasUncertainArgument(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
 ): boolean {
     return (call.arguments ?? []).some((argument) => {
@@ -489,17 +422,17 @@ function hasUncertainArgument(
 }
 
 function overloadCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): readonly TypeScriptSemanticTarget[] {
     if (!hasUncertainArgument(checker, call)) return [];
-    const signatures: ts.Signature[] = [];
-    checker.getResolvedSignature(call, signatures);
+    const calleeType = checker.getTypeAtLocation(call.expression);
+    const signatures = ts.isNewExpression(call) ? calleeType.getConstructSignatures() : calleeType.getCallSignatures();
     if (signatures.length <= 1) return [];
     return uniqueTargets(signatures
-        .map((signature) => signature.declaration
-            ? targetFromDeclaration(signature.declaration, projectFilesByVirtualPath, true)
+        .map((signature) => signature.declaration?.resolve()
+            ? targetFromDeclaration(signature.declaration.resolve()!, projectFilesByVirtualPath, true)
             : undefined)
         .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
 }
@@ -509,7 +442,7 @@ function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
     while (
         ts.isParenthesizedExpression(current)
         || ts.isAsExpression(current)
-        || ts.isTypeAssertionExpression(current)
+        || ts.isTypeAssertion(current)
         || ts.isNonNullExpression(current)
         || ts.isSatisfiesExpression(current)
     ) {
@@ -519,7 +452,7 @@ function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
 }
 
 function assignmentTargetsForExpression(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     expression: ts.Expression,
     propertyName: string,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
@@ -549,7 +482,7 @@ function assignmentTargetsForExpression(
     if (ts.isIdentifier(current)) {
         const symbol = symbolAtIdentifier(checker, current);
         if (!symbol || seenSymbols.has(symbol)) return undefined;
-        const declaration = symbol.valueDeclaration;
+        const declaration = symbol.valueDeclaration?.resolve();
         if (
             !declaration
             || !ts.isVariableDeclaration(declaration)
@@ -575,7 +508,7 @@ function assignmentTargetsForExpression(
         && current.expression.kind === ts.SyntaxKind.ThisKeyword
     ) {
         const property = resolvedSymbol(checker, checker.getSymbolAtLocation(current.name));
-        const declaration = property?.valueDeclaration;
+        const declaration = property?.valueDeclaration?.resolve();
         if (
             declaration
             && ts.isPropertyDeclaration(declaration)
@@ -601,21 +534,21 @@ function assignmentTargetsForExpression(
     return targets.length > 0 ? targets : undefined;
 }
 
-function symbolAtIdentifier(checker: ts.TypeChecker, node: ts.Identifier): ts.Symbol | undefined {
+function symbolAtIdentifier(checker: ts.Checker, node: ts.Identifier): ts.Symbol | undefined {
     return resolvedSymbol(checker, checker.getSymbolAtLocation(node));
 }
 
 function isPrivateClassMemberDeclaration(declaration: ts.Declaration): boolean {
-    if (!ts.isClassElement(declaration)) return false;
-    if ('name' in declaration && declaration.name && ts.isPrivateIdentifier(declaration.name)) {
+    if (!ts.isClassLikeDeclaration(declaration.parent)) return false;
+    if ('name' in declaration && declaration.name && ts.isPrivateIdentifier(declaration.name as ts.Node)) {
         return true;
     }
-    const modifiers = ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) : undefined;
+    const modifiers = 'modifiers' in declaration ? declaration.modifiers as readonly ts.Node[] : undefined;
     return Boolean(modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword));
 }
 
 function privateThisMemberCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     receiver: ts.Expression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
@@ -625,7 +558,7 @@ function privateThisMemberCandidates(
     const symbol = ts.isPropertyAccessExpression(expression)
         ? resolvedSymbol(checker, checker.getSymbolAtLocation(expression.name))
         : resolvedSymbol(checker, checker.getSymbolAtLocation(expression));
-    const executableDeclarations = (symbol?.declarations ?? []).filter(isExecutableDeclaration);
+    const executableDeclarations = (symbol?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? []).filter(isExecutableDeclaration);
     if (
         executableDeclarations.length === 0
         || executableDeclarations.some((declaration) => !isPrivateClassMemberDeclaration(declaration))
@@ -644,7 +577,7 @@ function privateThisMemberCandidates(
 }
 
 function immutableLocalOriginCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     receiver: ts.Expression,
     propertyName: string,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
@@ -652,7 +585,7 @@ function immutableLocalOriginCandidates(
     if (!ts.isIdentifier(receiver)) return undefined;
 
     const symbol = symbolAtIdentifier(checker, receiver);
-    const declaration = symbol?.valueDeclaration;
+    const declaration = symbol?.valueDeclaration?.resolve();
     if (
         !declaration
         || !ts.isVariableDeclaration(declaration)
@@ -699,7 +632,7 @@ function enclosingFunctionLike(node: ts.Node): ts.FunctionLikeDeclaration | unde
 }
 
 function nodeReferencesSymbol(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     node: ts.Node,
     symbol: ts.Symbol,
 ): boolean {
@@ -710,7 +643,7 @@ function nodeReferencesSymbol(
             found = true;
             return;
         }
-        ts.forEachChild(current, visit);
+        current.forEachChild(visit);
     };
     visit(node);
     return found;
@@ -723,7 +656,7 @@ function isDirectEvalCall(call: ts.CallExpression): boolean {
 }
 
 function mutableLocalOriginCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     receiver: ts.Expression,
     propertyName: string,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
@@ -731,7 +664,7 @@ function mutableLocalOriginCandidates(
     if (!ts.isIdentifier(receiver)) return undefined;
 
     const symbol = symbolAtIdentifier(checker, receiver);
-    const declaration = symbol?.valueDeclaration;
+    const declaration = symbol?.valueDeclaration?.resolve();
     if (
         !symbol
         || !declaration
@@ -809,7 +742,7 @@ function mutableLocalOriginCandidates(
             return;
         }
 
-        ts.forEachChild(node, visit);
+        node.forEachChild(visit);
     };
     visit(owner.body);
 
@@ -835,10 +768,10 @@ function clipReceiverTypeDescription(value: string): string {
 }
 
 function receiverTypeSymbolName(type: ts.Type): string | undefined {
-    const aliasName = type.aliasSymbol?.getName();
+    const aliasName = type.getAliasSymbol()?.name;
     if (aliasName) return clipReceiverTypeDescription(aliasName);
 
-    const symbolName = type.getSymbol()?.getName();
+    const symbolName = type.getSymbol()?.name;
     if (!symbolName || symbolName === '__type' || symbolName === '__object' || symbolName === '__function') {
         return undefined;
     }
@@ -868,12 +801,12 @@ function describeReceiverType(type: ts.Type, depth = 0): string {
     const primitiveName = receiverTypePrimitiveName(type);
     if (primitiveName) return primitiveName;
 
-    if (depth < 2 && type.isUnionOrIntersection()) {
-        const separator = type.isUnion() ? ' | ' : ' & ';
-        const parts = type.types
+    if (depth < 2 && (type.isUnionType() || type.isIntersectionType())) {
+        const separator = type.isUnionType() ? ' | ' : ' & ';
+        const parts = type.getTypes()
             .slice(0, MAX_RECEIVER_TYPE_COMPONENTS)
             .map((part) => describeReceiverType(part, depth + 1));
-        if (type.types.length > MAX_RECEIVER_TYPE_COMPONENTS) parts.push('...');
+        if (type.getTypes().length > MAX_RECEIVER_TYPE_COMPONENTS) parts.push('...');
         return clipReceiverTypeDescription(parts.join(separator));
     }
 
@@ -886,7 +819,7 @@ function describeReceiverType(type: ts.Type, depth = 0): string {
 // constrained to the class instance type. Dispatch on that constraint so a
 // public `this.m()` gets the same override-aware dispatch as `c: C; c.m()`.
 // Unconstrained `this` parameters keep their type parameter.
-function thisReceiverDispatchType(checker: ts.TypeChecker, receiver: ts.Expression, type: ts.Type): ts.Type {
+function thisReceiverDispatchType(checker: ts.Checker, receiver: ts.Expression, type: ts.Type): ts.Type {
     if (receiver.kind !== ts.SyntaxKind.ThisKeyword || (type.flags & ts.TypeFlags.TypeParameter) === 0) return type;
     const constraint = checker.getBaseConstraintOfType(type);
     if (!constraint || (constraint.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return type;
@@ -894,7 +827,7 @@ function thisReceiverDispatchType(checker: ts.TypeChecker, receiver: ts.Expressi
 }
 
 function memberCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
     dispatchContext: ProjectDispatchContext,
@@ -1003,8 +936,8 @@ function memberCandidates(
     }
 
     const optionalReceiver = callUsesOptionalReceiver(call);
-    const branches = receiverType.isUnion()
-        ? receiverType.types.filter((part) => !(optionalReceiver && nullableType(part)))
+    const branches = receiverType.isUnionType()
+        ? receiverType.getTypes().filter((part) => !(optionalReceiver && nullableType(part)))
         : [receiverType];
 
     if (branches.length === 0) {
@@ -1032,7 +965,7 @@ function memberCandidates(
             continue;
         }
 
-        const declarations = resolvedSymbol(checker, property)?.declarations ?? [];
+        const declarations = resolvedSymbol(checker, property)?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? [];
         const executableDeclarations = declarations.filter(isExecutableDeclaration);
         const hasProjectDeclaration = declarations.some((declaration) => (
             declarationBelongsToProject(declaration, projectFilesByVirtualPath)
@@ -1120,7 +1053,7 @@ function memberCandidates(
 }
 
 function directCandidates(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): CandidateSet {
@@ -1153,7 +1086,7 @@ function directCandidates(
         };
     }
 
-    const declarations = symbol?.declarations ?? [];
+    const declarations = symbol?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? [];
     const declarationCount = declarations.length;
     const hasProjectDeclaration = declarations.some((declaration) => (
         declarationBelongsToProject(declaration, projectFilesByVirtualPath)
@@ -1168,7 +1101,7 @@ function directCandidates(
 }
 
 function evidenceForCall(
-    checker: ts.TypeChecker,
+    checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     sourceFile: ts.SourceFile,
     projectFile: ProjectFile,
@@ -1205,7 +1138,7 @@ function analyzeProgramEvidence(
     sourceFiles?: ReadonlySet<string>,
 ): TypeScriptProjectEvidence {
     const projectFilesByVirtualPath = new Map(projectFiles.map((file) => [file.virtualPath, file]));
-    const checker = program.getTypeChecker();
+    const checker = program.getProject().checker;
     const dispatchContext = collectProjectDispatchContext(checker, program, projectFilesByVirtualPath);
     const occurrencesByFile = new Map<string, TypeScriptCallEvidence[]>();
 
@@ -1229,7 +1162,7 @@ function analyzeProgramEvidence(
                     dispatchContext,
                 ));
             }
-            ts.forEachChild(node, visit);
+            node.forEachChild(visit);
         };
         visit(sourceFile);
         occurrencesByFile.set(projectFile.projectPath, occurrences);
@@ -1288,22 +1221,20 @@ export function analyzeTypeScriptProject(
         source: file.source,
         sourceMap: new Utf8SourceMap(file.source),
     }));
-    const projectFilesByVirtualPath = new Map(projectFiles.map((file) => [file.virtualPath, file]));
     const compilerOptions = {
         ...defaultCompilerOptions(),
         ...providerOptions.compilerOptions,
         noEmit: true,
     };
-    const host = buildCompilerHost(projectFilesByVirtualPath, compilerOptions);
-    const program = ts.createProgram({
-        rootNames: projectFiles.map((file) => file.virtualPath),
-        options: compilerOptions,
-        host,
-    });
-    return analyzeProgramEvidence(
-        program,
-        projectFiles,
-        providerOptions.collectDiagnostics ?? false,
-        startedAt,
-    );
+    const api = new ts.API({ runExternalCode: false });
+    try {
+        const snapshot = api.createSnapshot({
+            fileSystem: createFileSystemLayer(projectFiles.map(file => [file.virtualPath, file.source] as const)),
+            createPrograms: [{ rootFiles: projectFiles.map(file => file.virtualPath), compilerOptions }],
+        });
+        try {
+            return analyzeProgramEvidence(snapshot.operation.createdPrograms[0], projectFiles,
+                providerOptions.collectDiagnostics ?? false, startedAt);
+        } finally { snapshot.dispose(); }
+    } finally { api.close(); }
 }

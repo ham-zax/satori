@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import ts from 'typescript';
+import * as ts from '../semantic/typescript-api';
 import { Worker } from 'node:worker_threads';
 import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typescript-semantic-analyzer';
 
@@ -183,22 +183,21 @@ function tsconfig(extraCompilerOptions: Record<string, unknown> = {}): string {
 }
 
 function emitConfiguredProject(configPath: string): void {
-    const read = ts.readConfigFile(configPath, ts.sys.readFile);
-    assert.equal(read.error, undefined);
-    const parsed = ts.parseJsonConfigFileContent(
-        read.config,
-        ts.sys,
-        path.dirname(configPath),
-        undefined,
-        configPath,
-    );
-    const program = ts.createProgram({
-        rootNames: parsed.fileNames,
-        options: parsed.options,
-        projectReferences: parsed.projectReferences,
-    });
-    const emitted = program.emit();
-    assert.equal(emitted.emitSkipped, false);
+    const api = new ts.API({ runExternalCode: false });
+    try {
+        const read = api.readConfigFile(configPath);
+        assert.equal(read.error, undefined);
+        const parsed = api.parseConfigFile(configPath);
+        const program = api.createProgram(parsed.fileNames, parsed.options, { projectReferences: parsed.projectReferences });
+        try {
+            const emitted = program.getDeclarationEmit(parsed.fileNames);
+            assert.equal(emitted.emitSkipped, false);
+            for (const [fileName, file] of emitted.outputFiles) {
+                fs.mkdirSync(path.dirname(fileName), { recursive: true });
+                fs.writeFileSync(fileName, file.text);
+            }
+        } finally { program.dispose(); }
+    } finally { api.close(); }
 }
 
 class CapturingTypeScriptSemanticProjectAnalyzer extends TypeScriptSemanticProjectAnalyzer {

@@ -1,5 +1,23 @@
 # TypeScript 7.1 content mappers: findings and revised proof plan
 
+## Migration update, 25 October 2026
+
+The repository migration targets `typescript@7.1.0-beta` for runtime analysis and builds.
+The analyzer uses the native synchronous API, snapshots and compiler-owned reference diagnostics.
+`disableSourceOfProjectReferenceRedirect: true` preserves built-declaration authority and TS6305
+for missing outputs. The compiler computes declaration output paths through `getDeclarationEmit`.
+The session owner disposes snapshots and closes its native process. CommonJS code uses Node's
+`require(ESM)` support, within the existing Node >=22.13 requirement.
+
+Oxlint replaces ESLint and typescript-eslint, removing the lint dependency on TypeScript 6.
+Supported recommended rules retain their severities. Duplicate parameters and legacy octal
+literals remain compiler/parser errors. Native lint requires explicit presence checks before
+unsafe optional-chain assertions in affected tests. The expected test outputs remain unchanged.
+
+External mapper execution stays disabled. The mapper trust decision and framework rollout remain
+open. The historical investigation below describes the pre-migration repository. Validation and
+the independent review are recorded in the root `TASKS.md` ledger.
+
 Status: historical local investigation, not implemented. This is a local record from 24 October
 2026. The correction adds no upstream claims and performs no new registry or API research. Read-only
 evidence comes from three delegated investigations plus one paid Jev audit slice. No dependency

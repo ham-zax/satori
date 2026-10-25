@@ -39,8 +39,8 @@
     "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build",
     "dev": "node ../../node_modules/typescript7/bin/tsc --watch",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
-    "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix",
+    "lint": "oxlint --config ../../.oxlintrc.json src",
+    "lint:fix": "oxlint --config ../../.oxlintrc.json src --fix",
     "typecheck": "node ../../node_modules/typescript7/bin/tsc --build",
     "test": "pnpm run test:raw",
     "test:raw": "node --liftoff-only --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/!(index-equivalence-sync-*|index-equivalence-toggles|typescript-semantic-publication).test.ts\" && pnpm run test:raw:heavy",
@@ -59,7 +59,7 @@
     "voyageai": "^0.4.0",
     "web-tree-sitter": "0.27.0",
     "ws": "^8.22.0",
-    "typescript": "6.0.3"
+    "typescript": "7.1.0-beta"
   },
   "devDependencies": {
     "tsx": "^4.22.4"

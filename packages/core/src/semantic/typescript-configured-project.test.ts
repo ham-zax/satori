@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import ts from 'typescript';
+import * as ts from './typescript-api';
 
 import {
     TypeScriptLanguageServiceSession,
@@ -12,6 +12,7 @@ import {
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
 import { unbuiltReferenceImport } from '../relationships/typescript-semantic-analyzer';
+import { TypeScriptProgramSession } from './typescript-program-session';
 
 function write(fileName: string, content: string): void {
     fs.mkdirSync(path.dirname(fileName), { recursive: true });
@@ -193,26 +194,21 @@ test('configured TypeScript project records and resolves a representative projec
             )[0];
             assert.equal(aliasDefinition?.kind, 'alias');
             assert.equal(aliasDefinition?.fileName.replace(/\\/g, '/'), appSource.replace(/\\/g, '/'));
-            assert.equal(unbuiltSession.getProgram().getResolvedProjectReferences()?.length, 1);
+            assert.equal(unbuiltSession.projectReferences.length, 1);
         } finally {
             unbuiltSession.dispose();
         }
 
-        const configRead = ts.readConfigFile(libConfig, ts.sys.readFile);
-        assert.equal(configRead.error, undefined);
-        const parsedLib = ts.parseJsonConfigFileContent(
-            configRead.config,
-            ts.sys,
-            path.dirname(libConfig),
-            undefined,
-            libConfig,
-        );
-        const libProgram = ts.createProgram({
-            rootNames: parsedLib.fileNames,
-            options: parsedLib.options,
-            projectReferences: parsedLib.projectReferences,
-        });
-        assert.equal(libProgram.emit().emitSkipped, false);
+        const api = new ts.API({ runExternalCode: false });
+        try {
+            const parsedLib = api.parseConfigFile(libConfig);
+            const libProgram = api.createProgram(parsedLib.fileNames, parsedLib.options, { projectReferences: parsedLib.projectReferences });
+            try {
+                const output = libProgram.getDeclarationEmit(parsedLib.fileNames);
+                assert.equal(output.emitSkipped, false);
+                for (const [fileName, file] of output.outputFiles) write(fileName, file.text);
+            } finally { libProgram.dispose(); }
+        } finally { api.close(); }
 
         const builtSession = new TypeScriptLanguageServiceSession(appConfig);
         try {
@@ -241,18 +237,16 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         types: [],
     };
     const decide = (config: string) => {
-        const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, {
-            ...ts.sys,
-            onUnRecoverableConfigFileDiagnostic: () => undefined,
-        });
-        assert.ok(parsed);
-        const program = ts.createProgram({
-            rootNames: parsed.fileNames,
-            options: parsed.options,
-            projectReferences: parsed.projectReferences,
-        });
-        const reportsTs6305 = program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
-        return { fast: unbuiltReferenceImport(program, parsed.fileNames), reportsTs6305 };
+        const api = new ts.API({ runExternalCode: false });
+        try {
+            const parsed = api.parseConfigFile(config);
+            assert.ok(parsed);
+            const program = api.createProgram(parsed.fileNames, { ...parsed.options, disableSourceOfProjectReferenceRedirect: true }, { projectReferences: parsed.projectReferences });
+            try {
+                const reportsTs6305 = program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
+                return { fast: unbuiltReferenceImport(program, parsed.fileNames), reportsTs6305 };
+            } finally { program.dispose(); }
+        } finally { api.close(); }
     };
     try {
         writeJson(path.join(root, 'core/tsconfig.json'), { compilerOptions, include: ['src'] });
@@ -322,15 +316,14 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
     }
 });
 
-test('disposing a session survives TypeScript releasing a duplicated declaration output twice', () => {
+test('disposing a native session with diamond references releases each declaration once', () => {
     // This repository's CLI project reproduces the TypeScript double release:
     // it references core directly and through mcp.
     const cliConfig = path.resolve(__dirname, '../../../cli/tsconfig.json');
     const session = new TypeScriptLanguageServiceSession(cliConfig);
-    const outputs = session.getProgram().getSourceFiles()
-        .map((sourceFile) => sourceFile.fileName)
+    const outputs = session.getProgram().getSourceFileNames()
         .filter((filePath, index, all) => all.indexOf(filePath) !== index);
-    assert.ok(outputs.length > 0, 'expected the duplicated declaration output this test guards');
+    assert.equal(outputs.length, 0, 'native programs must deduplicate declaration outputs');
     assert.doesNotThrow(() => session.dispose());
 });
 
@@ -447,6 +440,32 @@ test('configured TypeScript project preserves TypeScript BOM encodings', () => {
             assert.equal(loadTypeScriptConfiguredProject(config).options.strict, true);
         }
     } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('native session closes its process even when snapshot disposal fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-dispose-'));
+    const source = path.join(root, 'value.ts');
+    write(source, 'export const value = 1;');
+    const session = new TypeScriptProgramSession(root, [source], { noEmit: true, types: [] });
+    try {
+        session.getProgram();
+        const internals = session as unknown as {
+            snapshot: { dispose(): void };
+            api: { close(): void };
+        };
+        const api = internals.api;
+        let closes = 0;
+        internals.api = { close() { closes++; api.close(); } };
+        internals.snapshot = { dispose() { throw new Error('injected snapshot disposal failure'); } };
+        assert.throws(() => session.dispose(), /injected snapshot disposal failure/);
+        assert.equal(closes, 1);
+        assert.doesNotThrow(() => session.dispose());
+        assert.equal(closes, 1);
+        assert.throws(() => session.getProgram(), /disposed/);
+    } finally {
+        session.dispose();
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

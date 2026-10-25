@@ -101,7 +101,9 @@ test("install and uninstall preserve user options, environment, and custom forwa
     const updated = install(content);
     assert.ok(updated.includes(options));
     assert.ok(updated.includes(environment));
-    assert.ok((parseCodexConfig(updated).entry?.env_vars as string[]).includes("MY_CUSTOM_ENV"));
+    const entry = parseCodexConfig(updated).entry;
+    assert.ok(entry);
+    assert.ok((entry.env_vars as string[]).includes("MY_CUSTOM_ENV"));
     const removed = uninstall(updated);
     assert.ok(removed.includes(options));
     assert.ok(removed.includes(environment));

@@ -298,7 +298,8 @@ test("call graph source fallback propagates partial Publication coverage without
     assert.ok(result!.warnings?.includes("CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL"));
     assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.startLine), [1, 2]);
     assert.equal(result!.sourceReferences?.some((reference) => reference.site.file === "src/stale.ts"), false);
-    const sourceFallback = (result!.hints?.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
+    assert.ok(result!.hints?.nextSteps);
+    const sourceFallback = (result!.hints.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
     assert.equal(sourceFallback.tool, "read_file");
     assert.deepEqual(sourceFallback.args, { path: "/repo/src/current.ts", start_line: 2, end_line: 2 });
     assert.match(sourceFallback.reason, /observational text, not a proven call/);
@@ -309,7 +310,8 @@ test("call graph source fallback propagates partial Publication coverage without
         ...result!,
     });
     assert.equal(projected.sourceReferences, undefined);
-    assert.deepEqual((projected.hints?.nextSteps as unknown[])[0], sourceFallback);
+    assert.ok(projected.hints?.nextSteps);
+    assert.deepEqual((projected.hints.nextSteps as unknown[])[0], sourceFallback);
 });
 
 test("call graph retains exact reference evidence beyond the legacy 100-row disclosure ceiling", async () => {
@@ -408,7 +410,8 @@ test("call graph retains exact reference evidence beyond the legacy 100-row disc
     assert.equal(result!.exactReferences?.length, 125);
     assert.equal(result!.exactReferences?.[124]?.site.file, "tests/case-124.ts");
     assert.equal(result!.warnings?.includes("CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"), false);
-    const exactFallback = (result!.hints?.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
+    assert.ok(result!.hints?.nextSteps);
+    const exactFallback = (result!.hints.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
     assert.equal(exactFallback.tool, "read_file");
     assert.deepEqual(exactFallback.args, { path: "/repo/tests/case-000.ts", start_line: 1, end_line: 1 });
     assert.match(exactFallback.reason, /no CALLS edge was admitted/);

@@ -23,8 +23,8 @@
     "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && node -e \"require('fs').copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs')\"",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
-    "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix",
+    "lint": "oxlint --config ../../.oxlintrc.json src",
+    "lint:fix": "oxlint --config ../../.oxlintrc.json src --fix",
     "typecheck": "node ../../node_modules/typescript7/bin/tsc --build",
     "start": "tsx src/index.ts",
     "release:smoke": "tsx scripts/release-smoke.ts",
@@ -34,7 +34,7 @@
     "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "jsonc-parser": "^3.3.1",
     "toml-eslint-parser": "^1.0.3"
   },
@@ -63,7 +63,7 @@
     "@satori-code/core": "workspace:*",
     "@satori-code/mcp": "workspace:*",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "7.1.0-beta"
   },
   "files": [
     "dist/**/*.js",

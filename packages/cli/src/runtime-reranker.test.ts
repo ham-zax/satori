@@ -170,7 +170,8 @@ test("reranker use verifies Voyage before activation and preserves the launcher 
 
         assert.equal(calls.length, 1);
         assert.equal(calls[0]?.input, "https://api.voyageai.com/v1/rerank");
-        assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${API_KEY}`);
+        assert.ok(calls[0]?.init?.headers);
+        assert.equal((calls[0].init.headers as Record<string, string>).Authorization, `Bearer ${API_KEY}`);
         assert.deepEqual(fs.readFileSync(originalLauncher), originalBytes);
         assert.equal(readAllFiles(homeDir).includes(API_KEY), false);
     });
@@ -275,7 +276,8 @@ test("interactive Voyage switch saves a private key file, preserves other lines,
         assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
         assert.notEqual(fs.statSync(envPath).ino, originalInode, "atomic replacement must create a new inode");
         assert.equal(fs.readFileSync(envPath, "utf8"), otherLines.replace("VOYAGEAI_API_KEY=\r", `VOYAGEAI_API_KEY=${API_KEY}`));
-        assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${API_KEY}`);
+        assert.ok(calls[0]?.init?.headers);
+        assert.equal((calls[0].init.headers as Record<string, string>).Authorization, `Bearer ${API_KEY}`);
         assert.match(output, /paid API.*22 of 28 questions.*LateOn did so for 13/);
         assert.ok(output.includes(envPath));
         assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(API_KEY), false);
@@ -360,7 +362,8 @@ test("existing environment or env-file Voyage keys skip prompting with process e
             };
             const result = await executeManagedRerankerCommand({ operation: "use", provider: "voyage", purge: false }, options);
             assert.equal(result.status, "changed");
-            assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${useProcessEnv ? API_KEY : fileKey}`);
+            assert.ok(calls[0]?.init?.headers);
+            assert.equal((calls[0].init.headers as Record<string, string>).Authorization, `Bearer ${useProcessEnv ? API_KEY : fileKey}`);
             assert.equal(fs.readFileSync(envPath, "utf8"), content);
             assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(API_KEY), false);
             assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(fileKey), false);

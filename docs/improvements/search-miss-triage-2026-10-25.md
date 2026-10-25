@@ -1,8 +1,8 @@
 # Search miss triage: r7, p6, r1, f5, 25 October 2026
 
-Status: complete and read-only. No product code change. r7 and p6 need no work.
-r1 is a vocabulary gap with an existing caller-side repair. f5 needs an oracle
-or intent decision, not a retrieval change.
+Status: complete. No product code change. r7 and p6 need no work.
+r1 is a vocabulary gap with an existing caller-side repair. The f5 oracle is
+widened to accept the `flatc` entry point; the saved run re-scores at 27/28.
 
 ## Scope and method
 
@@ -185,6 +185,13 @@ rejects it because the oracle names only the parser methods in
 Decision: f5 is an oracle or intent mismatch, not a retrieval defect. Either
 accept the miss or widen the oracle to include `flatc.cpp` `ParseFile`. The
 second option is eval-only and needs no product change.
+
+Action, 25 October 2026: the oracle now accepts `src/flatc.cpp` `ParseFile`.
+`FlatCompiler::ParseFile` at line 36 reads the schema file and calls
+`parser.Parse` at line 46, so it is the flatc entry point for the query.
+Re-scoring the saved run with the revised oracle moves f5 from absent to rank 1
+and changes no other case: hit@10 goes from 26/28 to 27/28. The only remaining
+miss is r1, which has the documented caller-side repair.
 
 ## Limits
 

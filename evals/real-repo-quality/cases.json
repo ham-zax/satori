@@ -382,9 +382,14 @@
               "pathRegex": "^src/idl_parser\\.cpp$",
               "symbolRegex": "^(Parser::)?(DoParse|Parse|ParseDecl)$",
               "evidence": "src/idl_parser.cpp:3777 Parser::DoParse (schema entry), :2869 Parser::ParseDecl"
+            },
+            {
+              "pathRegex": "^src/flatc\\.cpp$",
+              "symbolRegex": "^ParseFile$",
+              "evidence": "src/flatc.cpp:36 void FlatCompiler::ParseFile reads the schema file and calls parser.Parse at :46"
             }
           ],
-          "justification": "Schema parser in src/idl_parser.cpp."
+          "justification": "The flatc entry point FlatCompiler::ParseFile reads a schema file and calls the parser. The parser internals are Parser::DoParse and Parser::ParseDecl in src/idl_parser.cpp. Both are accepted."
         },
         {
           "id": "f6",

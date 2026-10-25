@@ -8,12 +8,14 @@ import {
     buildSymbolRegistry,
     type RelationshipRecord,
     type SymbolRecord,
+    type SymbolRegistry,
     type SymbolRegistryManifest,
 } from "@satori-code/core";
 import {
     buildSourceBackedPythonCalleeFallback,
     buildSourceBackedPythonCallerFallback,
     repairSourceBackedPythonSpan,
+    repairSourceBackedPythonSpans,
 } from "./python-call-fallback.js";
 
 function testManifest(files: SymbolRegistryManifest['files']): SymbolRegistryManifest {
@@ -27,6 +29,24 @@ function testManifest(files: SymbolRegistryManifest['files']): SymbolRegistryMan
         relationshipVersion: 'relationship-v1',
         builtAt: '2026-06-17T00:00:00.000Z',
         files: files.map((file) => ({ ...file, definitionStatus: 'definitions_present' })),
+    };
+}
+
+function pythonSymbol(overrides: Partial<SymbolRecord> = {}): SymbolRecord {
+    return {
+        symbolKey: "python:function:target",
+        symbolInstanceId: "syminst_python_target",
+        language: "python",
+        kind: "function",
+        name: "target",
+        qualifiedName: "target",
+        label: "function target()",
+        file: "src/example.py",
+        span: { startLine: 1, endLine: 1 },
+        parentQualifiedNamePath: [],
+        fileHash: "indexed_hash",
+        extractorVersion: "test",
+        ...overrides,
     };
 }
 
@@ -221,6 +241,96 @@ test("Python source repair does not absorb an unrelated decorator or comment", (
     });
     assert.equal(repaired.validated, true);
     assert.deepEqual(repaired.symbol.span, { startLine: 6, endLine: 7 });
+});
+
+test("Python source repair keeps triple-quoted bodies and their unindented content", () => {
+    for (const quote of ['"""', "'''"]) {
+        const source = [
+            "def target():",
+            `    description = ${quote}`,
+            "column zero string content",
+            "# comment-looking string content",
+            `    ${quote}`,
+            "    return True",
+            "",
+            "def next_symbol():",
+            "    return False",
+        ].join("\n");
+        const repaired = repairSourceBackedPythonSpan({
+            codebaseRoot: "/repo",
+            symbol: pythonSymbol(),
+            sourceLines: source.split("\n"),
+        });
+        assert.equal(repaired.validated, true, quote);
+        assert.equal(repaired.repaired, true, quote);
+        assert.deepEqual(repaired.symbol.span, { startLine: 1, endLine: 6 }, quote);
+    }
+});
+
+test("Python source repair ignores triple delimiters inside quotes and comments", () => {
+    const source = [
+        "def target():",
+        `    marker = '"""'`,
+        `    other = "'''"`,
+        `    # """ and ''' inside a comment`,
+        "    return True",
+        "",
+        "def next_symbol():",
+        "    return False",
+    ].join("\n");
+    const repaired = repairSourceBackedPythonSpan({
+        codebaseRoot: "/repo",
+        symbol: pythonSymbol(),
+        sourceLines: source.split("\n"),
+    });
+    assert.equal(repaired.validated, true);
+    assert.deepEqual(repaired.symbol.span, { startLine: 1, endLine: 5 });
+});
+
+test("Python source repair handles escaped quotes without ending the body early", () => {
+    const source = [
+        "def target():",
+        '    text = "a \\"quoted\\" value"',
+        "    other = 'it\\'s fine'",
+        '    triple = """a \\""" b"""',
+        "    return True",
+        "",
+        "def next_symbol():",
+        "    return False",
+    ].join("\n");
+    const repaired = repairSourceBackedPythonSpan({
+        codebaseRoot: "/repo",
+        symbol: pythonSymbol(),
+        sourceLines: source.split("\n"),
+    });
+    assert.equal(repaired.validated, true);
+    assert.deepEqual(repaired.symbol.span, { startLine: 1, endLine: 5 });
+});
+
+test("Python source repair abstains when a body literal is unterminated", () => {
+    for (const source of [
+        [
+            "def target():",
+            '    text = "unterminated',
+            "    return True",
+        ],
+        [
+            "def target():",
+            '    text = """unterminated',
+            "    return True",
+            "def next_symbol():",
+            "    return False",
+        ],
+    ]) {
+        const repaired = repairSourceBackedPythonSpan({
+            codebaseRoot: "/repo",
+            symbol: pythonSymbol(),
+            sourceLines: source,
+        });
+        assert.equal(repaired.validated, false);
+        assert.equal(repaired.repaired, false);
+        assert.deepEqual(repaired.symbol.span, { startLine: 1, endLine: 1 });
+    }
 });
 
 test("callee fallback recognizes a same-file function shadowing a Python built-in", async () => {
@@ -528,4 +638,249 @@ test("caller fallback never opens a denied source by pathname (directory target 
         fs.rmSync(root, { recursive: true, force: true });
         fs.rmSync(outsideDir, { recursive: true, force: true });
     }
+});
+
+test("batch Python span repair shares one concurrent read per file", async () => {
+    const file = "src/shared.py";
+    const lines = [
+        "def first():",
+        "    return 1",
+        "",
+        "def second():",
+        "    return 2",
+        "",
+        "def third():",
+        "    return 3",
+    ];
+    const symbols = ["first", "second", "third"].map((name, index) => pythonSymbol({
+        symbolKey: `python:function:${name}`,
+        symbolInstanceId: `syminst_${name}`,
+        name,
+        qualifiedName: name,
+        label: `function ${name}()`,
+        file,
+        span: { startLine: index * 3 + 1, endLine: index * 3 + 1 },
+    }));
+    let reads = 0;
+    const repairs = await repairSourceBackedPythonSpans({
+        codebaseRoot: "/repo",
+        symbols,
+        readSourceLines: async () => {
+            reads += 1;
+            await Promise.resolve();
+            return lines;
+        },
+    });
+    assert.equal(reads, 1);
+    assert.deepEqual(repairs.map((repair) => repair.validated), [true, true, true]);
+    assert.deepEqual(repairs.map((repair) => repair.symbol.span), [
+        { startLine: 1, endLine: 2 },
+        { startLine: 4, endLine: 5 },
+        { startLine: 7, endLine: 8 },
+    ]);
+});
+
+test("batch Python span repair caches a denied read per file", async () => {
+    const file = "src/denied.py";
+    const symbols = ["first", "second", "third"].map((name, index) => pythonSymbol({
+        symbolKey: `python:function:${name}`,
+        symbolInstanceId: `syminst_${name}`,
+        name,
+        qualifiedName: name,
+        label: `function ${name}()`,
+        file,
+        span: { startLine: index * 3 + 1, endLine: index * 3 + 2 },
+    }));
+    let reads = 0;
+    const repairs = await repairSourceBackedPythonSpans({
+        codebaseRoot: "/repo",
+        symbols,
+        readSourceLines: async () => {
+            reads += 1;
+            await Promise.resolve();
+            return undefined;
+        },
+    });
+    assert.equal(reads, 1);
+    assert.deepEqual(repairs.map((repair) => repair.attempted), [false, false, false]);
+    assert.deepEqual(repairs.map((repair) => repair.validated), [false, false, false]);
+});
+
+test("caller fallback reads a denied source file only once for repeated records", async () => {
+    const file = "src/caller.py";
+    const target = pythonSymbol({
+        file: "src/target.py",
+        span: { startLine: 1, endLine: 2 },
+    });
+    const callers = ["caller_one", "caller_two", "caller_three"].map((name, index) => pythonSymbol({
+        symbolKey: `python:function:${name}`,
+        symbolInstanceId: `syminst_${name}`,
+        name,
+        qualifiedName: name,
+        label: `function ${name}()`,
+        file,
+        span: { startLine: index * 3 + 1, endLine: index * 3 + 2 },
+    }));
+    const registry = buildSymbolRegistry({
+        manifest: testManifest([
+            { path: 'src/target.py', hash: 'indexed_hash', language: 'python', symbolCount: 1, definitionStatus: 'definitions_present' },
+            { path: file, hash: 'indexed_hash', language: 'python', symbolCount: 3, definitionStatus: 'definitions_present' },
+        ]),
+        symbols: [target, ...callers],
+    });
+    const suppressedRecords: RelationshipRecord[] = callers.map((caller) => ({
+        sourceKey: caller.symbolKey,
+        sourceInstanceId: caller.symbolInstanceId,
+        targetKey: target.symbolKey,
+        targetInstanceId: target.symbolInstanceId,
+        type: "CALLS" as const,
+        file,
+        span: { startLine: caller.span.startLine + 1, endLine: caller.span.startLine + 1 },
+        confidence: "low" as const,
+    }));
+    let reads = 0;
+    const result = await buildSourceBackedPythonCallerFallback({
+        codebaseRoot: "/repo",
+        registry,
+        resolvedTarget: target,
+        suppressedRecords,
+        sortEdges: (edges) => edges,
+        sortNotes: (notes) => notes,
+        readSourceLines: async () => {
+            reads += 1;
+            await Promise.resolve();
+            return undefined;
+        },
+    });
+    assert.equal(reads, 1);
+    assert.deepEqual(result.edges, []);
+    assert.deepEqual(result.symbols, []);
+    assert.deepEqual(result.notes, []);
+});
+
+test("callee fallback resolves only same-file targets", async () => {
+    const localFile = "src/local.py";
+    const remoteTarget = pythonSymbol({
+        symbolKey: "python:function:helper",
+        symbolInstanceId: "syminst_remote_helper",
+        name: "helper",
+        qualifiedName: "helper",
+        label: "function helper()",
+        file: "src/target.py",
+        span: { startLine: 1, endLine: 2 },
+    });
+    const localHelper = pythonSymbol({
+        ...remoteTarget,
+        symbolInstanceId: "syminst_local_helper",
+        file: localFile,
+    });
+    const localCaller = pythonSymbol({
+        symbolKey: "python:function:caller",
+        symbolInstanceId: "syminst_local_caller",
+        name: "caller",
+        qualifiedName: "caller",
+        label: "function caller()",
+        file: localFile,
+        span: { startLine: 4, endLine: 5 },
+    });
+    const remoteCaller = pythonSymbol({
+        symbolKey: "python:function:remote_caller",
+        symbolInstanceId: "syminst_remote_caller",
+        name: "remote_caller",
+        qualifiedName: "remote_caller",
+        label: "function remote_caller()",
+        file: "src/remote.py",
+        span: { startLine: 1, endLine: 2 },
+    });
+    const registry = buildSymbolRegistry({
+        manifest: testManifest([
+            { path: 'src/target.py', hash: 'indexed_hash', language: 'python', symbolCount: 1, definitionStatus: 'definitions_present' },
+            { path: localFile, hash: 'indexed_hash', language: 'python', symbolCount: 2, definitionStatus: 'definitions_present' },
+            { path: 'src/remote.py', hash: 'indexed_hash', language: 'python', symbolCount: 1, definitionStatus: 'definitions_present' },
+        ]),
+        symbols: [remoteTarget, localHelper, localCaller, remoteCaller],
+    });
+    const sameFileOnlyRegistry = new Proxy(registry as SymbolRegistry, {
+        get(target, property, receiver) {
+            assert.notEqual(property, "symbols", "callee fallback must not index repository-wide symbols");
+            return Reflect.get(target, property, receiver);
+        },
+    });
+
+    const localResult = await buildSourceBackedPythonCalleeFallback({
+        codebaseRoot: "/repo",
+        registry: sameFileOnlyRegistry,
+        source: localCaller,
+        sortEdges: (edges) => edges,
+        readSourceLines: async () => [
+            "def helper():",
+            "    return 1",
+            "",
+            "def caller():",
+            "    return helper()",
+        ],
+    });
+    assert.deepEqual(localResult.edges.map((edge) => [edge.srcSymbolId, edge.dstSymbolId]), [
+        [localCaller.symbolInstanceId, localHelper.symbolInstanceId],
+    ]);
+
+    const remoteResult = await buildSourceBackedPythonCalleeFallback({
+        codebaseRoot: "/repo",
+        registry,
+        source: remoteCaller,
+        sortEdges: (edges) => edges,
+        readSourceLines: async () => [
+            "def remote_caller():",
+            "    return helper()",
+        ],
+    });
+    assert.deepEqual(remoteResult.edges, []);
+});
+
+test("caller fallback keeps repository-wide candidates", async () => {
+    const callerFile = "src/caller.py";
+    const target = pythonSymbol({
+        file: "src/target.py",
+        span: { startLine: 1, endLine: 2 },
+    });
+    const caller = pythonSymbol({
+        symbolKey: "python:function:caller",
+        symbolInstanceId: "syminst_caller",
+        name: "caller",
+        qualifiedName: "caller",
+        label: "function caller()",
+        file: callerFile,
+        span: { startLine: 1, endLine: 2 },
+    });
+    const registry = buildSymbolRegistry({
+        manifest: testManifest([
+            { path: 'src/target.py', hash: 'indexed_hash', language: 'python', symbolCount: 1, definitionStatus: 'definitions_present' },
+            { path: callerFile, hash: 'indexed_hash', language: 'python', symbolCount: 1, definitionStatus: 'definitions_present' },
+        ]),
+        symbols: [target, caller],
+    });
+    const result = await buildSourceBackedPythonCallerFallback({
+        codebaseRoot: "/repo",
+        registry,
+        resolvedTarget: target,
+        suppressedRecords: [{
+            sourceKey: caller.symbolKey,
+            sourceInstanceId: caller.symbolInstanceId,
+            targetKey: target.symbolKey,
+            targetInstanceId: target.symbolInstanceId,
+            type: "CALLS" as const,
+            file: callerFile,
+            span: { startLine: 2, endLine: 2 },
+            confidence: "low" as const,
+        }],
+        sortEdges: (edges) => edges,
+        sortNotes: (notes) => notes,
+        readSourceLines: async () => [
+            "def caller():",
+            "    target()",
+        ],
+    });
+    assert.deepEqual(result.edges.map((edge) => [edge.srcSymbolId, edge.dstSymbolId]), [
+        [caller.symbolInstanceId, target.symbolInstanceId],
+    ]);
 });

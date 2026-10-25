@@ -25,7 +25,7 @@ import {
     buildSharedRuntimeIdentity,
     resolveSharedRuntimePaths,
 } from "./shared-runtime-identity.js";
-import { readHostMetadata } from "./shared-runtime-lifecycle.js";
+import { acquireLifecycleLock, readHostMetadata } from "./shared-runtime-lifecycle.js";
 import { toolRegistry } from "../tools/registry.js";
 
 type JsonRpcResponse = {
@@ -222,6 +222,85 @@ async function sendOversizedJsonRpcFrame(
             resolve();
         });
     });
+}
+
+async function connectHandshakeSocket(socketPath: string): Promise<net.Socket> {
+    const socket = net.createConnection({ path: socketPath });
+    await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            socket.destroy();
+            reject(new Error("raw socket connect timed out"));
+        }, 1_000);
+        socket.once("connect", () => {
+            clearTimeout(timer);
+            resolve();
+        });
+        socket.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+    return socket;
+}
+
+async function readHandshakeLine(socket: net.Socket): Promise<string> {
+    return new Promise((resolve, reject) => {
+        let response = "";
+        const timer = setTimeout(() => {
+            reject(new Error("handshake response timed out"));
+        }, 1_000);
+        const onData = (chunk: Buffer): void => {
+            response += chunk.toString();
+            const newline = response.indexOf("\n");
+            if (newline < 0) return;
+            clearTimeout(timer);
+            socket.off("data", onData);
+            resolve(response.slice(0, newline));
+        };
+        socket.on("data", onData);
+        socket.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+
+/**
+ * Test-owned gate over the tracked handshake sockets. The host exposes no
+ * public counter, so ordering waits on this set instead of on sleeps.
+ */
+function pendingHandshakeCount(socketHost: SharedRuntimeSocketHost): number {
+    const tracked = (socketHost as unknown as {
+        pendingHandshakes?: Set<net.Socket>;
+    }).pendingHandshakes;
+    return tracked?.size ?? 0;
+}
+
+async function waitForGate(check: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (check()) return;
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    throw new Error("test gate did not settle");
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), 2_000);
+    });
+    try {
+        return await Promise.race([promise, timeout]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+async function closeBridgeQuietly(
+    bridge: Awaited<ReturnType<typeof createBridge>> | undefined,
+): Promise<void> {
+    if (!bridge) return;
+    await bridge.close().catch(() => undefined);
 }
 
 test("bounded socket transport applies its limit per JSON-RPC frame", async () => {
@@ -909,4 +988,204 @@ test("attach with a broad workspace root is rejected", async (t) => {
     assert.equal(response.accepted, false);
     assert.match(response.error, /not authorized/);
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 0, operations: 0 });
+});
+
+test("idle shutdown waits for a held lifecycle lock and preserves an attached session", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-lock-session-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = config(root);
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    let bridge: Awaited<ReturnType<typeof createBridge>> | undefined;
+    let held: Awaited<ReturnType<typeof acquireLifecycleLock>> | undefined;
+    t.after(async () => {
+        await closeBridgeQuietly(bridge);
+        held?.release();
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+    // The test process owns a disposable lifecycle lock, so the idle attempt
+    // must wait while a real session attaches.
+    const lifecycleLock = await acquireLifecycleLock(paths.lockPath);
+    held = lifecycleLock;
+    const idle = socketHost.shutdown({ onlyIfIdle: true });
+    const attached = await createBridge(runtimeEntry, runtimeEnv);
+    bridge = attached;
+    assert.deepEqual(runtimeHost.getActivity(), { sessions: 1, operations: 0 });
+
+    lifecycleLock.release();
+    await idle;
+
+    // The recheck under the lock sees the session: the host stays serving.
+    assert.equal(fs.existsSync(paths.metadataPath), true);
+    assert.equal(fs.existsSync(paths.socketPath), true);
+    assert.equal(
+        (await attached.request("tools/list")).result?.tools?.length,
+        Object.keys(toolRegistry).length,
+    );
+});
+
+test("idle shutdown waits for a held lifecycle lock and preserves a pending handshake", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-lock-handshake-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = config(root);
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    let socket: net.Socket | undefined;
+    let held: Awaited<ReturnType<typeof acquireLifecycleLock>> | undefined;
+    t.after(async () => {
+        socket?.destroy();
+        held?.release();
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+    const lifecycleLock = await acquireLifecycleLock(paths.lockPath);
+    held = lifecycleLock;
+    const idle = socketHost.shutdown({ onlyIfIdle: true });
+    const raw = await connectHandshakeSocket(paths.socketPath);
+    socket = raw;
+    const request = `${JSON.stringify({
+        type: "satori-shared-runtime-attach",
+        protocolVersion: SHARED_RUNTIME_PROTOCOL_VERSION,
+        sharedRuntimeIdentityHash: identity.hash,
+        installedRuntimeRoot: identity.installedRuntimeRoot,
+        mcpVersion: identity.mcpVersion,
+        challengeNonce: "a".repeat(48),
+        workspaceRoots: [path.join(root, "workspace")],
+    })}\n`;
+    const splitAt = Math.floor(request.length / 2);
+    raw.write(request.slice(0, splitAt));
+    await waitForGate(() => pendingHandshakeCount(socketHost) === 1);
+
+    lifecycleLock.release();
+    await idle;
+
+    // The pending handshake keeps the host alive, and it can still attach.
+    assert.equal(fs.existsSync(paths.metadataPath), true);
+    assert.equal(fs.existsSync(paths.socketPath), true);
+    const responseLine = readHandshakeLine(raw);
+    raw.write(request.slice(splitAt));
+    const response = JSON.parse(await responseLine) as { accepted: boolean; error?: string };
+    assert.equal(
+        response.accepted,
+        true,
+        response.error ?? "host must accept the deferred handshake",
+    );
+});
+
+test("forced shutdown destroys pending handshakes without waiting for the handshake timeout", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-forced-handshake-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = config(root);
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    let socket: net.Socket | undefined;
+    t.after(async () => {
+        socket?.destroy();
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+    const raw = await connectHandshakeSocket(paths.socketPath);
+    socket = raw;
+    raw.write("{\"type\":\"satori-shared-runtime-attach\"");
+    await waitForGate(() => pendingHandshakeCount(socketHost) === 1);
+
+    await withTimeout(
+        socketHost.shutdown(),
+        "forced shutdown waited for the handshake timeout",
+    );
+    assert.equal(fs.existsSync(paths.metadataPath), false);
+    assert.equal(fs.existsSync(paths.socketPath), false);
+    if (!raw.destroyed) {
+        await new Promise<void>((resolve) => raw.once("close", () => resolve()));
+    }
+});
+
+test("a second shutdown request after a waiting idle attempt still closes the host", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-second-shutdown-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = config(root);
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    let bridge: Awaited<ReturnType<typeof createBridge>> | undefined;
+    let held: Awaited<ReturnType<typeof acquireLifecycleLock>> | undefined;
+    t.after(async () => {
+        await closeBridgeQuietly(bridge);
+        held?.release();
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+    const lifecycleLock = await acquireLifecycleLock(paths.lockPath);
+    held = lifecycleLock;
+    const idle = socketHost.shutdown({ onlyIfIdle: true });
+    const attached = await createBridge(runtimeEntry, runtimeEnv);
+    bridge = attached;
+    // The forced request must run after the idle attempt aborts on the
+    // attached session, and it must then close the host exactly once.
+    const forced = socketHost.shutdown();
+    lifecycleLock.release();
+
+    await Promise.all([idle, forced]);
+    assert.equal(fs.existsSync(paths.metadataPath), false);
+    assert.equal(fs.existsSync(paths.socketPath), false);
+    await attached.close().catch((error: NodeJS.ErrnoException) => {
+        assert.equal(error.code, "ECONNRESET");
+    });
+    bridge = undefined;
 });

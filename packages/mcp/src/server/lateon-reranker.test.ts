@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -114,6 +115,47 @@ async function waitForWorkerAttempts(pidLogPath: string, expected: number): Prom
             assert.fail(`Expected ${expected} LateOn worker attempts.`);
         }
         await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+}
+
+type GatedWorkerTermination = Readonly<{
+    terminationRequested: Promise<void>;
+    releaseTermination: () => void;
+}>;
+
+// Holds the kill of a real fake-worker process until the test releases it, so
+// the replacement window is an explicit event instead of a timing assumption.
+function gateWorkerTermination(reranker: LateOnReranker): GatedWorkerTermination {
+    const internals = reranker as unknown as { worker: ChildProcess | null };
+    const worker = internals.worker;
+    assert.ok(worker, "LateOn must have an attached worker to gate.");
+    let requestTermination!: () => void;
+    let releaseTermination!: () => void;
+    const terminationRequested = new Promise<void>((resolve) => {
+        requestTermination = resolve;
+    });
+    const terminationGate = new Promise<void>((resolve) => {
+        releaseTermination = resolve;
+    });
+    const kill = worker.kill.bind(worker);
+    worker.kill = ((...args: Parameters<ChildProcess["kill"]>) => {
+        requestTermination();
+        void terminationGate.then(() => kill(...args));
+        return true;
+    }) as ChildProcess["kill"];
+    return { terminationRequested, releaseTermination };
+}
+
+async function waitForOperationalSnapshot(
+    reranker: LateOnReranker,
+    predicate: (snapshot: ReturnType<LateOnReranker["getOperationalSnapshot"]>) => boolean,
+): Promise<void> {
+    const deadline = Date.now() + 1_000;
+    while (!predicate(reranker.getOperationalSnapshot())) {
+        if (Date.now() >= deadline) {
+            assert.fail("Timed out waiting for the expected LateOn operational snapshot.");
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
     }
 }
 
@@ -415,6 +457,120 @@ test("LateOn close prevents a loading worker from spawning a bootstrap retry", a
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(readWorkerPids(pidLogPath).length, 1);
     assert.equal(reranker.getOperationalState(), "closed");
+});
+
+test("LateOn a readiness waiter waits for replacement termination before reporting readiness", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-replacement-wait-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, {
+            bootstrapAttempts: ["ready", "ready"],
+            pidLogPath,
+        }),
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+
+    const termination = gateWorkerTermination(reranker);
+    try {
+        const malformed = assertOperationalReason(
+            reranker.rerank("malformed", ["first", "second"]),
+            "lateon_invalid_output",
+        );
+        await termination.terminationRequested;
+
+        const waiter = reranker.waitUntilReady();
+        let waiterSettled = false;
+        void waiter.then(
+            () => { waiterSettled = true; },
+            () => { waiterSettled = true; },
+        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        assert.equal(waiterSettled, false, "readiness must not resolve while the old worker is terminating");
+        assert.equal(reranker.getOperationalSnapshot().terminationActive, true);
+        assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+        assert.equal(readWorkerPids(pidLogPath).length, 1, "a waiter must not start a replacement before termination");
+
+        termination.releaseTermination();
+        await waiter;
+        await malformed;
+        assert.equal(reranker.getOperationalState(), "ready");
+        assert.equal(readWorkerPids(pidLogPath).length, 2);
+    } finally {
+        termination.releaseTermination();
+    }
+});
+
+test("LateOn recovers on demand after a replacement worker fails during loading", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-replacement-recovery-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, {
+            bootstrapAttempts: ["ready", "exit", "ready"],
+            pidLogPath,
+        }),
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+
+    await assertOperationalReason(
+        reranker.rerank("malformed", ["first", "second"]),
+        "lateon_invalid_output",
+    );
+    await waitForOperationalSnapshot(reranker, (snapshot) => (
+        snapshot.state === "unhealthy"
+        && !snapshot.workerAttached
+        && !snapshot.terminationActive
+    ));
+    assert.equal(readWorkerPids(pidLogPath).length, 2);
+    assert.equal(reranker.getOperationalSnapshot().bootstrap.attemptCount, 1);
+
+    assert.deepEqual(
+        await reranker.rerank("recover", ["document"]),
+        [{ index: 0, relevanceScore: 8 }],
+    );
+    assert.equal(reranker.getOperationalState(), "ready");
+    assert.equal(readWorkerPids(pidLogPath).length, 3);
+});
+
+test("LateOn close during a replacement window rejects the waiting readiness caller", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-replacement-close-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, {
+            bootstrapAttempts: ["ready", "ready"],
+            pidLogPath,
+        }),
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+
+    const termination = gateWorkerTermination(reranker);
+    const malformed = assertOperationalReason(
+        reranker.rerank("malformed", ["first", "second"]),
+        "lateon_invalid_output",
+    );
+    await termination.terminationRequested;
+
+    const waiter = reranker.waitUntilReady();
+    const closed = reranker.close();
+    termination.releaseTermination();
+
+    await assertOperationalReason(waiter, "lateon_cancelled");
+    await malformed;
+    await closed;
+    assert.equal(reranker.getOperationalState(), "closed");
+    assert.equal(readWorkerPids(pidLogPath).length, 1, "close during replacement must not start another worker");
 });
 
 test("LateOn starts its worker on first use, releases it when idle, and restarts on demand", async (t) => {

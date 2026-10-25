@@ -306,7 +306,13 @@ export class LateOnReranker implements Reranker {
             throw operationalError("lateon_cancelled", "LateOn reranker is closed.");
         }
         await this.ensureWorkerStarted();
-        await this.readinessPromise;
+        const readiness = this.readinessPromise;
+        await readiness;
+        // Readiness belongs to the worker that was awaited. A close that began
+        // while the waiter was suspended must not report that worker as usable.
+        if (this.closed) {
+            throw operationalError("lateon_cancelled", "LateOn reranker is closed.");
+        }
         this.scheduleIdleShutdown();
     }
 
@@ -332,9 +338,19 @@ export class LateOnReranker implements Reranker {
 
     private async ensureWorkerStarted(): Promise<void> {
         this.clearIdleShutdown();
-        if (this.workerState !== "idle") return;
-        if (this.termination) await this.termination;
-        if (this.workerState === "idle" && !this.closed) this.startWorker();
+        // A detached worker may still be terminating. Wait for it before
+        // observing an inherited readiness result or starting a replacement.
+        while (this.termination) await this.termination;
+        if (this.closed) {
+            throw operationalError("lateon_cancelled", "LateOn reranker is closed.");
+        }
+        if (this.worker) return;
+        if (
+            this.workerState === "idle"
+            || (this.workerState === "unhealthy" && !this.terminalBootstrapFailure)
+        ) {
+            this.startWorker();
+        }
     }
 
     private clearIdleShutdown(): void {

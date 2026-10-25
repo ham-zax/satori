@@ -140,11 +140,19 @@ function hasPotentialPythonCompetingBinding(
     return false;
 }
 
-function buildDirectCallTargetIndex(registry: SymbolRegistry): Map<string, SymbolRecord[]> {
+function buildDirectCallTargetIndex(symbols: readonly SymbolRecord[]): Map<string, SymbolRecord[]> {
     const targetsByName = new Map<string, SymbolRecord[]>();
-    for (const symbol of registry.symbols.filter((candidate) => candidate.kind !== "file")) {
+    for (const symbol of symbols) {
+        if (symbol.kind === "file") {
+            continue;
+        }
         const key = symbol.name.toLowerCase();
-        targetsByName.set(key, [...(targetsByName.get(key) || []), symbol]);
+        const existing = targetsByName.get(key);
+        if (existing) {
+            existing.push(symbol);
+        } else {
+            targetsByName.set(key, [symbol]);
+        }
     }
     return targetsByName;
 }
@@ -165,10 +173,6 @@ function countPythonIndent(line: string): number {
 
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isPythonHeaderTerminated(trimmedLine: string): boolean {
-    return /:\s*(?:#.*)?$/.test(trimmedLine);
 }
 
 function findPythonDefinitionIndexByName(
@@ -310,9 +314,76 @@ function findPythonDecoratedDefinitionStart(lines: string[], definitionIndex: nu
     return definitionIndex;
 }
 
+function isPythonHeaderTerminated(trimmedLine: string): boolean {
+    return /:\s*(?:#.*)?$/.test(trimmedLine);
+}
+
+type PythonBodyStringState = Readonly<{
+    quote: "'" | "\"" | null;
+    triple: boolean;
+}>;
+
+type PythonBodyLineScan = Readonly<{
+    state: PythonBodyStringState;
+    unterminatedSingleQuote: boolean;
+}>;
+
+function scanPythonBodyLine(line: string, initial: PythonBodyStringState): PythonBodyLineScan {
+    let quote = initial.quote;
+    let triple = initial.triple;
+    let escaped = false;
+
+    for (let offset = 0; offset < line.length; offset += 1) {
+        const char = line[offset];
+        if (quote) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (char === "\\") {
+                escaped = true;
+                continue;
+            }
+            if (triple && line.slice(offset, offset + 3) === quote.repeat(3)) {
+                quote = null;
+                triple = false;
+                offset += 2;
+                continue;
+            }
+            if (!triple && char === quote) {
+                quote = null;
+            }
+            continue;
+        }
+
+        if (char === "#") {
+            break;
+        }
+        if (char !== "'" && char !== "\"") {
+            continue;
+        }
+        quote = char;
+        triple = line.slice(offset, offset + 3) === char.repeat(3);
+        if (triple) {
+            offset += 2;
+        }
+    }
+
+    const escapedLineBreak = escaped && quote !== null && !triple;
+    const unterminatedSingleQuote = quote !== null && !triple && !escapedLineBreak;
+    return {
+        state: {
+            quote: triple || escapedLineBreak ? quote : null,
+            triple: triple && quote !== null,
+        },
+        unterminatedSingleQuote,
+    };
+}
+
 function findPythonSourceBackedBlockEnd(lines: string[], definitionIndex: number, indent: number): number | undefined {
     let lastContentLine = definitionIndex + 1;
     let headerComplete = isPythonHeaderTerminated((lines[definitionIndex] || "").trim());
+    let stringState: PythonBodyStringState = { quote: null, triple: false };
     for (let index = definitionIndex + 1; index < lines.length; index += 1) {
         const line = lines[index] || "";
         const trimmed = line.trim();
@@ -323,15 +394,36 @@ function findPythonSourceBackedBlockEnd(lines: string[], definitionIndex: number
             }
             continue;
         }
+
+        if (stringState.quote !== null) {
+            const scan = scanPythonBodyLine(line, stringState);
+            if (scan.unterminatedSingleQuote) {
+                return undefined;
+            }
+            stringState = scan.state;
+            lastContentLine = index + 1;
+            continue;
+        }
+
         if (trimmed.length === 0 || trimmed.startsWith("#")) {
             continue;
         }
         if (countPythonIndent(line) <= indent) {
             return lastContentLine;
         }
+
         lastContentLine = index + 1;
+        const scan = scanPythonBodyLine(line, stringState);
+        if (scan.unterminatedSingleQuote) {
+            return undefined;
+        }
+        stringState = scan.state;
     }
-    return headerComplete ? lastContentLine : undefined;
+
+    if (!headerComplete || stringState.quote !== null) {
+        return undefined;
+    }
+    return lastContentLine;
 }
 
 export function repairSourceBackedPythonSpan(input: {
@@ -417,7 +509,7 @@ export function repairSourceBackedPythonSpans(input: {
     symbols: SymbolRecord[];
     readSourceLines: ReadAuthorizedCodebaseFileLines;
 }): Promise<PythonSourceBackedSpanRepair[]> {
-    const linesByFile = new Map<string, string[] | undefined>();
+    const linesByFile = new Map<string, Promise<string[] | undefined>>();
     return Promise.all(input.symbols.map(async (symbol) => {
         if (symbol.language !== "python" || (symbol.kind !== "function" && symbol.kind !== "method")) {
             return {
@@ -429,10 +521,14 @@ export function repairSourceBackedPythonSpans(input: {
                 endTruncated: false,
             };
         }
-        if (!linesByFile.has(symbol.file)) {
-            linesByFile.set(symbol.file, await input.readSourceLines(input.codebaseRoot, symbol.file));
+        let pendingLines = linesByFile.get(symbol.file);
+        if (!pendingLines) {
+            // Cache the pending read before awaiting it so concurrent symbols
+            // in one file share a single read, including a denied read.
+            pendingLines = input.readSourceLines(input.codebaseRoot, symbol.file);
+            linesByFile.set(symbol.file, pendingLines);
         }
-        const sourceLines = linesByFile.get(symbol.file);
+        const sourceLines = await pendingLines;
         if (sourceLines === undefined) {
             // Authorized source is unavailable (denied, unpublished, escaped,
             // or unreadable): fail closed without any pathname fallback read.
@@ -468,7 +564,7 @@ export async function buildSourceBackedPythonCalleeFallback(input: {
     if (!lines) {
         return { edges: [], symbols: [], notes: [] };
     }
-    const targetsByName = buildDirectCallTargetIndex(input.registry);
+    const targetsByName = buildDirectCallTargetIndex(input.registry.symbolsByFile.get(source.file) ?? []);
     const edgesByKey = new Map<string, CallGraphEdge>();
     const targetSymbolsById = new Map<string, SymbolRecord>();
     const maxLine = Math.min(source.span.endLine, lines.length);
@@ -542,9 +638,9 @@ export async function buildSourceBackedPythonCallerFallback(input: {
         return input.readSourceLines(codebaseRoot, relativeFilePath);
     };
 
-    const targetsByName = buildDirectCallTargetIndex(input.registry);
+    const targetsByName = buildDirectCallTargetIndex(input.registry.symbols);
     const sourceRepairsById = new Map<string, PythonSourceBackedSpanRepair>();
-    const linesByFile = new Map<string, string[] | undefined>();
+    const linesByFile = new Map<string, Promise<string[] | undefined>>();
     const edgesByKey = new Map<string, CallGraphEdge>();
     const sourceSymbolsById = new Map<string, SymbolRecord>();
 
@@ -560,11 +656,15 @@ export async function buildSourceBackedPythonCallerFallback(input: {
 
         let sourceRepair = sourceRepairsById.get(source.symbolInstanceId);
         if (!sourceRepair) {
-            let sourceLines = linesByFile.get(source.file);
-            if (sourceLines === undefined) {
-                sourceLines = await readSource(input.codebaseRoot, source.file);
-                linesByFile.set(source.file, sourceLines);
+            let pendingLines = linesByFile.get(source.file);
+            if (!pendingLines) {
+                // Cache the pending read before awaiting it: an uncached file
+                // is read once, and a cached denied file stays denied without
+                // another authorization query.
+                pendingLines = readSource(input.codebaseRoot, source.file);
+                linesByFile.set(source.file, pendingLines);
             }
+            const sourceLines = await pendingLines;
             if (sourceLines === undefined) {
                 // Authorized source is unavailable (denied, unpublished,
                 // escaped, or unreadable): skip this record entirely. Never
@@ -593,17 +693,18 @@ export async function buildSourceBackedPythonCallerFallback(input: {
             continue;
         }
 
-        let sourceLines = linesByFile.get(repairedSource.file);
-        if (sourceLines === undefined) {
-            sourceLines = await readSource(input.codebaseRoot, repairedSource.file);
-            linesByFile.set(repairedSource.file, sourceLines);
+        let pendingSiteLines = linesByFile.get(repairedSource.file);
+        if (!pendingSiteLines) {
+            pendingSiteLines = readSource(input.codebaseRoot, repairedSource.file);
+            linesByFile.set(repairedSource.file, pendingSiteLines);
         }
-        if (sourceLines === undefined) {
+        const siteLines = await pendingSiteLines;
+        if (siteLines === undefined) {
             // Source became unavailable between validation and site
             // extraction: fail closed for this record.
             continue;
         }
-        const siteLine = sourceLines?.[siteStartLine - 1];
+        const siteLine = siteLines[siteStartLine - 1];
         if (typeof siteLine !== "string") {
             continue;
         }
@@ -616,7 +717,7 @@ export async function buildSourceBackedPythonCallerFallback(input: {
                 targetsByName.get(callName.toLowerCase()) || [],
                 callName,
                 true,
-                sourceLines,
+                siteLines,
                 input.codebaseRoot,
             ))
             .find((candidate) => candidate?.symbolInstanceId === target.symbolInstanceId);

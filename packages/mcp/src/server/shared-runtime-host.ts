@@ -102,6 +102,13 @@ export class SharedRuntimeSocketHost {
     private readonly server: net.Server;
     private readonly sessions = new Set<McpSession>();
     /**
+     * Sockets that connected but have not attached a session yet. Idle
+     * shutdown must not close the listener while one of these can still
+     * become a session, and forced shutdown must destroy them so listener
+     * closure does not wait for the handshake timeout.
+     */
+    private readonly pendingHandshakes = new Set<net.Socket>();
+    /**
      * Lifecycle-state ownership marker only. Written to host.json (mode 0600)
      * so the owning host can prove it may remove stale socket/metadata state.
      * It is never transmitted over the socket and never used to authenticate
@@ -113,6 +120,7 @@ export class SharedRuntimeSocketHost {
     private metadata: SharedRuntimeHostMetadata | null = null;
     private idleTimer: NodeJS.Timeout | null = null;
     private closing = false;
+    private shutdownAttempt: Promise<void> | null = null;
     private readonly unsubscribeActivity: () => void;
 
     constructor(
@@ -122,6 +130,12 @@ export class SharedRuntimeSocketHost {
         private readonly idleMs = SHARED_RUNTIME_IDLE_MS,
     ) {
         this.server = net.createServer({ pauseOnConnect: true }, (socket) => {
+            if (this.closing) {
+                // The listener is committed to closing; do not register a
+                // handler that the close callback would have to wait for.
+                socket.destroy();
+                return;
+            }
             this.cancelIdleShutdown();
             this.acceptHandshake(socket);
         });
@@ -212,9 +226,10 @@ export class SharedRuntimeSocketHost {
     }
 
     private acceptHandshake(socket: net.Socket): void {
+        this.pendingHandshakes.add(socket);
         let buffered = Buffer.alloc(0);
         const timer = setTimeout(() => {
-            cleanup();
+            settle();
             socket.destroy();
             this.scheduleIdleShutdown();
         }, 10_000);
@@ -224,15 +239,20 @@ export class SharedRuntimeSocketHost {
             socket.off("error", onError);
             socket.off("close", onClose);
         };
-        const onError = (): void => {
+        const settle = (): void => {
             cleanup();
+            this.pendingHandshakes.delete(socket);
+        };
+        const onError = (): void => {
+            settle();
             this.scheduleIdleShutdown();
         };
         const onClose = (): void => {
-            cleanup();
+            settle();
             this.scheduleIdleShutdown();
         };
         const reject = (message: string): void => {
+            settle();
             const response = {
                 type: "satori-shared-runtime-attached",
                 accepted: false,
@@ -254,7 +274,6 @@ export class SharedRuntimeSocketHost {
         };
         const onData = (chunk: Buffer): void => {
             if (buffered.length + chunk.length > SHARED_RUNTIME_HANDSHAKE_MAX_BYTES) {
-                cleanup();
                 reject("Attach handshake exceeded its byte limit.");
                 return;
             }
@@ -322,6 +341,9 @@ export class SharedRuntimeSocketHost {
                 challengeNonce: request.challengeNonce,
             };
             socket.write(`${JSON.stringify(response)}\n`);
+            // attachSession removes this socket from pendingHandshakes before
+            // it yields, so the host never observes a gap between handshake
+            // and session ownership.
             void this.attachSession(socket, trailing, workspacePolicy).catch(() => {
                 socket.destroy();
                 this.scheduleIdleShutdown();
@@ -338,6 +360,7 @@ export class SharedRuntimeSocketHost {
         trailing: Buffer,
         workspacePolicy: SessionWorkspacePolicy,
     ): Promise<void> {
+        this.pendingHandshakes.delete(socket);
         if (this.closing) {
             socket.destroy();
             return;
@@ -370,7 +393,14 @@ export class SharedRuntimeSocketHost {
     }
 
     private scheduleIdleShutdown(): void {
-        if (this.closing || this.sessions.size > 0 || this.idleTimer) return;
+        if (
+            this.closing
+            || this.sessions.size > 0
+            || this.pendingHandshakes.size > 0
+            || this.idleTimer
+        ) {
+            return;
+        }
         const activity = this.runtimeHost.getActivity();
         if (activity.sessions > 0 || activity.operations > 0) return;
         this.idleTimer = setTimeout(() => {
@@ -381,17 +411,55 @@ export class SharedRuntimeSocketHost {
     }
 
     async shutdown(options: { onlyIfIdle?: boolean } = {}): Promise<void> {
+        const onlyIfIdle = options.onlyIfIdle === true;
+        // Serialize attempts so a second request never races the first for
+        // lifecycle-lock ownership and observes its outcome before deciding
+        // whether the host still needs closing.
+        while (this.shutdownAttempt) {
+            const current = this.shutdownAttempt;
+            await current.catch(() => undefined);
+            if (this.shutdownAttempt === current) this.shutdownAttempt = null;
+            if (this.closing) return;
+        }
         if (this.closing) return;
-        this.closing = true;
-        this.cancelIdleShutdown();
+        const attempt = this.performShutdown(onlyIfIdle);
+        this.shutdownAttempt = attempt;
+        try {
+            await attempt;
+        } finally {
+            if (this.shutdownAttempt === attempt) this.shutdownAttempt = null;
+        }
+    }
 
+    private async performShutdown(onlyIfIdle: boolean): Promise<void> {
         const lock = await acquireLifecycleLock(this.paths.lockPath);
         try {
-            if (options.onlyIfIdle && this.runtimeHost.getActivity().operations > 0) {
-                this.closing = false;
-                this.scheduleIdleShutdown();
-                return;
+            if (onlyIfIdle) {
+                const activity = this.runtimeHost.getActivity();
+                if (
+                    this.sessions.size > 0
+                    || this.pendingHandshakes.size > 0
+                    || activity.sessions > 0
+                    || activity.operations > 0
+                ) {
+                    // Activity arrived while this idle attempt waited for the
+                    // lifecycle lock. Keep serving and reschedule without
+                    // closing the listener or rejecting the new session.
+                    this.scheduleIdleShutdown();
+                    return;
+                }
             }
+            // The host commits to closing only after it owns the lifecycle
+            // lock, so concurrent attaches are either observed by the recheck
+            // above or rejected below.
+            this.closing = true;
+            this.cancelIdleShutdown();
+            // Pending handshakes cannot become sessions once closing is set;
+            // destroying them lets the listener close immediately.
+            for (const socket of this.pendingHandshakes) {
+                socket.destroy();
+            }
+            this.pendingHandshakes.clear();
             const serverClosed = new Promise<void>((resolve) => {
                 this.server.close(() => resolve());
             });

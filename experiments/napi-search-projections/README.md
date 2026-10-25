@@ -5,7 +5,7 @@ TypeScript owner in `packages/core/src/core/search-projections.ts`. Production
 code imports nothing from this directory. No corpus acceptance or production
 readiness follows from fixture results.
 
-Run commands from this directory. Rust stable, Node >=22.13, and pnpm 10 are
+Run commands from this directory. Rust stable, Node >=22.22, and pnpm 10 are
 prerequisites. The local lockfiles do not change the root manifests or locks.
 
 ```text

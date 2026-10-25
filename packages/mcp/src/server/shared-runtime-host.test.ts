@@ -198,7 +198,7 @@ async function sendOversizedJsonRpcFrame(
         socket.on("data", (chunk) => {
             response = response.length === 0
                 ? Buffer.from(chunk)
-                : Buffer.concat([response, chunk]);
+                : Buffer.concat([response, Buffer.from(chunk)]);
             const newline = response.indexOf(0x0a);
             if (newline < 0) return;
             const attached = JSON.parse(response.subarray(0, newline).toString("utf8")) as {
@@ -484,7 +484,7 @@ test("protocol v2 echoes challengeNonce", async (t) => {
         challengeNonce: "c".repeat(48),
         workspaceRoots: [path.join(root, "workspace")],
     })}\n`)) as { accepted: boolean; challengeNonce: string; error?: string };
-    assert.equal(response.accepted, true, response.error);
+    assert.equal(response.accepted, true, response.error ?? "host must accept the handshake");
     assert.equal(response.challengeNonce, "c".repeat(48));
 });
 

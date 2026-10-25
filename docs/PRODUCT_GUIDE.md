@@ -199,7 +199,7 @@ If an index format, embedding identity, navigation representation, or rebuild-re
 
 ### 1. Install Satori
 
-Requirements for the packaged default path are Node.js 22.13+ and Linux x64. WSL2 is the primary qualified Windows path.
+Requirements for the packaged default path are Node.js 22.22+ and Linux x64. WSL2 is the primary qualified Windows path.
 
 ```bash
 npx -y @satori-code/cli@latest install

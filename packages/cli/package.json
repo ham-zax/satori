@@ -34,17 +34,17 @@
     "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "jsonc-parser": "^3.3.1",
     "toml-eslint-parser": "^1.0.3"
   },
   "satoriManagedRuntime": {
     "mcp": "0.10.4",
     "core": "0.10.1",
-    "lanceDb": "0.39.0",
-    "oxcParser": "0.152.0",
+    "lanceDb": "0.40.0",
+    "oxcParser": "0.155.0",
     "lateOn": {
-      "transformers": "4.3.0",
+      "transformers": "4.3.1",
       "onnxruntimeNode": "1.30.0",
       "sharpNativePackages": {
         "linux-x64-gnu": [
@@ -59,10 +59,10 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.19.0",
+    "@types/node": "^26.6.5",
     "@satori-code/core": "workspace:*",
     "@satori-code/mcp": "workspace:*",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.15",
     "typescript": "7.1.0-beta"
   },
   "files": [
@@ -90,6 +90,6 @@
     "tag": "latest"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.22.0"
   }
 }

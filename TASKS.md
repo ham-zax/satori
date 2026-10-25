@@ -165,3 +165,62 @@ bounds, fingerprint invalidation, per-analyzer disposal and metadata-only idle c
 | TS71-R | review | TS71-A | OpenCode DeepSeek V4.1 Flash, max | One read-only independent review of the complete migration diff against TS71-A, preservation of existing edits, public evidence contracts, process cleanup, resource limits, version identity, mapper execution disabled, and regression coverage. Report concrete defects with files and checks, or no findings. | Dispatch 2/2, T3 taskId `node:delegated-task:command%3Amcp%3A69ffc3e2-54fb-488f-a5c4-ed1efd0f46e6%3Adelegate-task%3Asatori-ts71-r-review-20261025-r1`. Verdict PASS WITH FINDINGS: 1 major, 6 minor, 1 nit. No blocker. Findings 1 and 2 fixed in round 1, finding 3 fixed with a regression test, finding 5 hardened, finding 7 corrected. Findings 4, 6 and 8 documented as accepted. Re-verified by the parent. Awaiting Hamza. |
 | TS71-F | review | TS71-A, TS71-R | parent inline | Regression tests reproduce directory outputs accepted as declarations and metadata counted as source. Repair both without bypassing JSON-source budgets. Focused semantic and publication checks plus pnpm run check pass. Commit the scoped fix on master, preserving existing migration commits. | Inline repair from clean e2cd3ce8. Three regression cases failed before repair. Final checks pass: pnpm run check, 43 core tests across five files, 37 agent-discovery eval tests, 507 script tests. Task-key start remains line 227. Only this ledger, the two owning files and their focused test file change. The scoped commit integrates on master, which already contains all handoff commits. Awaiting Hamza. |
 | TS71-M | review | TS71-F | parent inline | Bound JSON allocation before native parsing without treating metadata as source. Bound and own reference-cache retention, with cleanup and unchanged readiness results. Three-run measurements, mutation checks, focused tests and repository check pass. Integrate on local master. | Authorized inline follow-up from clean 8886865b. No new dispatch. Three-run evidence above: oversized JSON data reads 8388620→0 bytes, phase median 120.883→11.072 ms. Cache disposal releases proof entries, warm lookups avoid recomputation, stale-fingerprint mutation fails the regression. Final checks pass: 76 core tests across 12 files, 507 script tests, pnpm run check, git diff --check. Exact-target start remains line 227. Scoped integration on local master preserves all handoff commits. Awaiting Hamza. |
+| DEP-A | review | TS71-M | parent inline | Update npm dependencies across all first-party manifests and both lockfiles to current latest releases. Preserve TypeScript 7.1 beta and workspace links. Raise Node minimum to 22.22, as Hamza authorizes, and synchronize managed native-runtime versions. Repository check, build, scripts, affected runtime tests and experiment checks pass. Record upstream constraints. | Direct request on 25 October 2026. Snapshot: clean master 7cfee54f. No dispatches. Updated 13 direct npm dependencies including napi CLI 3.10.9 and Chokidar 6. Both outdated checks return {}. Check/build/507 scripts pass. Core reports 1083 passed, 2 skipped. MCP: 1251 source tests and 2 compiled real-model tests pass on Node 22.22. CLI: 482 pass on Node 22.22. Native Chokidar event/cleanup passes. Napi debug/release builds, typecheck, 20 fault tests and 17 release tests pass (3 release-only skips). Upstream constraints and source-harness limits below. Final diff checked. Integrate on local master. Awaiting Hamza. |
+
+## Dependency refresh checkpoint
+
+Scope: npm dependencies in the root, core, MCP, CLI and standalone napi experiment. The static
+landing manifest has no dependencies. Rust crates and the pnpm executable are separate toolchains.
+Registry `/latest` metadata is the version authority. TypeScript remains 7.1.0-beta, newer than
+the registry's stable 7.0.2. Transitive dependencies keep their upstream constraints. In particular,
+the Express router still requires path-to-regexp 8, so its security override advances to 8.4.2,
+not the incompatible 9.0.0. Existing fast-uri resolution was already 4.2.3.
+
+Updated manifests include napi CLI 3.10.9, tsx 4.23.15, Node types 26.6.5, LanceDB 0.40.0,
+Oxc parser 0.155.0, Transformers 4.3.1, OpenAI 7.43.0, Google GenAI 2.31.0, ignore 7.0.14,
+web-tree-sitter 0.27.1, MCP SDK 1.32.2 and Zod 4.6.7. Other direct dependencies already match
+latest. The CLI native closure and active LateOn profile now match the new runtime versions.
+The acquisition manifest binds the updated profile digest. Historical evaluation receipts stay intact.
+
+Node types 26 remove an incidental ES2022 library reference and tighten worker error, socket
+data, IPC and assertion signatures. The explicit compiler library becomes ES2022, supported by
+the existing Node minimum. Worker rejection types now accept unknown values without changing
+the rejection or cleanup. Test assertions retain their conditions. Existing IPC connectivity
+proves the disconnect method exists. No new runtime branch or compatibility copy is added.
+
+Checks passed: pnpm run check, pnpm run build, 507 script tests. Core tests run with concurrency
+two, heavy publication tests with concurrency one, to bound WSL memory. Remaining: core result,
+MCP/CLI runtime checks including the real local LateOn model, standalone napi build/tests/typecheck,
+final diff and registry comparison. Hamza approves Node >=22.22 and Chokidar 6. Update all
+published engine floors, doctor boundary cases, current support docs and the CI minimum matrix.
+Existing historical measurements retain their original Node versions. Install Chokidar after
+the active core run finishes, then check the watcher and full MCP/CLI suites.
+Upstream LanceDB still declares an Arrow <=18.1 peer despite the existing Arrow 21.2 dependency.
+The napi CLI still carries its own TypeScript 6.0.3, isolated from first-party TypeScript 7.1.
+
+Runtime evidence: the final registry comparison reports `{}` for both workspace and standalone
+outdated checks. Chokidar 6 observes a real file change and closes on Node 22.22.0. MCP's source
+run on that Node passes 1251 tests, but its two opt-in real-model tests fail: the unchanged encoder
+thread requests `src/server/lateon-reranker-encoder.js`, which does not exist in the source tree.
+A direct worker launch reproduces ERR_MODULE_NOT_FOUND. Both unchanged real-model oracles pass
+from `dist/server/lateon-reranker.test.js` on Node 22.22.0, including exact scores/ranking across
+encoder pools. This checks the production runtime without changing the oracle or worker code.
+
+Final evidence: both installs and pnpm run check/build pass. Both pnpm outdated checks return
+`{}`. Core's normal and heavy commands report 1051 and 32 passes respectively, with two skips.
+MCP's unchanged default source LateOn file passes with its two real-model cases skipped. Those
+two cases pass against compiled output. All 482 CLI tests pass on actual Node 22.22.0.
+The first CLI run used an npm-provided Node executable beneath node_modules, exposing four
+existing broad installer assertions. The identical binary copied to an ordinary temporary path
+passes all cases without assertion changes. The standalone napi package passes TypeScript 7.1
+typecheck, debug/release builds, all 20 fault tests and 17 release tests (three fault-only skips).
+The final addon is the ordinary release build. No Rust source or Cargo lockfile changes.
+
+Retrospective: source-model checks hide the missing JavaScript worker entry until enabled.
+Installer assertions confuse the Node executable with a direct managed-runtime module path.
+Both code follow-ups remain proposals in docs/improvements/dependency-refresh-test-followups-2026-10-25.md.
+The initial standalone install omitted --ignore-workspace and selected the root workspace.
+Its README already gives the correct command, which the final install and checks use.
+Future runs must read standalone commands before invoking pnpm. Final self-review finds no
+additional in-scope defect. Runtime code changes only widen rejection types and preserve the
+guarded IPC call. No new runtime owner, branch, fallback or compatibility layer is introduced.

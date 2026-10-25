@@ -28,7 +28,7 @@ The persistence model separates source-derived lexical/navigation state from mod
 npm install @satori-code/core
 ```
 
-Node.js 22.13 or newer is required. Provider and storage requirements depend on the adapters selected by the host application.
+Node.js 22.22 or newer is required. Provider and storage requirements depend on the adapters selected by the host application.
 
 ## Repository Policy
 

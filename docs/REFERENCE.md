@@ -141,7 +141,7 @@ Interactive diagram: [`docs/architecture/satori-architecture.html`](./architectu
 
 ## Install
 
-Requirements: Node.js 22.13+, Linux x64 (native Linux or WSL2), and at least
+Requirements: Node.js 22.22+, Linux x64 (native Linux or WSL2), and at least
 2 GiB of available runtime capacity for the qualified native deployment
 envelope. The capacity figure is an allowance, not measured steady
 consumption.

@@ -40,7 +40,7 @@ test('relationship sidecar preserves skipped semantic source files in provider c
             navigationRoot,
             publicationId,
         });
-        assert.equal(read.status, 'ok', read.status === 'ok' ? undefined : read.reason);
+        assert.equal(read.status, 'ok', read.status === 'ok' ? '' : read.reason);
         assert.deepEqual(read.manifest.providerCoverage[0]?.skippedFiles, [
             { path: 'a.rs', reason: 'source_too_large', bytes: 20 },
             { path: 'z.rs', reason: 'source_too_large', bytes: 10 },
@@ -72,7 +72,7 @@ test('symbol publication roundtrip preserves parser reasons and legacy unknown e
         assert.notEqual(computeSymbolRegistryManifestHash(registry.manifest), computeSymbolRegistryManifestHash(changed));
         await writeSymbolRegistrySidecar({ registry, navigationRoot });
         const read = await readSymbolRegistrySidecar({ normalizedRootPath: root, publicationId: 'fixture', navigationRoot });
-        assert.equal(read.status, 'ok', read.status === 'ok' ? undefined : read.reason);
+        assert.equal(read.status, 'ok', read.status === 'ok' ? '' : read.reason);
         assert.deepEqual(computeSymbolQualitySummaryFromSidecarRead(read).structuralAnalysis, {
             completeFiles: 0, recoveredFiles: 1, searchOnlyFiles: 0, unknownFiles: 1,
             reasons: [{ reason: 'syntax_error', files: 1 }],

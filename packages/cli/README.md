@@ -202,7 +202,7 @@ pnpm --filter @satori-code/cli test
 pnpm run release:smoke:cli
 ```
 
-Node.js 22.13 or newer is required.
+Node.js 22.22 or newer is required.
 
 ## License
 

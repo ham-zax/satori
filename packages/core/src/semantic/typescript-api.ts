@@ -1,5 +1,5 @@
 // Native TypeScript 7 modules are ESM. Satori's synchronous CommonJS API uses
-// Node 22.13's require(ESM), matching the package's minimum Node version.
+// require(ESM), supported by the package's Node 22.22 minimum.
 export type * from 'typescript/ast' with { 'resolution-mode': 'import' };
 export type * from 'typescript/sync' with { 'resolution-mode': 'import' };
 export { version } from 'typescript';

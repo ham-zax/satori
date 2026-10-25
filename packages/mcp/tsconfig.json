@@ -3,8 +3,7 @@
         "target": "ES2020",
         "module": "NodeNext",
         "lib": [
-            "ES2020",
-            "ES2022.Error"
+            "ES2022"
         ],
         "declaration": true,
         "declarationMap": true,

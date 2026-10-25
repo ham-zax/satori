@@ -38,7 +38,7 @@ test("resolves the exact WSL Linux GNU LanceDB native package", () => {
             architecture: "x64",
             libc: "gnu",
         }),
-        "@lancedb/lancedb-linux-x64-gnu@0.39.0",
+        "@lancedb/lancedb-linux-x64-gnu@0.40.0",
     );
 });
 
@@ -50,7 +50,7 @@ test("resolves supported Linux musl and Windows architectures deterministically"
             architecture: "arm64",
             libc: "musl",
         }),
-        "@lancedb/lancedb-linux-arm64-musl@0.39.0",
+        "@lancedb/lancedb-linux-arm64-musl@0.40.0",
     );
     assert.equal(
         resolveLanceDbNativePackage({
@@ -58,7 +58,7 @@ test("resolves supported Linux musl and Windows architectures deterministically"
             platform: "win32",
             architecture: "x64",
         }),
-        "@lancedb/lancedb-win32-x64-msvc@0.39.0",
+        "@lancedb/lancedb-win32-x64-msvc@0.40.0",
     );
 });
 

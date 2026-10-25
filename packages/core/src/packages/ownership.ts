@@ -524,7 +524,6 @@ function discoverCargoOwnership(canonicalRoot: string): {
     const manifestPaths = nativeGlobSync()('**/Cargo.toml', {
         cwd: canonicalRoot,
         withFileTypes: false,
-        // Function form: Node 22.13 (the engines floor) rejects the string[] form added in 22.14.
         exclude: (candidate) => CARGO_DISCOVERY_EXCLUDED_DIRS.has(path.basename(candidate)),
     }).map((candidate) => normalizeRelativePath(candidate)).sort(compareContractStrings);
     const manifests = new Map<string, { source: string; hash: string }>();

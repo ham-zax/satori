@@ -226,7 +226,7 @@ pnpm --filter @satori-code/mcp test
 pnpm --filter @satori-code/mcp docs:check
 ```
 
-Node.js 22.13 or newer is required.
+Node.js 22.22 or newer is required.
 
 ## License
 

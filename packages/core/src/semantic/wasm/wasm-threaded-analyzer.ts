@@ -24,7 +24,7 @@ interface PendingSemanticRequest {
     readonly worker: Worker;
     readonly timer: NodeJS.Timeout;
     readonly resolve: (val: SemanticProjectEvidence) => void;
-    readonly reject: (err: Error) => void;
+    readonly reject: (err: unknown) => void;
 }
 
 export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
@@ -81,7 +81,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
     }
 
     /** Stops the current worker; the next analyze() starts a fresh one. */
-    private releaseWorker(error?: Error, worker = this.worker, exited = false): void {
+    private releaseWorker(error?: unknown, worker = this.worker, exited = false): void {
         if (!worker || this.worker !== worker) return;
         if (this.idleTimer) clearTimeout(this.idleTimer);
         this.idleTimer = null;

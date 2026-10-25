@@ -34,7 +34,7 @@
     }
   ],
   "runtime": {
-    "transformersJs": "4.3.0",
+    "transformersJs": "4.3.1",
     "onnxruntimeNode": "1.30.0",
     "executionProvider": "cpu"
   },

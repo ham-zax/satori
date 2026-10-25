@@ -48,21 +48,21 @@
     "test:integration": "pnpm run build && HOME=/tmp node --test --test-concurrency=1 ../../tests/integration/*.test.mjs"
   },
   "dependencies": {
-    "@google/genai": "^2.25.0",
-    "@lancedb/lancedb": "0.39.0",
+    "@google/genai": "^2.31.0",
+    "@lancedb/lancedb": "0.40.0",
     "@vscode/tree-sitter-wasm": "0.3.1",
     "@zilliz/milvus2-sdk-node": "^3.0.6",
     "apache-arrow": "21.2.0",
-    "ignore": "^7.0.11",
-    "openai": "^7.25.0",
-    "oxc-parser": "0.152.0",
+    "ignore": "^7.0.14",
+    "openai": "^7.43.0",
+    "oxc-parser": "0.155.0",
     "voyageai": "^0.4.0",
-    "web-tree-sitter": "0.27.0",
+    "web-tree-sitter": "0.27.1",
     "ws": "^8.22.0",
     "typescript": "7.1.0-beta"
   },
   "devDependencies": {
-    "tsx": "^4.22.4"
+    "tsx": "^4.23.15"
   },
   "files": [
     "dist/**/*.js",
@@ -95,6 +95,6 @@
     "tag": "latest"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.22.0"
   }
 }

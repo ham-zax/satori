@@ -103,7 +103,7 @@ function runtimeOwner(overrides: Record<string, unknown>): Record<string, unknow
 
 test("runDoctor reports missing default VoyageAI credentials with LanceDB selected", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {},
     }));
 
@@ -380,7 +380,7 @@ test("runDoctor includes a privacy-safe summary of local CLI diagnostics", async
 
 test("runDoctor treats whitespace-only provider env as incomplete", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {
             VOYAGEAI_API_KEY: "   ",
             VECTOR_STORE_PROVIDER: "Milvus",
@@ -401,7 +401,7 @@ test("runDoctor treats whitespace-only provider env as incomplete", async () => 
 
 test("runDoctor proves the selected offline backend and execution invariant", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {
             HOME: "/tmp/satori-offline-doctor",
             SATORI_RUNTIME_PROFILE: "offline",
@@ -637,7 +637,7 @@ test("runDoctor includes the model for a Voyage reranker", async () => {
 
 test("runDoctor rejects unsupported embedding providers", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {
             EMBEDDING_PROVIDER: "Typo",
             VOYAGEAI_API_KEY: "pa-test",
@@ -665,19 +665,21 @@ test("runDoctor enforces the CLI package's minimum Node version", async () => {
     for (const [nodeVersion, expectedStatus] of [
         ["v20.19.0", "error"],
         ["v22.12.0", "error"],
-        ["v22.13.0", "ok"],
+        ["v22.13.0", "error"],
+        ["v22.21.0", "error"],
+        ["v22.22.0", "ok"],
         ["v24.0.0", "ok"],
     ] as const) {
         const result = await runDoctor(baseDoctorOptions({ nodeVersion, env: healthyEnv() }));
         const check = result.checks.find((entry) => entry.name === "node_version");
         assert.equal(check?.status, expectedStatus, nodeVersion);
-        assert.match(check?.message || "", /22\.13\.0/);
+        assert.match(check?.message || "", /22\.22\.0/);
     }
 });
 
 test("runDoctor reports Satori package version set and independent-version policy", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             VECTOR_STORE_PROVIDER: "Milvus",
@@ -703,7 +705,7 @@ test("runDoctor reports Satori package version set and independent-version polic
 
 test("runDoctor warns when a package version cannot be resolved", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
+        nodeVersion: "v22.22.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             VECTOR_STORE_PROVIDER: "Milvus",
@@ -752,7 +754,7 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
         }), "utf8");
 
         const result = await runDoctor(baseDoctorOptions({
-            nodeVersion: "v22.13.0",
+            nodeVersion: "v22.22.0",
             env: {
                 VOYAGEAI_API_KEY: "pa-test",
                 VECTOR_STORE_PROVIDER: "Milvus",

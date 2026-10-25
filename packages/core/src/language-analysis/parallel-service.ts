@@ -39,7 +39,7 @@ export function resolveAnalysisWorkerCount(): number {
 
 type PendingAnalysis = {
     resolve: (result: AnalysisWorkerPayload) => void;
-    reject: (error: Error) => void;
+    reject: (error: unknown) => void;
     submittedAt?: number;
     sourceBytes?: number;
 };
@@ -114,7 +114,7 @@ export function createParallelLanguageAnalysisService(
         idleTimer.unref();
     };
 
-    const failWorker = (entry: PoolWorker, error: Error) => {
+    const failWorker = (entry: PoolWorker, error: unknown) => {
         const index = workers.indexOf(entry);
         if (index >= 0) workers.splice(index, 1);
         const pending = [...entry.pending.values()];

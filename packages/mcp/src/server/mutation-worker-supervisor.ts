@@ -636,7 +636,7 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
         clearInterval(parentWatchdog);
         if (!process.connected) return;
         selfClosing = true;
-        process.disconnect();
+        process.disconnect!();
     };
     const finish = (message: WorkerTerminalMessage): void => {
         if (terminal) return;

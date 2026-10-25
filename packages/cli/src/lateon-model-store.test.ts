@@ -110,6 +110,11 @@ test("shipped dry-run profile ID equals the frozen shipped profile ID", () => {
     assert.equal(profile.profileId, DEFAULT_LATEON_PROFILE_ID);
     assert.equal(profile.identity.repository, "lightonai/LateOn-Code-edge");
     assert.equal(profile.identity.revision, REVISION);
+    const runtimePackage = JSON.parse(fs.readFileSync(
+        path.join(SHIPPED_MCP_PACKAGE_ROOT, "package.json"), "utf8",
+    ));
+    assert.equal(profile.runtime.transformersJs, runtimePackage.dependencies["@huggingface/transformers"]);
+    assert.equal(profile.runtime.onnxruntimeNode, runtimePackage.dependencies["onnxruntime-node"]);
 });
 
 test("acquisition manifest binds the exact frozen profile digest", () => {

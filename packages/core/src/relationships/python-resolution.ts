@@ -2299,6 +2299,31 @@ function pythonFallbackProofSteps(input: {
 
     const proof: ResolutionProofStep[] = [];
     const fileSymbols = input.registry.symbolsByFile.get(input.source.file) ?? [];
+    const appendImportProof = (bindings: readonly ModuleBinding[]): void => {
+        const binding = bindings[0];
+        // Target resolution already proved a single destination. Equivalent
+        // declarations still prove that import when it appears in several branches.
+        if (!binding || bindings.some((candidate) => (
+            candidate.kind !== binding.kind
+            || candidate.moduleSpecifier !== binding.moduleSpecifier
+            || candidate.importedName !== binding.importedName
+        ))) return;
+        const name = binding.localName ?? binding.importedName ?? binding.moduleSpecifier?.split('.')[0];
+        const firstImportEnd = bindings.reduce((end, candidate) => Math.min(end, candidate.span.endByte), Infinity);
+        // An import cannot prove a name that was subsequently rebound.
+        if ((input.evidence.pythonFlowFacts ?? []).some((fact) => {
+            if (fact.kind !== 'assignment_origin' || fact.targetText !== name
+                || fact.span.startByte < firstImportEnd
+                || fact.span.endByte > input.call.span.startByte) return false;
+            const owner = ownerForCall(fileSymbols, { span: fact.span });
+            return !owner || owner.symbolInstanceId === input.source.symbolInstanceId;
+        })) return;
+        proof.push({
+            kind: binding.moduleSpecifier?.startsWith('.') ? 'relative_import' : 'absolute_import',
+            subject: binding.moduleSpecifier ?? '',
+            span: binding.span,
+        });
+    };
     const receiverBindings = input.evidence.receiverTypeBindings ?? [];
     const receiver = input.call.receiverText?.trim();
     if (input.call.kind === 'member' && receiver) {
@@ -2336,13 +2361,7 @@ function pythonFallbackProofSteps(input: {
                 atSpan: input.call.span,
             })
         ));
-        if (imported.length === 1) {
-            proof.push({
-                kind: imported[0].moduleSpecifier?.startsWith('.') ? 'relative_import' : 'absolute_import',
-                subject: imported[0].moduleSpecifier ?? '',
-                span: imported[0].span,
-            });
-        }
+        appendImportProof(imported);
     } else {
         const imported = input.evidence.moduleBindings.filter((binding) => (
             (binding.kind === 'import' || binding.kind === 'reexport')
@@ -2354,13 +2373,7 @@ function pythonFallbackProofSteps(input: {
                 atSpan: input.call.span,
             })
         ));
-        if (imported.length === 1) {
-            proof.push({
-                kind: imported[0].moduleSpecifier?.startsWith('.') ? 'relative_import' : 'absolute_import',
-                subject: imported[0].moduleSpecifier ?? '',
-                span: imported[0].span,
-            });
-        }
+        appendImportProof(imported);
     }
 
     if (proof.length === 0 && input.target.file === input.source.file) {

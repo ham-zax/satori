@@ -2,7 +2,8 @@
 
 Task ledger for the rerank-blend / LateOn decision and the authorized TypeScript 7.1 migration. The orchestrator reads this file first and
 takes the first task whose status is `open` with every dependency at `review` or `done`.
-Only Hamza marks a task `done`. Run budget for the current run: 2 dispatches.
+Only Hamza marks a task `done`. Current cross-repository benchmark run budget: 4 dispatches (3 benchmark agents, 1 final reviewer).
+Earlier TypeScript migration run budget was 2 dispatches and is exhausted.
 
 Derivation: the previous review of the 28-query A/B concluded "do not implement the LateOn gate
 yet; run the held-out A/B first". No task was created for it, so T1 records that conclusion and
@@ -167,6 +168,11 @@ bounds, fingerprint invalidation, per-analyzer disposal and metadata-only idle c
 | TS71-M | review | TS71-F | parent inline | Bound JSON allocation before native parsing without treating metadata as source. Bound and own reference-cache retention, with cleanup and unchanged readiness results. Three-run measurements, mutation checks, focused tests and repository check pass. Integrate on local master. | Authorized inline follow-up from clean 8886865b. No new dispatch. Three-run evidence above: oversized JSON data reads 8388620→0 bytes, phase median 120.883→11.072 ms. Cache disposal releases proof entries, warm lookups avoid recomputation, stale-fingerprint mutation fails the regression. Final checks pass: 76 core tests across 12 files, 507 script tests, pnpm run check, git diff --check. Exact-target start remains line 227. Scoped integration on local master preserves all handoff commits. Awaiting Hamza. |
 | DEP-A | review | TS71-M | parent inline | Update npm dependencies across all first-party manifests and both lockfiles to current latest releases. Preserve TypeScript 7.1 beta and workspace links. Raise Node minimum to 22.22, as Hamza authorizes, and synchronize managed native-runtime versions. Repository check, build, scripts, affected runtime tests and experiment checks pass. Record upstream constraints. | Direct request on 25 October 2026. Snapshot: clean master 7cfee54f. No dispatches. Updated 13 direct npm dependencies including napi CLI 3.10.9 and Chokidar 6. Both outdated checks return {}. Check/build/507 scripts pass. Core reports 1083 passed, 2 skipped. MCP: 1251 source tests and 2 compiled real-model tests pass on Node 22.22. CLI: 482 pass on Node 22.22. Native Chokidar event/cleanup passes. Napi debug/release builds, typecheck, 20 fault tests and 17 release tests pass (3 release-only skips). Upstream constraints and source-harness limits below. Final diff checked. Integrate on local master. Awaiting Hamza. |
 | LOCAL-A | review | DEP-A | parent inline | Show how agents use the unpublished local build. Measure current LateOn and Voyage rerank-3-lite through local MCP on the same 28 pinned queries, current oracle and frozen build. Use the same task-owned index and local embeddings. Activate all supported clients after Hamza selects them, preserving unrelated settings, models and ranking code. Report quality and execution failures honestly. | Code build 9753ced1. No dispatch. Matched current-oracle runs: LateOn MRR 0.585, hit@1 14/28, hit@5 22/28; Voyage rerank-3-lite MRR 0.958, hit@1 26/28, hit@5 28/28. All queries return ok, with no reranker failure markers. Same source commits, navigation manifests, flags and oracle hash. Both process scopes exit 0. Hamza selects all clients. Canonical local activation and preflight pass, and config readback checks Codex/Claude/OpenCode/AGY use the stable launcher. Launcher now selects repo packages/mcp/dist/index.js with offline/LateOn. Restart existing MCP client connections to load it. Evidence below. Awaiting Hamza. |
+| VS-A | review | LOCAL-A | OpenCode DeepSeek V4.1 Flash, max | Benchmark local offline Satori against codebase-memory-mcp on QAP. Freeze 12 balanced source-backed tasks before scored tool calls. Check coverage and current APIs. Save raw replies, task answers, citations, score method, reproducible commands and setup failures. Read-only source. Refs: cross-repository protocol below. | Dispatch 1/4. T3 taskId node:delegated-task:command%3Amcp%3A7adb6ac5-3b14-49d0-8b26-91c95021e181%3Adelegate-task%3Asatori-vs-qap-20261025-r1. Returned running, provider opencode, model zengate/deepseek-v4.1-flash-free, variant=max checked. Parent baseline b7ef625d, clean. QAP HEAD 2ce9820d has user staged/unstaged work, so snapshot committed HEAD without altering that checkout. Child writes only its qap artifact directory. Parent checks artifacts on return. VS-B and VS-C may run in parallel, each with one scoped task. Parent artifact check: Final handoff received. Parent checks 12-task frozen pack hash and complete result record. Both sessions closed. Readiness adapter caused 45.1-minute wait after publication completed in about 14 seconds, corrected without rerun. CBM call-path path normalization rescored from preserved raw replies, with original scores archived. Citation-rule and architecture scoring disclosures require final review. Scores remain provisional pending VS-R. |
+| VS-B | review | LOCAL-A | OpenCode DeepSeek V4.1 Flash, max | Choose a different local repository and justify the choice. Apply the same 12-task protocol against local offline Satori and codebase-memory-mcp. Use a different artifact directory and snapshot. Save evidence and limitations. Refs: cross-repository protocol below. | Dispatch 2/4. T3 taskId node:delegated-task:command%3Amcp%3A7adb6ac5-3b14-49d0-8b26-91c95021e181%3Adelegate-task%3Asatori-vs-selected-20261025-r1. Returned running. Provider opencode, model zengate/deepseek-v4.1-flash-free, variant=max checked. Independent of VS-A/C. Agent selects a repository other than Satori, QAP, Claive, React, Polars or FlatBuffers. Heavy indexing uses the shared resource gate. Checkpoint: Lingua OS selected at 4b18dfc1. Index report records unchanged snapshot and 15 oracle files. Frozen pack has 12 tasks. All 24 provider reply files and a finished run manifest exist. Initial task summary covers setup only, and T3 reports later child work pending. Final scoring/report and parent acceptance remain incomplete. QAP and Claive still run. Parent artifact check: Lingua OS final handoff received through latestTerminalSummary, no pending child runs. Parent checks frozen pack hash, completed 24-reply final manifest and report. Three runs exist: two harness iterations archived and excluded. All sessions/processes closed. Rank and citation normalization, excluded iterations and report aggregate need final review. Scores remain provisional pending VS-R. |
+| VS-C | review | LOCAL-A | OpenCode DeepSeek V4.1 Flash, max | Benchmark local offline Satori against codebase-memory-mcp on /home/hamza/repo/claive using the same frozen 12-task protocol. Own only the claive artifact directory and snapshot. Save raw evidence, citations, scoring and setup limits. Read-only source. | Dispatch 3/4. T3 taskId node:delegated-task:command%3Amcp%3A7adb6ac5-3b14-49d0-8b26-91c95021e181%3Adelegate-task%3Asatori-vs-claive-20261025-r1. Returned running. Provider opencode, model zengate/deepseek-v4.1-flash-free, variant=max checked. Independent of VS-A/B. Claive is reserved from VS-B selection. Heavy indexing uses the shared resource gate. Parent artifact check: Final handoff received. Parent checks 98-file integrity manifest and frozen pack hash. Sessions/processes closed. Report and deterministic scores exist. Known objection: zero completed CBM discovery tasks still yield a nonzero MRR; reviewer must distinguish answer completion from tool support and incidental overlap. Both architecture responses lack required responsibilities. Scores remain provisional pending VS-R. |
+| VS-R | in-progress | VS-A, VS-B, VS-C | OpenCode DeepSeek V4.1 Flash, max | One independent review of all three benchmark artifacts. Check source witnesses, frozen oracles, equal task conditions, coverage, unsupported-call classification, citations, scoring arithmetic and limits. Read-only. No new benchmark or second review round. | Dispatch 4/4. T3 taskId node:delegated-task:command%3Amcp%3A7adb6ac5-3b14-49d0-8b26-91c95021e181%3Adelegate-task%3Asatori-vs-final-review-20261025-r1. Returned running. Provider opencode, model zengate/deepseek-v4.1-flash-free, variant=max checked. Packet includes all three original scopes, reports, parent checks and six unresolved method/scoring objections. Advisory artifact audit only, no new runs or product edits. Only Hamza marks done. |
+| FIX-A | review | VS-A, VS-C | parent inline | Investigate the reported missing Python channels.send_peer caller and scoring defects. Reproduce before changing Satori. Fix only demonstrated owners with focused regression checks. Preserve frozen benchmark oracles and no full reruns. | User authorizes fixing issues found by agents. Parent reproduces the missing second repeated-import call before repair. One regression covers module and named imports plus conflicting modules and rebinding. Python import proof now accepts identical repeated declarations and rejects later assignments. Provider revision and relationship cache witness advance to v3. 49 focused core tests, 507 script tests, pnpm run check/build pass. Real unchanged Claive source restores main→send_peer at cli.py:2560. Fresh isolated MCP publication and trace_path confirm CALLS, direct_binding, targetProofBacked=true, with no truncation or warnings. Local activation for all clients passes. Source baseline b7ef625d. No original benchmark score is changed. Final artifact audit remains independent and pending. |
 
 ## Dependency refresh checkpoint
 
@@ -266,3 +272,117 @@ need a restart. No ranking code, model data or unrelated client setting is edite
 The results, activation log and task-owned index remain in the cache paths above for inspection
 and future comparisons. Both systemd process scopes terminate. Repository delta is this ledger
 only, recording the successful run and activation. No new implementation task remains.
+
+## Cross-repository MCP benchmark protocol, 25 October 2026
+
+Direct user request: two or three OpenCode DeepSeek workers through T3 orchestration V2.
+Use provider opencode, model zengate/deepseek-v4.1-flash-free, target option variant=max.
+Hamza clarifies: one scoped task at a time PER AGENT, with parallel agents permitted.
+Four dispatches: three parallel benchmark workers, then one independent review of all results.
+VS-A, VS-B and VS-C are independent. VS-R waits for all three to reach review. No recursive delegation. Parent alone edits this ledger
+and performs Git lifecycle operations. Workers share the Satori checkout but own disjoint
+artifacts at /home/hamza/.cache/satori-agent-vs-20261025/{qap,selected,claive,review}. They are not
+alone in the workspace and must preserve every existing edit. No source fixes or refactors.
+
+Baseline read-set: evals/code-intelligence-vs/README.md and tasks.json,
+scripts/code-intelligence-vs.mjs, evals/real-repo-quality/session.mjs,
+packages/cli/assets/skills/satori/SKILL.md, target README and applicable AGENTS.md.
+The first two references describe an existing deterministic retrieval/navigation harness,
+not a blinded LLM answer-quality experiment. Do not claim a blinded agent comparison.
+The existing harness may describe retired call_graph APIs. Inspect live schemas before use.
+Current Satori exposes trace_path and find_references. Stale adapter calls are harness defects,
+not evidence of provider failure. Task-owned adapters outside the source checkout are allowed.
+
+Freeze the selected repository's committed HEAD in a task-owned source snapshot, for example
+with git archive into a new artifact directory. Record original HEAD, initial dirty status and
+snapshot content witness. Never reset, stash, checkout, delete, execute application scripts,
+trade, contact exchanges, or change the original target repository. QAP currently has user
+edits, so do not benchmark its moving working tree or silently claim those edits are included.
+Use the same immutable snapshot for both providers. No target dependency installation needed.
+
+Freeze questions and acceptable evidence before scored calls: six owner-discovery tasks, two
+call-path tasks, two reference tasks, one file outline and one architecture task. Derive each
+oracle from source with file, symbol and relevant lines. Use naturally worded questions. Do not
+put exact owner paths or symbols in discovery questions. Exact navigation tasks may name their
+target. Preserve the oracle after seeing responses. Record calls and useful citations for every
+answer. Source reads establish goldens and check returned citations, not repair a failed tool arm.
+Counterbalance provider order across tasks and disclose the shared-agent/open-book limitation.
+Count answer correctness, citation validity, task completion, unsupported operations, failures
+and tool calls. Rank/MRR applies only to the six owner-discovery tasks with ordered candidates.
+Unsupported/not-ready calls cannot pass from incidental text overlap. State task-type results
+separately instead of inventing one aggregate capability score. No latency superiority claim
+from one run; record timings as observations only.
+
+Use the current local Satori dist build directly, active offline Potion/LanceDB/LateOn settings,
+and a dedicated SATORI_STATE_ROOT per worker. No npm release/install, provider config rewrites,
+Voyage disclosure of private target source, external services, ranking changes or oracle widening.
+Local models are installed. evals/real-repo-quality/session.mjs provides an existing MCP session
+owner for isolated Satori state. Build must remain frozen during measurement.
+CBM binary: /home/hamza/.local/bin/codebase-memory-mcp. Its native tools are already available.
+Use its canonical existing cache/daemon. CBM refuses a different CBM_CACHE_DIR while another
+canonical session is live. Do not stop or replace shared services, binaries or existing indexes.
+Create a uniquely named project for the snapshot and check cited-path index coverage before
+scoring. Existing home-hamza-repo-qap refers to the mutable original and is not the frozen copy.
+Parallel research and question preparation are allowed. Heavy provider indexing shares a
+resource gate. VS-A creates qap/setup/resource-gate-ready.json only after its existing heavy
+job drains and it adopts the shared gate. VS-B and VS-C may prepare immediately but wait for
+that marker before heavy indexing. All workers then use an exclusive OS flock at
+/home/hamza/.cache/satori-agent-vs-20261025/indexing.lock around each heavy indexing session,
+held until its indexing work and owned session have closed. This shared lock file is the only
+shared write permitted beyond each artifact directory. Never kill another worker or service.
+Bound Satori with
+the established systemd user scope MemoryMax=4G when available, using the existing user bus
+/run/user/1000/bus. End owned MCP sessions and processes before returning. Retain result/index
+artifacts for inspection and report their paths. If setup cannot be completed safely, stop with
+raw blocker evidence, not substitutions or changes to the product. TDD off, research only.
+
+Each worker returns: selected repository/snapshot identity, methods, provider versions and tool
+surfaces, index/coverage readiness, frozen task pack, per-task raw evidence and scored answers,
+summary by task category, commands, unresolved limits and side effects. Parent checks artifacts
+and arithmetic, appends evidence, and moves the row to review before the final review. Independent ready rows can be dispatched together.
+
+
+## Benchmark delay checkpoint
+
+User reports a 40-minute delay. Parent confirms QAP adapter satori-index-wait.mjs checks
+status ready at lines 9/21 although live manage_index returns ok. Its 45-minute deadline
+held up the shared resource gate. Lingua OS task pack existed at 15:04:35 IST, gate opened
+at 15:23:42, and its index report completed 15:24:39. Its first 24-call run took about
+28 seconds. Extra repeat manifests also exist and need disclosure in the final review.
+Parent should have caught the readiness predicate mismatch when earlier polls showed ok.
+All workers now have score artifacts. Parent steers each to final handoff with no new runs.
+VS-A is asked to correct only its task-owned readiness helper for reproduction and preserve
+original logs. VS-C final report arrived: owned sessions/processes closed, 98-file manifest.
+Parent has not accepted the Claive scoring yet: the report lists CBM discovery completion
+as zero but still computes an MRR from incidental ranks, which must be audited against the
+protocol before any provider ranking. Final reviewer must examine this objection and the
+readiness defect. No final winner is claimed.
+
+
+## Python call-proof repair receipt
+
+User authorizes fixing issues reported by the agents. FIX-A is an owner-local repair in
+pythonFallbackProofSteps, with no new service, state, API shape or dependency. Two identical
+visible imports previously made imported.length differ from one, suppressing exact import proof
+for the later call even though target resolution found the same destination. A minimal regression
+failed before repair. The shared import-proof append step compares binding kind, module and
+imported name, and refuses a binding overwritten by a visible assignment before the call.
+The test exercises repeated module/named imports and preserves abstention for conflicting
+modules and unknown rebound values. Existing resolution checks remain intact.
+
+Native provider version is bounded-origin-v3. The Python relationship-builder identity advances
+to python-native-resolution-v3 so persisted evidence is refreshed rather than reusing old misses.
+The semantic environment settings identity remains unchanged. Parent checks 49 focused tests
+across Python resolution/contribution, semantic identity, sidecar validation and publication
+workflow. pnpm run check, pnpm run build and all 507 script tests pass.
+
+Source and MCP checks live at /home/hamza/.cache/satori-agent-vs-20261025/fixes/python-proof .
+real-source-probe.mts reads three unchanged Claive source files and confirms direct-binding
+main→send_peer at bin/claivelib/cli.py:2560. mcp-c2-probe.mjs indexes the unchanged full Claive
+snapshot into a new isolated state, then resolves exact symbols and calls public trace_path.
+mcp-c2-result.json reports found=true with one CALLS edge at line 2560, direct_binding and
+targetProofBacked=true, no warnings and no traversal truncation. The original benchmark state,
+oracles and scores are untouched. The probe closes its session and its systemd scope exits.
+All four client configurations retain the local runtime. Canonical local activation/preflight
+passes after rebuilding. Existing MCP connections need reconnection, and affected existing
+indexes need fresh relationship evidence to expose the new edge. No new full benchmark runs.

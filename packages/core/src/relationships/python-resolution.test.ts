@@ -643,6 +643,58 @@ test('resolvePythonRelationships scopes function-local imports to their owning c
     assert.equal(c.relationshipType, 'REFERENCES');
 });
 
+test('resolvePythonRelationships proves repeated function-local imports without admitting conflicting modules', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'bin/pkg/__init__.py': '',
+        'bin/pkg/channels.py': 'def send_peer(): return 1\n',
+        'bin/pkg/other.py': 'def send_peer(): return 2\n',
+        'bin/pkg/cli.py': [
+            'def main(mode):',
+            '    if mode == "open":',
+            '        from pkg import channels',
+            '        channels.send_peer()',
+            '    if mode == "send":',
+            '        from pkg import channels',
+            '        channels.send_peer()',
+            '',
+            'def conflicting(mode):',
+            '    from pkg import channels',
+            '    if mode == "send":',
+            '        from pkg import other as channels',
+            '    channels.send_peer()',
+            '',
+            'def named(mode):',
+            '    if mode == "open":',
+            '        from pkg.channels import send_peer',
+            '        send_peer()',
+            '    if mode == "send":',
+            '        from pkg.channels import send_peer',
+            '        send_peer()',
+            '',
+            'def rebound(value):',
+            '    from pkg import channels',
+            '    from pkg import channels',
+            '    channels = value',
+            '    channels.send_peer()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const admitted = admitAuthoritativeProofBackedCalls({
+        registry,
+        claims: [...result.claimsByFile.values()].flat(),
+    });
+    assert.deepEqual(admitted.map((record) => [
+        registry.symbolsByInstanceId.get(record.sourceInstanceId || '')?.qualifiedName,
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.file,
+        record.span?.startLine,
+    ]), [
+        ['main', 'bin/pkg/channels.py', 4],
+        ['main', 'bin/pkg/channels.py', 7],
+        ['named', 'bin/pkg/channels.py', 18],
+        ['named', 'bin/pkg/channels.py', 21],
+    ]);
+});
+
 test('resolvePythonRelationships keeps branch-conflicted origins non-authoritative while preserving straight-line reassignment', async () => {
     const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
         'src/app.py': [

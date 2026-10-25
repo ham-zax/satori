@@ -14,4 +14,4 @@ export const LANGUAGE_PARSER_VERSION = [
 // Module-level bound object caller extraction, Python TYPE_CHECKING import flags, C/C++ macro-wrapped definition names,
 // recovered C++ namespace children, and definitionStatus change persisted symbols.
 export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v23+${LANGUAGE_PARSER_VERSION}`;
-export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v19+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1+python-reexports-exact-mro-v1';
+export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v19+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v3+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1+python-reexports-exact-mro-v1';

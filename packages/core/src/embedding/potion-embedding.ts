@@ -9,11 +9,11 @@ import {
     type EmbeddingIdentity,
     type EmbeddingVector,
 } from './base-embedding';
+import { POTION_DIMENSION, POTION_MODEL_ID } from '../runtime-contract';
 
-export const POTION_MODEL_ID =
-    'minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b';
+export { POTION_DIMENSION, POTION_MODEL_ID };
+
 export const POTION_SEMANTIC_VERSION = 'potion_semantics_v1';
-export const POTION_DIMENSION = 256;
 export const POTION_RETAINED_TOKEN_LIMIT = 4096;
 export const POTION_MAX_TIMEOUT_MS = 300_000;
 const MAX_WORKER_FRAME_BYTES = 1_048_576;

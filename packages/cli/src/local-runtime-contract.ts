@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-export const POTION_MODEL_ID =
-    "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b";
-export const POTION_DIMENSION = 256;
-export const EMBEDDING_PROJECTION_VERSION = "embedding_projection_v3" as const;
-export const LEXICAL_PROJECTION_VERSION = "lexical_projection_v1" as const;
+export {
+    EMBEDDING_PROJECTION_VERSION,
+    LEXICAL_PROJECTION_VERSION,
+    POTION_DIMENSION,
+    POTION_MODEL_ID,
+} from "./runtime-identities.cjs";
 
 export function resolveSatoriStateRoot(input: {
     configured?: string;

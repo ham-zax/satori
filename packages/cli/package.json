@@ -20,7 +20,7 @@
     "satori": "dist/index.js"
   },
   "scripts": {
-    "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && node -e \"require('fs').copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs')\"",
+    "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && node -e \"const fs=require('fs');fs.copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs');fs.copyFileSync('../core/dist/runtime-contract.js','dist/runtime-identities.cjs');fs.copyFileSync('../core/dist/runtime-contract.d.ts','dist/runtime-identities.d.cts')\"",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
     "lint": "oxlint --config ../../.oxlintrc.json src",
@@ -30,7 +30,7 @@
     "release:smoke": "tsx scripts/release-smoke.ts",
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
     "prepublishOnly": "pnpm build",
-    "test": "pnpm --filter @satori-code/mcp build:runtime && pnpm run test:raw",
+    "test": "pnpm --filter @satori-code/mcp build:runtime && pnpm run build && pnpm run test:raw",
     "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
@@ -69,6 +69,8 @@
     "dist/**/*.js",
     "dist/**/*.mjs",
     "dist/**/*.d.ts",
+    "dist/runtime-identities.cjs",
+    "dist/runtime-identities.d.cts",
     "README.md",
     "assets/skills/**/SKILL.md",
     "!dist/**/*.test.*"

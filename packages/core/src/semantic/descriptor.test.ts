@@ -7,6 +7,8 @@ import {
     type SemanticLanguageDescriptor,
 } from './descriptor';
 import { RELATIONSHIP_BUILDER_VERSION } from '../language-analysis/versions';
+import { NATIVE_PYTHON_PROVIDER_VERSION } from '../relationships/python-provider-identity';
+import { TYPESCRIPT_COMPILER_PROVIDER_VERSION } from '../semantic/typescript-provider-identity';
 
 test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go', () => {
     assert.equal(defaultSemanticLanguageRegistry.supportsLanguage('go'), true);
@@ -22,10 +24,14 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.equal(desc.providerId, 'satori-cbm-semantic-go');
     assert.equal(desc.providerVersion, 'cbm-11b662f9+satori-go-semantic-v4');
     assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v4');
-    assert.equal(
-        RELATIONSHIP_BUILDER_VERSION,
-        'relationship-v20+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v3+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1+python-reexports-exact-mro-v1',
-    );
+    // Relationship identity is composed from provider-owned revisions, not copied literals.
+    const relationshipComponents = RELATIONSHIP_BUILDER_VERSION.split('+');
+    assert.equal(relationshipComponents[0], 'relationship-v20');
+    assert.ok(relationshipComponents.includes(NATIVE_PYTHON_PROVIDER_VERSION));
+    assert.ok(relationshipComponents.includes(TYPESCRIPT_COMPILER_PROVIDER_VERSION));
+    assert.equal(relationshipComponents[relationshipComponents.length - 1], 'python-reexports-exact-mro-v1');
+    assert.ok(!relationshipComponents.includes('python-native-resolution-v3'));
+    assert.ok(!relationshipComponents.includes('typescript-compiler-resolution-v8'));
 
     assert.equal(defaultSemanticLanguageRegistry.getStrategyForLanguage('go'), 'cbm_semantic');
 });

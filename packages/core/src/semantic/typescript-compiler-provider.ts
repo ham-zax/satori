@@ -4,12 +4,15 @@ import { createFileSystemLayer } from './typescript-api';
 
 import { Utf8SourceMap } from '../language-analysis/source-map';
 import type { SourceSpan } from '../language-analysis/types';
+import {
+    TYPESCRIPT_COMPILER_PROVIDER_ID,
+    TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+} from './typescript-provider-identity';
 import type { SemanticProjectInput } from './contracts';
 
-const VIRTUAL_ROOT = '/__satori__';
+export { TYPESCRIPT_COMPILER_PROVIDER_ID, TYPESCRIPT_COMPILER_PROVIDER_VERSION };
 
-export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v10';
+const VIRTUAL_ROOT = '/__satori__';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'

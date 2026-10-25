@@ -1,9 +1,9 @@
 import type { CodeChunk } from '../language-analysis';
 import { validateRepositoryRelativePath } from '../paths/repository-path';
+import { EMBEDDING_PROJECTION_VERSION, LEXICAL_PROJECTION_VERSION } from '../runtime-contract';
 import type { SearchProjections } from '../vectordb/types';
 
-export const EMBEDDING_PROJECTION_VERSION = 'embedding_projection_v3' as const;
-export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v2' as const;
+export { EMBEDDING_PROJECTION_VERSION, LEXICAL_PROJECTION_VERSION };
 
 export interface SearchProjectionInput {
     readonly chunk: CodeChunk;

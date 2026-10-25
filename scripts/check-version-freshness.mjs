@@ -85,8 +85,66 @@ export function checkVersionFreshness(options = {}) {
   return findStalePackageVersionReferences(scanFiles, packageVersions);
 }
 
+const SHARED_RUNTIME_CONTRACT_NAMES = [
+  'EMBEDDING_PROJECTION_VERSION',
+  'LEXICAL_PROJECTION_VERSION',
+  'POTION_MODEL_ID',
+  'POTION_DIMENSION',
+];
+
+const SHARED_RUNTIME_CONTRACT_CANONICAL_PATH = 'packages/core/src/runtime-contract.ts';
+
+const SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS = [
+  'packages/core/src/core/search-projections.ts',
+  'packages/core/src/embedding/potion-embedding.ts',
+  'packages/cli/src/local-runtime-contract.ts',
+];
+
+export function findSharedContractOwnershipViolations(files) {
+  const requiredPaths = [
+    SHARED_RUNTIME_CONTRACT_CANONICAL_PATH,
+    ...SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS,
+  ];
+  for (const filePath of requiredPaths) {
+    if (!files.has(filePath)) {
+      throw new Error(`Missing expected source file for shared runtime contract ownership check: ${filePath}`);
+    }
+  }
+
+  const findings = [];
+  for (const filePath of SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS) {
+    const content = files.get(filePath);
+    for (const name of SHARED_RUNTIME_CONTRACT_NAMES) {
+      const declaration = new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
+      if (declaration.test(content)) {
+        findings.push({ filePath, name });
+      }
+    }
+  }
+  return findings;
+}
+
+export function checkSharedContractOwnership(options = {}) {
+  const cwd = options.cwd || process.cwd();
+  const filePaths = [
+    SHARED_RUNTIME_CONTRACT_CANONICAL_PATH,
+    ...SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS,
+  ];
+  const files = new Map();
+  for (const filePath of filePaths) {
+    const absolutePath = path.join(cwd, filePath);
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error(`Missing expected source file for shared runtime contract ownership check: ${filePath}`);
+    }
+    files.set(filePath, fs.readFileSync(absolutePath, 'utf8'));
+  }
+  return findSharedContractOwnershipViolations(files);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const findings = checkVersionFreshness();
+  const ownershipViolations = checkSharedContractOwnership();
+  let failed = false;
   if (findings.length > 0) {
     console.error('Stale package version references found:');
     for (const finding of findings) {
@@ -94,7 +152,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         `- ${finding.filePath}: ${finding.packageName}@${finding.foundVersion} should be ${finding.packageName}@${finding.expectedVersion}`
       );
     }
-    process.exit(1);
+    failed = true;
   }
+  if (ownershipViolations.length > 0) {
+    console.error('Duplicate shared runtime contract declarations found:');
+    for (const violation of ownershipViolations) {
+      console.error(
+        `- ${violation.filePath}: remove local ${violation.name}; import it from ${SHARED_RUNTIME_CONTRACT_CANONICAL_PATH}`
+      );
+    }
+    failed = true;
+  }
+  if (failed) process.exit(1);
   console.log('Package version references are fresh.');
+  console.log('Shared runtime contract ownership is canonical.');
 }

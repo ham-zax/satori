@@ -18,6 +18,11 @@
       "require": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./runtime-contract": {
+      "types": "./dist/runtime-contract.d.ts",
+      "require": "./dist/runtime-contract.js",
+      "default": "./dist/runtime-contract.js"
+    },
     "./semantic": {
       "types": "./dist/semantic/index.d.ts",
       "require": "./dist/semantic/index.js",

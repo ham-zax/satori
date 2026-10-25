@@ -99,6 +99,10 @@ Median total query time was 3531 ms against 3676 ms before. This is one
 unpaired run on one host, with one 17 s cold outlier in the mean. It is not a
 speed claim.
 
+The hit counts above are the comparable part. The MRR@10 values are not comparable with other
+documents: the same 13/21/22 counts carry MRR@10 0.5509 here and 0.580697 in the 24 October
+rescore of capture C, so the two measurements use different inputs.
+
 Command:
 
 ```bash

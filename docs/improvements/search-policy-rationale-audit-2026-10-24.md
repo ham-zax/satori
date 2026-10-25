@@ -448,7 +448,7 @@ The earlier visible-ten condition is still an unperformed quality check. It is n
 The indexing blocker later clears. A later parent run at `11889927` measured 28 queries: overall
 hit@10 was 21/28 and strict hit@10 was 20/28 (see the priorities document). That run is a single
 baseline, not a before/after test of this change, so it does not attribute a score change to the
-quota removal. Final owner accuracy and end-to-end latency remain open. Helper-only timings cannot
+quota removal. The build after it, `fb125738`, measures hit@10 23/28 for the same set. Final owner accuracy and end-to-end latency remain open. Helper-only timings cannot
 close that gap.
 
 The review queue is source-based. It establishes no new production regression, optimal threshold, or instruction to remove another policy.

@@ -147,7 +147,7 @@ Tuning-set results, measured on an earlier prompt projection; the held-out run i
 
 On the current default (LateOn reranking plus definition fusion, which runs only with reranking), 19 named-symbol questions across 4 repositories went from 4 to 13 owners at rank 1 against no reranker; owner in the top 10 stayed at 15 either way. [Corrected comparison](docs/improvements/reranker-owner-investigation.md).
 
-**Choosing a reranker.** LateOn is the local default. Voyage is an opt-in online reranker (`satori reranker use voyage`); it works with the offline Potion index and sends each query and its candidate code excerpts to Voyage AI, a MongoDB company. Each Voyage account gets 200 million free tokens per model. 28 plain-English questions over React, Polars, and FlatBuffers, same Potion index for every row:
+**Choosing a reranker.** LateOn is the local default. Voyage is an opt-in online reranker (`satori reranker use voyage`); it works with the offline Potion index and sends each query and its candidate code excerpts to Voyage AI, a MongoDB company. Each Voyage account gets 200 million free tokens per model, about 4,600 searches at the measured rate. 28 plain-English questions over React, Polars, and FlatBuffers, same Potion index for every row:
 
 | Reranker | Right answer first | In top 5 | In top 10 | MRR | Rerank median |
 |---|---:|---:|---:|---:|---:|

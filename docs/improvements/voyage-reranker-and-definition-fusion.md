@@ -2,8 +2,14 @@
 
 Recorded 2026-10-13 on `master` at `a710008a` plus uncommitted work. Every
 figure below comes from 28 judged questions on three public repositories, with
-one run per arm. Treat the quality figures as a strong signal and the latency
-figures as indicative only.
+one run per arm unless a section says otherwise. Treat the quality figures as a
+strong signal and single-run latency figures as indicative only.
+
+Provenance (annotated 25 October 2026): the 2026-10-13 arms predate the `5f96827c` rubric change
+and the `0a2aa66c` fusion change. The "Shipped Voyage path" section starts with the later re-run at
+`0a2aa66c`, under the current rubric, and ends with the matched three-run comparison at code
+`fb125738`. Read that section for current behaviour, and the sections before it as the history that
+chose the shipping rule.
 
 ## Summary
 
@@ -20,8 +26,8 @@ figures as indicative only.
   scores 20/25/25 with MRR 0.7798, and the canonical projection raises that to
   22/26/26 with MRR 0.8452.
 - The symbol-metadata pass is not an independent gain. On the native document it
-  changes no rank. Under the canonical projection it recovers one rank (`p6`)
-  for 1.2% more bytes.
+  changes no rank. Under the canonical projection it changes neither a rank nor
+  a byte of rerank input, so the shipped path leaves it off.
 
 ## Problem
 
@@ -87,10 +93,10 @@ model.
 Provenance: these captures were taken before `5f96827c` (the p3 rubric change) and before
 `0a2aa66c` (inflected query words in definition fusion). LateOn's hit@5 and hit@10 here are
 therefore two below the `fb125738` re-measurement of the same 28 questions: 13/21/23 with MRR
-0.5545. The MRR column is MRR@10, the mean of 1/rank for rank <= 10. The commit figure of 0.5545
-is lower than the lenient MRR@10 of these captures (0.572619 to 0.575595) although it answers more
-questions, so it is consistent with a strict MRR rather than this column. Compare hit counts
-across builds, not MRR.
+0.5545, measured in the `0a2aa66c` differential at workspace `07ab8334`. The MRR column is MRR@10,
+the mean of 1/rank for rank <= 10. Do not compare it across documents: the same 13/21/22 counts
+carry MRR@10 0.5509 in the `0a2aa66c` differential and 0.580697 in the 24 October rescore of
+capture C, so the two values use different inputs. Compare hit counts across builds.
 
 | Reranker | Definition fusion | hit@1 | hit@5 | hit@10 | strict@1 | MRR |
 |---|---|---|---|---|---|---|
@@ -232,26 +238,54 @@ Findings:
 ## Shipped Voyage path (2026-10-24)
 
 Same 28 questions, same Publication, same parameters, one fresh index, at
-`0a2aa66c`. The arms differ only in the projection Voyage is handed.
+`0a2aa66c`. The arms differ in the projection Voyage is handed; arm C also
+turns `definition_discovery` off. This run uses the current rubric
+(`5f96827c`), so its counts compare with the other 28-question figures of
+24 October onwards and not with the 2026-10-13 tables above.
 
 | Arm | Projection | hit@1 | hit@5 | hit@10 | MRR | Mean input | Rerank median |
 |---|---|---|---|---|---|---|---|
 | A | native provider document | 20 | 25 | 25 | 0.7798 | 105,445 bytes | 806 ms |
 | D | native + symbol-metadata pass | 20 | 25 | 25 | 0.7798 | 104,196 bytes | 888 ms |
-| C | canonical document and query | 22 | 26 | 26 | 0.8393 | 166,424 bytes | 935 ms |
-| B | canonical + symbol-metadata pass | 22 | 26 | 26 | 0.8452 | 168,374 bytes | 993 ms |
+| C | canonical, definition discovery off | 22 | 26 | 26 | 0.8393 | 166,424 bytes | 935 ms |
+| B | canonical, shipped flags | 22 | 26 | 26 | 0.8452 | 168,374 bytes | 993 ms |
 
-Arm C isolates the projection: `r3` 3 → 2, `r7` absent → 1, `p1` 3 → 1, and
-`p6` 2 → 3. The projection costs 58% more input bytes and about 130 ms of
-provider time. Arm D adds the symbol-metadata pass to the native document and
-changes no rank. With the projection, the pass adds 47 documents, moves `p6`
-back to 2, and changes no other rank, so arm B is the current path.
+Four repeat runs at `fb125738` (three without and one with
+`symbol_metadata_bm25`) reproduce 22/26/26 and MRR 0.845 every time, with the
+same 168,374-byte mean input and the same billed tokens. The metadata flag
+changes neither the ranks nor the rerank input at this build. One run bills
+1,209,744 provider tokens over the 28 questions: mean 43,205 per search, range
+24,664–60,404. At that rate the 200-million-token free tier covers about 4,600
+searches.
 
-Relative to the native document, the projection is +7.6% MRR and +10% hit@1.
-Adding the metadata pass to the projection is +0.7% MRR, one rank on `p6`, for
-+1.2% bytes. Adding it to the native document is 0.0%. Arm C is the cheaper
-design. Arm B is the default because the difference is one rank, within the
-noise of 28 questions, and it needs no Voyage-only gate.
+Arm C is not a projection-only control: it also turns `definition_discovery`
+off. Its `p6` rank 3 against 2 for the shipped arm is that flag's effect, not
+the projection's. Against arm A, which keeps the shipped flags, the projection
+moves `r3` 3 → 2, `r7` absent → 1, and `p1` 3 → 1. It costs 60% more input
+bytes (168,374 against 105,445 per query, mean). In the single-run table its
+rerank median is 187 ms higher (993 against 806 ms).
+
+The symbol-metadata pass is not a gain under either document. On the native
+document (A → D) it changes no rank. Under the canonical projection it changes
+neither the ranks nor the rerank input, so the shipped path uses the canonical
+document with the pass off.
+
+### Matched three-run comparison (2026-10-25)
+
+Same 28 questions, same Publication, same flags, three fresh runs per arm at
+code `fb125738`. The LateOn arm's third run records docs-only `16fbd7eb`; the
+code and index are unchanged. Both arms see the same 116.3 mean rerank
+candidates and the same 168,374 mean input bytes.
+
+| Reranker | hit@1 | hit@5 | hit@10 | MRR | Rerank median | Total median |
+|---|---|---|---|---|---|---|
+| Voyage `rerank-3-lite`, canonical | 22 | 26 | 26 | 0.8452 | 1,033 ms (899–1,157) | 2,234 ms (2,177–2,402) |
+| LateOn | 13 | 21 | 23 | 0.5545 | 2,576 ms (2,434–2,577) | 3,410 ms (3,255–3,688) |
+
+Every run produced the same hit counts and MRR, so the quality spread is zero.
+Voyage ranks 12 questions better and one worse (`p6` 1 → 2). Its rerank median
+is 1,543 ms lower; the total median is 1,176 ms lower because retrieval and
+response overhead are shared.
 
 Definition fusion skips the Voyage `rerank-3` family. On the shipped path the
 post-fusion order equals the provider order on 28 of 28 queries.
@@ -279,26 +313,39 @@ Uncommitted at the time of writing. Committed since: the core fusion credit in
 - **Voyage canonical projection** (`packages/mcp/src/server/voyage-reranker.ts`,
   `provider-runtime.ts`): Voyage advertises `search_rerank_document_v5` and
   `search_rerank_query_v2`, so the coordinator builds the same publication-bound
-  bytes as LateOn. This is arm B above.
+  bytes as LateOn. This is the shipped arm above.
 - **LateOn-only activation policy** (`packages/mcp/src/config.ts`,
   `packages/cli/src/runtime-config.ts`): a leftover
   `SATORI_LATEON_ACTIVATION_POLICY` no longer stops the server or the static
   runtime config when the provider is `voyage` or `none`.
+- **Provider token accounting** (`packages/core/src/reranker/reranker.ts`,
+  `voyageai-reranker.ts`, `packages/mcp/src/core/search-rerank-execution.ts`):
+  Voyage's wire `usage.total_tokens` is summed over attempts and exposed as
+  `providerTokens`; the search debug hint and eval record carry it as
+  `rerankerProviderTokens`. Local providers omit the field.
+- **Eval arm override** (`evals/real-repo-quality/session.mjs`, `run.mjs`):
+  non-secret `SATORI_EVAL_RUNTIME_ENV` selects a provider arm without editing the
+  installed launcher, and `provenance.runtime` records the resolved arm. Secrets
+  stay in `~/.satori/.env`.
 
 ## Limits
 
-- 28 questions, three repositories, one run per arm. A difference of one
-  question is within noise.
-- The shipped Voyage path was measured at `0a2aa66c` on a fresh index. The
-  canonical projection sends 58% more bytes than the native document (166 KB
-  against 105 KB per query, mean), so a cheaper variant must be measured before
-  it is claimed equivalent.
+- 28 questions, three repositories. The shipped Voyage arm and the matched
+  LateOn arm have three runs each, with identical counts in every run. The other
+  projection arms have one run, so a one-question difference between them is
+  within noise.
+- The projection table was measured at `0a2aa66c` on a fresh index. The matched
+  comparison is at `fb125738` on one Publication. The canonical projection sends
+  60% more bytes than the native document (168 KB against 105 KB per query,
+  mean). The native document is measured and scores lower (20/25/25, MRR
+  0.7798); no equivalence is claimed.
 - The fusion skip matches the literal model names `rerank-3` and
   `rerank-3-lite`. A different pass-through model name keeps definition fusion.
 - Fusion-off for `rerank-2.5` was replayed offline only.
 - The rule was chosen on the same 28 questions it is reported on. It has not
   been checked on questions it was not tuned against.
-- Latency is single-run; Voyage latency depends on the network.
+- Latency is three runs on one host and one network path. It does not predict
+  another host or a congested network.
 - A larger local model (`LateOn-Code`) and local cross-encoders were not tested.
 
 ## Guidance for the README
@@ -308,7 +355,10 @@ where cost matters) as the best-quality option, and keeping local LateOn as the
 offline default. Quote the result as measured on this eval: 22 of 28 owners at
 rank 1 against 13, with the canonical projection. Using Voyage sends rerank
 documents (code excerpts) to a third party and is billed per token; say so next
-to the recommendation.
+to the recommendation. One search bills 43,205 tokens on average, range
+24,664–60,404. At the listed `rerank-3-lite` price of $0.02 per million tokens,
+that is about $0.00086 per search, or $0.024 per 28-question pass, after the
+200-million-token free tier.
 
 ## Open
 

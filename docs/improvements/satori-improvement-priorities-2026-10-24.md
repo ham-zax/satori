@@ -228,10 +228,10 @@ Checks:
 
 Provenance: captures A, B and C are saved responses from the `11889927` era, rescored with the
 `score.mjs` that is committed today. The "current" rubric is `5f96827c`. The build after these
-captures, `fb125738`, reports hit@1/5/10 13/21/23 with MRR 0.5545 for the LateOn arm. That is one
-hit@10 above capture C's current-rubric 22, and its MRR is not the MRR@10 of this section: lenient
-MRR@10 here is 0.580697, so the 0.5545 figure is consistent with a strict MRR. Compare hit counts
-only until one run prints both definitions.
+captures, `fb125738`, reports hit@1/5/10 13/21/23 for the LateOn arm with MRR@10 0.5545, measured
+in the `0a2aa66c` differential at workspace `07ab8334`. Capture C's current-rubric row records
+13/21/22 with MRR@10 0.580697, so those two MRR@10 values cannot come from the same inputs: one
+more hit at the same cut must raise the mean. Compare hit counts across documents, not MRR@10.
 
 | Capture | Rubric | hit@1 | hit@5 | hit@10 | MRR@10 | strict hit@1 | strict hit@5 | strict hit@10 | strict MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|

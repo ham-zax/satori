@@ -376,6 +376,32 @@ export function run(): string {
     }
 });
 
+test('oversized JSON refuses semantic claims while preserving searchable publication', async () => {
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(1, { maxFileBytes: 512, maxProjectBytes: 1024 });
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig({ resolveJsonModule: true, noLib: true, types: [] }),
+        'src/data.json': JSON.stringify({ value: 'x'.repeat(2 * 1024 * 1024) }),
+        'src/main.ts': "import data from './data.json'; export function target() { return data.value; } export function run() { return target(); }",
+    }, analyzer);
+    try {
+        const result = await fixture.context.indexCodebase(fixture.root);
+        assert.equal(result.status, 'completed');
+        assert.equal(result.publication.status, 'activated');
+        const state = await readNavigation(fixture.context, fixture.root);
+        const coverage = state.relationships.manifest.providerCoverage.find(entry => entry.providerId === 'satori-typescript-compiler');
+        assert.ok(coverage);
+        assert.equal(coverage.status, 'unavailable');
+        assert.equal(coverage.failureReason, 'resource_limit');
+        assert.match(coverage.failureMessage ?? '', /data\.json.*native-read budget/);
+        assert.equal(coverage.analyzedSourceFileCount, 0);
+        assert.equal(state.relationships.records.some(record => record.type === 'CALLS'), false);
+        assert.ok(state.registry.symbols.some(symbol => symbol.name === 'target'));
+    } finally {
+        await fixture.close();
+        await analyzer.dispose();
+    }
+});
+
 test('TypeScript semantic project byte limits degrade call-graph coverage without failing searchable publication', async () => {
     const analyzer = new TypeScriptSemanticProjectAnalyzer(1, {
         maxFileBytes: 512,

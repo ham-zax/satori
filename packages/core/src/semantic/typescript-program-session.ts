@@ -3,8 +3,14 @@ import path from 'node:path';
 
 import { API, type CompilerOptions, type ModuleResolver, type Program, type ProjectReference, type RawCompilerOptions, type ResolutionMode, type Snapshot } from './typescript-api';
 import { serverFS } from './typescript-api';
+import {
+    readTypeScriptFileBytes, TypeScriptReadLimitError,
+    TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
+} from './typescript-bounded-reader';
 
 export interface TypeScriptSourceReader {
+    readonly maxFileBytes: number;
+    readonly maxProjectBytes: number;
     admit(fileName: string, bytes: number): boolean;
     getFailureMessage(): string | undefined;
 }
@@ -18,6 +24,8 @@ export class TypeScriptProgramSession {
     private readonly overrides = new Map<string, string>();
     private readonly changed = new Set<string>();
     private readonly jsonReadBytes = new Map<string, number>();
+    private jsonBytes = 0;
+    private jsonReadFailure?: string;
     private disposed = false;
 
     constructor(
@@ -39,17 +47,23 @@ export class TypeScriptProgramSession {
                 writeFile: serverFS.noop,
                 removeFile: serverFS.noop,
                 readFile: (fileName) => {
+                    if (this.getResourceLimitFailure()) return undefined;
                     const override = this.overrides.get(path.resolve(fileName));
                     if (override !== undefined) {
                         return this.admitRead(fileName, Buffer.byteLength(override, 'utf8')) ? override : undefined;
                     }
                     try {
+                        if (path.extname(fileName).toLowerCase() === '.json') {
+                            const content = readTypeScriptFileBytes(fileName, this.jsonReadLimit(fileName));
+                            return this.admitRead(fileName, content.length) ? content.toString('utf8') : undefined;
+                        }
                         const stat = fs.statSync(fileName);
                         if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
                         const content = fs.readFileSync(fileName, 'utf8');
                         if (!this.admitRead(fileName, Buffer.byteLength(content, 'utf8'))) return undefined;
                         return content;
-                    } catch {
+                    } catch (error) {
+                        if (error instanceof TypeScriptReadLimitError) this.rejectJsonRead(fileName, error.bytes);
                         return undefined;
                     }
                 },
@@ -101,16 +115,36 @@ export class TypeScriptProgramSession {
     }
 
     private admitRead(fileName: string, bytes: number): boolean {
-        if (!this.sourceBudget) return true;
+        if (this.jsonReadFailure) return false;
         if (path.extname(fileName).toLowerCase() === '.json') {
-            this.jsonReadBytes.set(path.resolve(fileName), bytes);
+            if (bytes > this.jsonReadLimit(fileName)) {
+                this.rejectJsonRead(fileName, bytes);
+                return false;
+            }
+            const absolute = path.resolve(fileName);
+            this.jsonBytes += bytes - (this.jsonReadBytes.get(absolute) ?? 0);
+            this.jsonReadBytes.set(absolute, bytes);
             return true;
         }
-        return this.sourceBudget.admit(fileName, bytes);
+        return this.sourceBudget?.admit(fileName, bytes) ?? true;
+    }
+
+    private jsonReadLimit(fileName: string): number {
+        // JSON roles are unknown until the compiler builds its program. Bound
+        // transport bytes independently so metadata stays outside source quotas.
+        const fileLimit = Math.max(this.sourceBudget?.maxFileBytes ?? 0, TYPESCRIPT_METADATA_FILE_BYTES);
+        const totalLimit = Math.min(Number.MAX_SAFE_INTEGER,
+            (this.sourceBudget?.maxProjectBytes ?? 0) + TYPESCRIPT_METADATA_TOTAL_BYTES);
+        return Math.min(fileLimit, Math.max(0,
+            totalLimit - this.jsonBytes + (this.jsonReadBytes.get(path.resolve(fileName)) ?? 0)));
+    }
+
+    private rejectJsonRead(fileName: string, bytes: number): void {
+        this.jsonReadFailure ??= `TypeScript semantic JSON input '${fileName}' is ${bytes} bytes, exceeding the ${this.jsonReadLimit(fileName)} byte native-read budget.`;
     }
 
     getResourceLimitFailure(): string | undefined {
-        return this.sourceBudget?.getFailureMessage();
+        return this.jsonReadFailure ?? this.sourceBudget?.getFailureMessage();
     }
 
     /**

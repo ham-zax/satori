@@ -12,6 +12,14 @@ for missing outputs. The compiler computes declaration output paths through `get
 The session owner disposes snapshots and closes its native process. CommonJS code uses Node's
 `require(ESM)` support, within the existing Node >=22.13 requirement.
 
+JSON content is requested by the native compiler for module metadata or enabled JSON imports.
+Filesystem metadata can reject an oversized file, but cannot supply its exports or inferred types.
+The session checks file size before reading, bounds accepted reads including growth after stat,
+and caps total JSON input bytes. Metadata stays outside semantic source-byte accounting.
+An over-limit JSON input marks semantic coverage unavailable while searchable publication remains
+available. Reference output proofs use an analyzer-owned cache with 128 entries and 4 MiB of
+estimated retained data, fingerprint invalidation, and cleanup on disposal or idle release.
+
 Oxlint replaces ESLint and typescript-eslint, removing the lint dependency on TypeScript 6.
 Supported recommended rules retain their severities. Duplicate parameters and legacy octal
 literals remain compiler/parser errors. Native lint requires explicit presence checks before

@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 
 import * as ts from './typescript-api';
 import { serverFS } from './typescript-api';
 import { TypeScriptProgramSession } from './typescript-program-session';
+import { readTypeScriptFileBytes, TypeScriptReadLimitError, TYPESCRIPT_METADATA_FILE_BYTES } from './typescript-bounded-reader';
 
 export interface TypeScriptConfiguredProjectIdentity {
     readonly compilerVersion: string;
@@ -43,6 +43,9 @@ export class TypeScriptSourceBudgetTracker {
     private failureMessage?: string;
 
     constructor(private readonly budget: TypeScriptSourceBudget) {}
+
+    get maxFileBytes(): number { return this.budget.maxFileBytes; }
+    get maxProjectBytes(): number { return this.budget.maxProjectBytes; }
 
     admit(fileName: string, bytes: number): boolean {
         if (this.failureMessage) return false;
@@ -121,7 +124,7 @@ export class TypeScriptConfigReadError extends Error {
     }
 }
 
-const MAX_TYPESCRIPT_CONFIG_BYTES = 1024 * 1024;
+const MAX_TYPESCRIPT_CONFIG_BYTES = TYPESCRIPT_METADATA_FILE_BYTES;
 const MAX_TYPESCRIPT_CONFIG_READS = 64;
 
 export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptConfiguredProject {
@@ -138,37 +141,20 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
             readFailure = `TypeScript config read budget exceeded ${MAX_TYPESCRIPT_CONFIG_READS} files.`;
             return undefined;
         }
-        let fd: number | undefined;
         try {
-            fd = fs.openSync(fileName, 'r');
-            if (fs.fstatSync(fd).size > MAX_TYPESCRIPT_CONFIG_BYTES) {
-                readFailure = `TypeScript config '${fileName}' exceeds the ${MAX_TYPESCRIPT_CONFIG_BYTES} byte budget.`;
-                return undefined;
-            }
-            // A sentinel byte makes the limit hold even if the file grows after stat.
-            const buffer = Buffer.alloc(MAX_TYPESCRIPT_CONFIG_BYTES + 1);
-            let bytes = 0;
-            while (bytes < buffer.length) {
-                const count = fs.readSync(fd, buffer, bytes, buffer.length - bytes, null);
-                if (count === 0) break;
-                bytes += count;
-            }
-            if (bytes > MAX_TYPESCRIPT_CONFIG_BYTES) {
-                readFailure = `TypeScript config '${fileName}' exceeds the ${MAX_TYPESCRIPT_CONFIG_BYTES} byte budget.`;
-                return undefined;
-            }
-            const content = buffer.subarray(0, bytes);
+            const content = readTypeScriptFileBytes(fileName, MAX_TYPESCRIPT_CONFIG_BYTES);
             // Match the compiler's UTF-8 and UTF-16 BOM support.
             const encoding = content[0] === 0xff && content[1] === 0xfe ? 'utf-16le'
                 : content[0] === 0xfe && content[1] === 0xff ? 'utf-16be' : 'utf-8';
             const text = new TextDecoder(encoding).decode(content);
             configReads.set(fileName, text);
             return text;
-        } catch {
+        } catch (error) {
+            if (error instanceof TypeScriptReadLimitError) {
+                readFailure = `TypeScript config '${fileName}' exceeds the ${MAX_TYPESCRIPT_CONFIG_BYTES} byte budget.`;
+            }
             configReads.set(fileName, undefined);
             return undefined;
-        } finally {
-            if (fd !== undefined) fs.closeSync(fd);
         }
     };
     readFile(absoluteConfigPath);

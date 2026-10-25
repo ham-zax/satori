@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import * as ts from '../semantic/typescript-api';
 import { TypeScriptProgramSession } from '../semantic/typescript-program-session';
+import { TypeScriptReferenceDeclarationCache, type TypeScriptReferenceDeclarationState } from '../semantic/typescript-reference-cache';
 
 import {
     TYPESCRIPT_COMPILER_PROVIDER_ID,
@@ -349,26 +350,6 @@ function resolveProjectReferenceConfig(referencePath: string): string | undefine
     return resolveConfigLike(referencePath);
 }
 
-interface ReferenceDeclarationState {
-    /** Declaration outputs this config expects, normalized. */
-    readonly outputs: readonly string[];
-    /** Project references of this config, resolved to config paths. */
-    readonly references: readonly string[];
-    /** Outputs alone cannot prove readiness for this config. */
-    readonly unproven: boolean;
-}
-
-interface CachedReferenceDeclarationState {
-    readonly fingerprint: string;
-    readonly state: ReferenceDeclarationState;
-}
-
-// Emitting declarations builds the reference's whole program, which costs about
-// a second on a large project. Repeat analyses of the same reference reuse the
-// output list; the fingerprint covers the config chain and the file list, while
-// output existence is checked per analysis.
-const referenceDeclarationStates = new Map<string, CachedReferenceDeclarationState>();
-
 function projectReferenceConfigs(configPath: string): readonly string[] {
     const api = new ts.API({ runExternalCode: false });
     try {
@@ -379,7 +360,7 @@ function projectReferenceConfigs(configPath: string): readonly string[] {
     } finally { api.close(); }
 }
 
-function referenceDeclarationState(configPath: string): ReferenceDeclarationState {
+function referenceDeclarationState(configPath: string, cache?: TypeScriptReferenceDeclarationCache): TypeScriptReferenceDeclarationState {
     const normalized = normalizeAbsolute(configPath);
     const api = new ts.API({ runExternalCode: false });
     try {
@@ -391,9 +372,9 @@ function referenceDeclarationState(configPath: string): ReferenceDeclarationStat
             chain: collectConfigChain(normalized).map(file => [file, fileContentHash(file)]),
             files: parsed.fileNames,
         })).digest('hex');
-        const cached = referenceDeclarationStates.get(normalized);
-        if (cached?.fingerprint === fingerprint) return cached.state;
-        let state: ReferenceDeclarationState;
+        const cached = cache?.get(normalized, fingerprint);
+        if (cached) return cached;
+        let state: TypeScriptReferenceDeclarationState;
         if (!parsed.options.declaration && !parsed.options.composite) {
             // A reference that emits no declarations cannot prove readiness: the
             // checker still expects an output and reports TS6305 without it.
@@ -415,7 +396,7 @@ function referenceDeclarationState(configPath: string): ReferenceDeclarationStat
                 };
             } finally { program.dispose(); }
         }
-        referenceDeclarationStates.set(normalized, { fingerprint, state });
+        cache?.set(normalized, fingerprint, state);
         return state;
     } finally { api.close(); }
 }
@@ -428,14 +409,14 @@ function referenceDeclarationState(configPath: string): ReferenceDeclarationStat
  * prove readiness: a missing output, a reference without declaration emit, or
  * an unreadable config. A `true` result means no TS6305 is possible.
  */
-export function referenceAuthorityReady(projectConfigPath: string): true | undefined {
+export function referenceAuthorityReady(projectConfigPath: string, cache?: TypeScriptReferenceDeclarationCache): true | undefined {
     const visited = new Set<string>();
     const pending = [...projectReferenceConfigs(projectConfigPath)];
     while (pending.length > 0) {
         const configPath = pending.pop()!;
         if (visited.has(configPath)) continue;
         visited.add(configPath);
-        const state = referenceDeclarationState(configPath);
+        const state = referenceDeclarationState(configPath, cache);
         if (state.unproven) return undefined;
         for (const output of state.outputs) {
             try {
@@ -473,6 +454,7 @@ function projectControlFiles(
     rootPath: string,
     project: TypeScriptConfiguredProject | undefined,
     sourceFiles: readonly string[],
+    cache: TypeScriptReferenceDeclarationCache,
 ): { controls: string[]; referencedProjectKeys: string[] } {
     const controls = new Set(packageControlFiles(rootPath, sourceFiles));
     const referencedProjectKeys = new Set<string>();
@@ -483,7 +465,7 @@ function projectControlFiles(
             if (!referenceConfig) continue;
             referencedProjectKeys.add(configuredProjectKey(referenceConfig));
             for (const config of collectConfigChain(referenceConfig)) controls.add(config);
-            for (const output of referenceDeclarationState(referenceConfig).outputs) {
+            for (const output of referenceDeclarationState(referenceConfig, cache).outputs) {
                 controls.add(output);
             }
         }
@@ -772,6 +754,7 @@ function assignProjectShards(plans: readonly ProjectPlan[], count: number): Map<
 
 export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private readonly sessions = new Map<string, CachedSession>();
+    private readonly referenceDeclarations = new TypeScriptReferenceDeclarationCache();
     private readonly rootStates = new Map<string, RootResolutionState>();
     private useCounter = 0;
     private activeAnalyses = 0;
@@ -880,7 +863,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     private scheduleIdleRelease(): void {
-        if (this.activeAnalyses > 0 || this.idleReleaseMs <= 0 || this.sessions.size === 0) return;
+        if (this.activeAnalyses > 0 || this.idleReleaseMs <= 0
+            || this.sessions.size === 0 && this.referenceDeclarations.size === 0) return;
+        clearTimeout(this.idleReleaseTimer);
         this.idleReleaseTimer = setTimeout(() => {
             if (this.activeAnalyses === 0) this.clearSessionState();
         }, this.idleReleaseMs);
@@ -1101,7 +1086,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             let referenceReady = true;
             if (plan.referencedProjectKeys.length > 0) {
                 const referenceStartedAt = performance.now();
-                const proven = plan.configPath ? referenceAuthorityReady(plan.configPath) : undefined;
+                const proven = plan.configPath ? referenceAuthorityReady(plan.configPath, this.referenceDeclarations) : undefined;
                 referenceReady = proven
                     ?? !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
                 perfTrace('typescript.reference_authority', performance.now() - referenceStartedAt, {
@@ -1296,6 +1281,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         for (const cached of this.sessions.values()) this.disposeCachedSession(cached);
         this.sessions.clear();
         this.rootStates.clear();
+        this.referenceDeclarations.clear();
     }
 
     /**
@@ -1418,7 +1404,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (!project) continue;
             const sortedFiles = [...files].sort();
             const absoluteFiles = sortedFiles.map((file) => normalizeAbsolute(path.join(normalizedRoot, file)));
-            const control = projectControlFiles(normalizedRoot, project, absoluteFiles);
+            const control = projectControlFiles(normalizedRoot, project, absoluteFiles, this.referenceDeclarations);
             const environmentConfigId = `typescript:${ts.version}:configured:${stableHash({
                 providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
                 compilerVersion: ts.version,
@@ -1479,6 +1465,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             });
         }
 
+        this.scheduleIdleRelease();
         return plans.sort((left, right) => left.key.localeCompare(right.key));
     }
 

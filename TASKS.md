@@ -108,6 +108,55 @@ runExactRegistryFastPath start at line 227 before the follow-up commit. Eval lin
 outside this repair. The four new regression cases cover directory outputs, JSON metadata,
 JSON source per-file limits and JSON override project limits. The first three failed before repair.
 
+## Memory follow-up
+
+Hamza authorizes the two proposed memory repairs. Start from clean master at 8886865b.
+Keep the fixes inline because the two-dispatch run budget is exhausted. Preserve the handoff
+commits and continue integration on local master. No new dependency or external component.
+Use the session owner for bounded JSON reads, and a dedicated analyzer-owned cache for reference
+state retention. Metadata must remain outside source-byte accounting. Native compiler results
+remain authoritative for source identity and declaration output paths.
+Acceptance targets: oversized JSON sources cannot be fully read or parsed before rejection.
+Metadata remains usable within an explicit bounded read. The reference cache has byte and entry
+bounds, preserves fingerprint invalidation and falls back to recomputation after eviction.
+Analyzer disposal and idle cleanup release its reference cache. Compare uncached/cached results
+and test mutations. Record three-run before/after measurements and focused regression evidence.
+Stop when both bounds and the affected checks pass. Leave the experimental toolchain unchanged.
+Reasoning checkpoint: user requests first-principles analysis before retaining any large-JSON
+allowance. JevShelf selected thinking-first-principles, which was applied to three direct probes.
+The CLI program reads 61 distinct package.json files and three configs, 153332 distinct-file bytes, largest
+7323 bytes, with no JSON source files. resolveJsonModule=false reads no imported JSON data.
+With it enabled, an imported JSON key changes a real Satori call from unresolved to Yes.run.
+Two package.json files of the same 50-byte size select different executable targets, a.ts and b.ts.
+Filesystem metadata can reject oversized inputs, but cannot replace compiler-required contents.
+Keep native resolution/typing authoritative. Bound transport reads, retain source classification
+in the native program, and do not introduce JSON type stubs or a compiler-policy copy.
+JSON transport uses max(source file quota, existing 1 MiB metadata allowance) per file, and the
+source project quota plus the existing 64 MiB config/metadata allowance per session. Those are
+allocation ceilings, not reasons to read a file. Stat-known oversized JSON is rejected without
+reading data. Growing files stop at one sentinel byte. Reference cache: 128 entries, 4 MiB of
+estimated retained data per analyzer, eviction on least recent use, clear on idle cleanup/disposal.
+Measurement receipt: identical 8 MiB JSON fixture, three fresh-process runs per version. Baseline
+owners are copied from 8886865b into temporary modules with the same current dependencies, so
+only the relevant owner changes. Command: `/usr/bin/time -f 'total_peak_kib=%M wall_s=%e' node
+--expose-gc --import tsx /tmp/satori-ts71-memory-probe.mjs json` (baseline sets
+`SATORI_MEMORY_BASELINE=1`). The temporary harness is removed after evidence recording.
+Before/after medians: full JSON read bytes 8388620 -> 0; request phase 120.883 -> 11.072 ms;
+whole-process wall time 0.57 -> 0.32 s. Node-client peak RSS median 139860 -> 106128 KiB
+(136.6 -> 103.6 MiB). GNU time maximum RSS across the three runs: 141600 -> 107724 KiB.
+These are process high-water marks, not a summed Node-plus-native RSS measurement.
+One-minute load: 0.44-0.56 before, 0.56 after. No general repository RAM-saving claim follows.
+Cache lifecycle fixture: warm proof recomputations remain zero. Disposal-retained proof entries
+fall from one to zero, and a new analyzer recomputes its own proof. Before/after lifecycle phase
+medians: 164.596 -> 154.419 ms; Node-client peak RSS medians 104804 -> 101220 KiB. Cache limits
+and ownership, not a timing percentage, are the acceptance criteria.
+Cache instrumentation initially observed a different API module instance. Those preliminary
+cache counters are discarded. Final measurements observe retained cache entries directly.
+Mutation evidence: returning a stale fingerprint's proof makes the real config/output mutation
+test fail (cached true versus expected undefined). The original guard is restored. Thirty focused
+tests and pnpm run check pass, including JSON-dependent call targets, growth sentinels, LRU/byte
+bounds, fingerprint invalidation, per-analyzer disposal and metadata-only idle cleanup.
+
 | id | status | depends | owner | acceptance | evidence |
 |---|---|---|---|---|---|
 | T1 | review | - | deepseek-v4.1-flash-free (T3 `node:delegated-task:command%3Amcp%3A39d636c5-d402-4155-a6a1-53cddf9f88cd%3Adelegate-task%3At1-blend-heldout-20261025-r1`) | Held-out 30q (gin, Flask) on LateOn, same build and indexes: blend-on keeps every hit blend-off has, and improves hit@1 or MRR. Per-query ranks, provenance and metric table reported. | Met on hits and on hit@1/MRR; not met on per-query rank. `/tmp/satori-blend-heldout-20261025/{off,on}`. git `8f72ce70`, dirtyTreeHash `8c327d53…`, lateon, only `rerank_blend` differs. hit@1 10→12, hit@5 20→20, MRR 0.4712→0.5078, fused recall 28/30 both, hits 24/24 with no hit lost or gained. Ranks moved on 6 cases: gained g10 6→1, g12 7→1, f4 3→1; lost g3 1→5, g8 2→8, g14 4→6. 3 up, 3 down. Verified by the orchestrator from both `result.json` and `harness-summary.md`. Logs: `/tmp/satori-blend-heldout-20261025/logs/{off,on}.log`. |
@@ -115,3 +164,4 @@ JSON source per-file limits and JSON override project limits. The first three fa
 | TS71-A | review | - | OpenCode DeepSeek V4.1 Flash, max | Port all first-party TypeScript runtime/build consumers to 7.1.0-beta, including analyzer/session/AST/config APIs and compiler-version state identity. Preserve existing semantics and resource/process cleanup. Update manifests, lockfile, affected documentation and tests. `pnpm run check`, build, existing TypeScript configured-project/provider/adversarial/resolution-state tests and TypeScript publication/equivalence tests pass. Report third-party peer constraints honestly. Refs and constraints above. | Dispatch 1/2. T3 taskId `node:delegated-task:command%3Amcp%3Ae4c682c1-b486-4947-8484-45cf645f6dad%3Adelegate-task%3Asatori-ts71-a-20261025-r1`. Returned running, provider `opencode`, model `zengate/deepseek-v4.1-flash-free`, variant `max`. Continuation authorized the parent to implement inline. All acceptance checks pass after fix round 1: `pnpm run check`, build, publication/equivalence, provider/adversarial, configured-project/resolution-state, MCP, CLI and script tests. Awaiting Hamza. |
 | TS71-R | review | TS71-A | OpenCode DeepSeek V4.1 Flash, max | One read-only independent review of the complete migration diff against TS71-A, preservation of existing edits, public evidence contracts, process cleanup, resource limits, version identity, mapper execution disabled, and regression coverage. Report concrete defects with files and checks, or no findings. | Dispatch 2/2, T3 taskId `node:delegated-task:command%3Amcp%3A69ffc3e2-54fb-488f-a5c4-ed1efd0f46e6%3Adelegate-task%3Asatori-ts71-r-review-20261025-r1`. Verdict PASS WITH FINDINGS: 1 major, 6 minor, 1 nit. No blocker. Findings 1 and 2 fixed in round 1, finding 3 fixed with a regression test, finding 5 hardened, finding 7 corrected. Findings 4, 6 and 8 documented as accepted. Re-verified by the parent. Awaiting Hamza. |
 | TS71-F | review | TS71-A, TS71-R | parent inline | Regression tests reproduce directory outputs accepted as declarations and metadata counted as source. Repair both without bypassing JSON-source budgets. Focused semantic and publication checks plus pnpm run check pass. Commit the scoped fix on master, preserving existing migration commits. | Inline repair from clean e2cd3ce8. Three regression cases failed before repair. Final checks pass: pnpm run check, 43 core tests across five files, 37 agent-discovery eval tests, 507 script tests. Task-key start remains line 227. Only this ledger, the two owning files and their focused test file change. The scoped commit integrates on master, which already contains all handoff commits. Awaiting Hamza. |
+| TS71-M | review | TS71-F | parent inline | Bound JSON allocation before native parsing without treating metadata as source. Bound and own reference-cache retention, with cleanup and unchanged readiness results. Three-run measurements, mutation checks, focused tests and repository check pass. Integrate on local master. | Authorized inline follow-up from clean 8886865b. No new dispatch. Three-run evidence above: oversized JSON data reads 8388620→0 bytes, phase median 120.883→11.072 ms. Cache disposal releases proof entries, warm lookups avoid recomputation, stale-fingerprint mutation fails the regression. Final checks pass: 76 core tests across 12 files, 507 script tests, pnpm run check, git diff --check. Exact-target start remains line 227. Scoped integration on local master preserves all handoff commits. Awaiting Hamza. |

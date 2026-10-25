@@ -12,8 +12,10 @@ import {
     TypeScriptSourceBudgetTracker,
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
-import { referenceAuthorityReady } from '../relationships/typescript-semantic-analyzer';
+import { referenceAuthorityReady, TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
 import { TypeScriptProgramSession } from './typescript-program-session';
+import { TypeScriptReferenceDeclarationCache } from './typescript-reference-cache';
+import { analyzeTypeScriptProgram } from './typescript-compiler-provider';
 
 function write(fileName: string, content: string): void {
     fs.mkdirSync(path.dirname(fileName), { recursive: true });
@@ -534,6 +536,158 @@ test('JSON source overrides count toward the project budget while metadata overr
         assert.match(session.getResourceLimitFailure() ?? '', /project budget.*data\.json/);
     } finally {
         session.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('oversized JSON never enters the native program or a full-file read', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-json-allocation-'));
+    const main = path.join(root, 'main.ts');
+    const data = path.join(root, 'data.json');
+    write(main, 'import data from "./data.json"; export const value = data;');
+    writeJson(data, { value: 'x'.repeat(2 * 1024 * 1024) });
+    const read = fs.readFileSync;
+    let fullReads = 0;
+    t.mock.method(fs, 'readFileSync', (...args: unknown[]) => {
+        if (args[0] === data) fullReads++;
+        return Reflect.apply(read, fs, args);
+    });
+    const session = new TypeScriptProgramSession(root, [main], {
+        noEmit: true, noLib: true, types: [], module: ts.ModuleKind.NodeNext, resolveJsonModule: true,
+    }, new TypeScriptSourceBudgetTracker({ maxFileBytes: 1024, maxProjectBytes: 2048 }));
+    try {
+        const program = session.getProgram();
+        assert.match(session.getResourceLimitFailure() ?? '', /data\.json.*native-read budget/);
+        assert.equal(fullReads, 0);
+        assert.equal(program.getSourceFileNames().some(file => file === data), false);
+    } finally {
+        session.dispose();
+        t.mock.restoreAll();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('JSON transport has a total bound before native source classification', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-json-total-'));
+    const session = new TypeScriptProgramSession(root, [], { noEmit: true, noLib: true, types: [] },
+        new TypeScriptSourceBudgetTracker({ maxFileBytes: 1024 * 1024, maxProjectBytes: 1024 * 1024 }));
+    const content = '{}'.padEnd(1024 * 1024, ' ');
+    try {
+        for (let index = 0; index < 65; index++) session.updateFile(path.join(root, `${index}.json`), content);
+        assert.equal(session.getResourceLimitFailure(), undefined);
+        session.updateFile(path.join(root, 'overflow.json'), content);
+        assert.match(session.getResourceLimitFailure() ?? '', /overflow\.json.*native-read budget/);
+    } finally {
+        session.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('cached reference proofs match uncached results after config and output mutations', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-reference-cache-'));
+    const cache = new TypeScriptReferenceDeclarationCache();
+    try {
+        const compilerOptions = { composite: true, declaration: true, rootDir: 'src', outDir: 'dist', types: [], noLib: true };
+        const libConfig = path.join(root, 'lib/tsconfig.json');
+        const appConfig = path.join(root, 'app/tsconfig.json');
+        writeJson(libConfig, { compilerOptions, include: ['src'] });
+        write(path.join(root, 'lib/src/index.ts'), 'export const value = 1;');
+        write(path.join(root, 'lib/dist/index.d.ts'), 'export declare const value = 1;');
+        writeJson(appConfig, { compilerOptions, files: [], references: [{ path: '../lib' }] });
+        assert.equal(referenceAuthorityReady(appConfig, cache), referenceAuthorityReady(appConfig));
+        assert.equal(cache.size, 1);
+        writeJson(libConfig, { compilerOptions: { ...compilerOptions, outDir: 'changed' }, include: ['src'] });
+        assert.equal(referenceAuthorityReady(appConfig, cache), undefined);
+        assert.equal(referenceAuthorityReady(appConfig, cache), referenceAuthorityReady(appConfig));
+        write(path.join(root, 'lib/changed/index.d.ts'), 'export declare const value = 1;');
+        assert.equal(referenceAuthorityReady(appConfig, cache), true);
+        assert.equal(referenceAuthorityReady(appConfig, cache), referenceAuthorityReady(appConfig));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('analyzer disposal releases its reference cache without clearing another analyzer', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-cache-owner-'));
+    const first = new TypeScriptSemanticProjectAnalyzer();
+    const second = new TypeScriptSemanticProjectAnalyzer();
+    try {
+        const compilerOptions = { composite: true, declaration: true, types: [], noLib: true };
+        writeJson(path.join(root, 'lib/tsconfig.json'), { compilerOptions, files: ['index.ts'] });
+        write(path.join(root, 'lib/index.ts'), 'export const value = 1;');
+        writeJson(path.join(root, 'app/tsconfig.json'), { compilerOptions, files: ['index.ts'], references: [{ path: '../lib' }] });
+        write(path.join(root, 'app/index.ts'), 'export const value = 1;');
+        const input = { rootPath: root, language: 'typescript', sourceFiles: ['app/index.ts', 'lib/index.ts'] };
+        await first.getSourceControlFiles(input);
+        await second.getSourceControlFiles(input);
+        const firstCache = (first as unknown as { referenceDeclarations: TypeScriptReferenceDeclarationCache }).referenceDeclarations;
+        const secondCache = (second as unknown as { referenceDeclarations: TypeScriptReferenceDeclarationCache }).referenceDeclarations;
+        assert.equal(firstCache.size, 1);
+        assert.equal(secondCache.size, 1);
+        await first.dispose();
+        assert.equal(firstCache.size, 0);
+        assert.equal(firstCache.bytes, 0);
+        assert.equal(secondCache.size, 1);
+    } finally {
+        await first.dispose();
+        await second.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('bounded JSON reads preserve compiler-dependent executable targets', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-json-types-'));
+    const config = path.join(root, 'tsconfig.json');
+    const main = path.join(root, 'main.ts');
+    const data = path.join(root, 'data.json');
+    writeJson(path.join(root, 'package.json'), { type: 'commonjs', description: 'x'.repeat(5000) });
+    writeJson(config, { compilerOptions: { noLib: true, types: [], noEmit: true,
+        module: 'NodeNext', moduleResolution: 'NodeNext', resolveJsonModule: true }, files: ['main.ts'] });
+    write(main, [
+        "import data from './data.json';",
+        "export class Yes { run(): string { return 'yes'; } }",
+        "export class No { other(): string { return 'no'; } }",
+        "type Worker = keyof typeof data extends 'yes' ? Yes : No;",
+        'export function invoke(worker: Worker): string { return worker.run(); }',
+    ].join('\n'));
+    writeJson(data, { yes: 1 });
+    const session = new TypeScriptLanguageServiceSession(config, { maxFileBytes: 1024, maxProjectBytes: 2048 });
+    const calls = () => {
+        const program = session.getProgram();
+        assert.equal(session.getResourceLimitFailure(), undefined);
+        return analyzeTypeScriptProgram(program, [{ projectPath: 'main.ts', sourceFile: program.getSourceFile(main)! }])
+            .occurrencesByFile.get('main.ts')!;
+    };
+    try {
+        assert.equal(calls()[0].target?.ownerName, 'Yes');
+        session.updateFile(data, JSON.stringify({ noo: 1 }));
+        assert.equal(calls()[0].decision, 'unresolved');
+        session.updateFile(data, JSON.stringify({ yes: 1 }));
+        assert.equal(calls()[0].target?.ownerName, 'Yes');
+    } finally {
+        session.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('idle cleanup releases reference proofs even without language-service sessions', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-reference-idle-'));
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(4, undefined, 10);
+    try {
+        const compilerOptions = { composite: true, declaration: true, noLib: true, types: [] };
+        writeJson(path.join(root, 'lib/tsconfig.json'), { compilerOptions, files: ['index.ts'] });
+        write(path.join(root, 'lib/index.ts'), 'export const value = 1;');
+        writeJson(path.join(root, 'app/tsconfig.json'), { compilerOptions, files: ['index.ts'], references: [{ path: '../lib' }] });
+        write(path.join(root, 'app/index.ts'), 'export const value = 1;');
+        await analyzer.getSourceControlFiles({ rootPath: root, language: 'typescript', sourceFiles: ['app/index.ts', 'lib/index.ts'] });
+        const cache = (analyzer as unknown as { referenceDeclarations: TypeScriptReferenceDeclarationCache }).referenceDeclarations;
+        assert.equal(analyzer.getSessionStats().active, 0);
+        assert.equal(cache.size, 1);
+        t.mock.timers.tick(11);
+        assert.equal(cache.size, 0);
+        assert.equal(cache.bytes, 0);
+    } finally {
+        await analyzer.dispose();
+        t.mock.timers.reset();
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

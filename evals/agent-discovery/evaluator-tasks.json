@@ -24,8 +24,8 @@
         "ownerFile": "packages/mcp/src/core/search-exact-fast-path.ts",
         "ownerSymbol": "runExactRegistryFastPath",
         "ownerSpan": {
-          "startLine": 230,
-          "endLine": 666
+          "startLine": 227,
+          "endLine": 660
         },
         "requiredRelations": [
           {

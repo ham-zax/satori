@@ -47,6 +47,12 @@ export type SearchFlags = {
      * against the current ordering on the same publication.
      */
     first_stage_owner_floor?: boolean;
+    /**
+     * Curated behavior-word to code-vocabulary bridge. Measured on the 28-query
+     * set: the r1 cleanup question moves from absent to rank 1, and no other
+     * case changes.
+     */
+    behavior_alt_terms?: boolean;
 };
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
@@ -64,6 +70,7 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     definition_alt_terms: true,
     rerank_alt_terms: true,
     first_stage_owner_floor: false,
+    behavior_alt_terms: true,
 };
 
 /**

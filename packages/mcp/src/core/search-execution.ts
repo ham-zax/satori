@@ -114,6 +114,7 @@ export type SearchExpansionReason =
     | "primary_failed_fallback"
     | "primary_terminal_provider_failure"
     | "caller_alt_terms"
+    | "behavior_alt_terms"
     | "repository_vocabulary";
 
 export type SearchExpansionDecision = {
@@ -501,6 +502,8 @@ export type SearchExecutionInput = {
     alt_terms?: string[] | string;
     /** Resolved with the provider query by the request coordinator. */
     resolvedAltTerms?: ResolvedSearchAltTerms;
+    /** The resolved terms came from the behavior-word bridge, not from the caller. */
+    behaviorAltTerms?: boolean;
     repositoryVocabulary?: import('@satori-code/core').RepositoryVocabularyResult;
     reservation_policy?: string;
 };
@@ -679,7 +682,9 @@ export async function runSearchExecution(
             expand: shouldExpand,
             attempted: shouldExpand,
             reason: shouldRunCallerExpansion
-                ? input.repositoryVocabulary?.status === 'ok' ? "repository_vocabulary" : "caller_alt_terms"
+                ? input.repositoryVocabulary?.status === 'ok'
+                    ? "repository_vocabulary"
+                    : input.behaviorAltTerms ? "behavior_alt_terms" : "caller_alt_terms"
                 : expansionDecision.reason,
             ...(input.repositoryVocabulary ? { repositoryVocabulary: input.repositoryVocabulary } : {}),
             ...(callerExpansionQuery ? {

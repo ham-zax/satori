@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { supplementSearchFileSymbols } from "./search-file-symbol-supplement.js";
 import { retrieveSymbolMetadataBm25Candidates } from "./search-symbol-metadata-bm25.js";
 import { resolveSearchFlags } from './search-flags.js';
+import { resolveBehaviorSearchTerms } from './search-behavior-aliases.js';
 import { allowsRepositoryVocabulary, buildRepositoryVocabularyFilter, resolveRepositorySearchTerms } from './search-repository-vocabulary.js';
 import {
     COLLECTION_LIMIT_MESSAGE,
@@ -1666,7 +1667,17 @@ export class SearchRequestCoordinator {
                         : undefined,
                     lookup: this.environment.lookupRepositoryVocabularyInPublication,
                 });
-                const resolvedAltTerms = vocabularyTerms.resolved;
+                const behaviorTerms = vocabularyTerms.resolved.termsEmitted.length > 0
+                    ? undefined
+                    : resolveBehaviorSearchTerms({
+                        query: parsedOperators.semanticQuery,
+                        callerTerms: input.alt_terms,
+                        enabled: Boolean(resolveSearchFlags(input.flags).behavior_alt_terms)
+                            && parsedOperators.must.length === 0 && parsedOperators.exclude.length === 0,
+                        routeKind: queryPlan.route.kind,
+                    });
+                const resolvedAltTerms = behaviorTerms ?? vocabularyTerms.resolved;
+                const behaviorAltTerms = (behaviorTerms?.termsEmitted.length ?? 0) > 0;
                 const repositoryVocabulary = vocabularyTerms.vocabulary;
                 const resolvedRerankQuery = resolveSearchRerankQuery({
                     semanticQuery: parsedOperators.semanticQuery,
@@ -1721,6 +1732,7 @@ export class SearchRequestCoordinator {
                     flags: input.flags,
                     alt_terms: input.alt_terms,
                     resolvedAltTerms,
+                    behaviorAltTerms,
                     repositoryVocabulary,
                     ...(input.reservation_policy !== undefined ? { reservation_policy: input.reservation_policy } : {}),
                 }, {

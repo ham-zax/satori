@@ -484,6 +484,7 @@ export interface SearchDebugHint {
             | "primary_failed_fallback"
             | "primary_terminal_provider_failure"
             | "caller_alt_terms"
+            | "behavior_alt_terms"
             | "repository_vocabulary";
         primaryScopedCandidateCount: number;
         termsEmitted?: string[];

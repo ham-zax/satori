@@ -14,11 +14,9 @@ export type SearchFlags = {
     path_demotion?: boolean;
     prf?: boolean;
     /**
-     * Blends the provider rank with the rerank-window position when ordering
-     * reranker results. On by default for the local LateOn provider, whose
-     * provider order loses to the fusion order. Off for every other provider:
-     * Voyage rerank-3-lite's own order is better than the blend. An explicit
-     * value overrides the provider default.
+     * Blends the provider rank with the fused-pool rank when ordering
+     * reranker results. Off by default: without it the provider order wins
+     * outright.
      */
     rerank_blend?: boolean;
     /**
@@ -88,16 +86,6 @@ const FLAG_TOKENS: ReadonlyMap<string, keyof Required<SearchFlags>> = new Map([
     ]),
 ]);
 
-/**
- * Blend by default only for the local LateOn provider. The 28-query eval at
- * `c0dacd2e` measured +2 hit@1 and +0.065 MRR for LateOn, but -9 hit@1,
- * -0.237 MRR, and three queries lost from the top 10 for Voyage rerank-3-lite.
- * Any other provider keeps the compile-time default until it is measured.
- */
-export function defaultRerankBlendForProvider(provider: string | undefined): boolean {
-    return provider === 'lateon';
-}
-
 /** Reset token: every flag off, including the ones that default on. */
 const BASELINE_TOKENS = new Set(['none', 'baseline']);
 
@@ -118,13 +106,10 @@ function applyFlagToken(flags: Required<SearchFlags>, token: string): void {
 /**
  * Resolve the effective flag set.
  *
- * Precedence: compile-time defaults, then context defaults supplied by the
- * caller, then SATORI_SEARCH_FLAGS, then explicit caller flags. Context
- * defaults carry policy that depends on runtime state the flag table cannot
- * know, such as the active reranker provider. An explicit object only
- * overwrites the keys it names, so a partial object still leaves the remaining
- * defaults in effect -- callers that need the true runtime set must read the
- * returned object, not the input.
+ * Precedence: compile-time defaults, then SATORI_SEARCH_FLAGS, then explicit
+ * caller flags. An explicit object only overwrites the keys it names, so a
+ * partial object still leaves the remaining defaults in effect -- callers that
+ * need the true runtime set must read the returned object, not the input.
  *
  * The only accepted explicit shapes are a record of booleans, or absent
  * (undefined/null). Anything else throws naming the offending type rather than
@@ -133,19 +118,8 @@ function applyFlagToken(flags: Required<SearchFlags>, token: string): void {
  * type whether its input was understood. SATORI_SEARCH_FLAGS remains the one
  * string-encoded path, and it is the harness that sets it.
  */
-export function resolveSearchFlags(
-    explicitFlags?: Record<string, boolean> | null,
-    contextDefaults?: Partial<Required<SearchFlags>>,
-): SearchFlags {
+export function resolveSearchFlags(explicitFlags?: Record<string, boolean> | null): SearchFlags {
     const flags: Required<SearchFlags> = { ...DEFAULT_SEARCH_FLAGS };
-    for (const [key, value] of Object.entries(contextDefaults ?? {})) {
-        if (value === undefined) continue;
-        if (typeof value !== 'boolean') {
-            throw new Error(`search flag context default "${key}" must be a boolean; received ${typeof value}`);
-        }
-        if (!(key in DEFAULT_SEARCH_FLAGS)) continue;
-        flags[key as keyof Required<SearchFlags>] = value;
-    }
     const envStr = (typeof process !== 'undefined' && process.env?.SATORI_SEARCH_FLAGS) || '';
     if (envStr) {
         for (const f of envStr.split(',')) applyFlagToken(flags, f);

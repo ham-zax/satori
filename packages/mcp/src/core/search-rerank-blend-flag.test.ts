@@ -110,12 +110,11 @@ function buildHost(results: FixtureCandidate[], reranker: Reranker | null): Sear
 }
 
 function buildReranker(
-    provider: "lateon" | "voyage",
     buildResults: (documents: readonly string[], candidateIds: readonly string[]) => RerankResult[],
     onCall?: (candidateIds: readonly string[]) => void,
 ): Reranker {
     return {
-        getIdentity: () => ({ provider, model: "test", profile: "blend" }),
+        getIdentity: () => ({ provider: "voyage", model: "test", profile: "blend" }),
         rerank: async (_query, documents, options) => {
             const candidateIds = options?.identities || [];
             onCall?.(candidateIds);
@@ -184,8 +183,8 @@ const RESULTS = [
     candidate("d", "src/d.ts", 0.6),
 ];
 
-async function run(flags?: Record<string, boolean>, provider: "lateon" | "voyage" = "voyage") {
-    const reranker = buildReranker(provider, permutedResults);
+async function run(flags?: Record<string, boolean>) {
+    const reranker = buildReranker(permutedResults);
     const outcome = await runSearchExecution(
         buildInput(flags),
         buildHost(RESULTS, reranker),
@@ -196,7 +195,7 @@ async function run(flags?: Record<string, boolean>, provider: "lateon" | "voyage
     return outcome;
 }
 
-test("rerank_blend is off at default flags for Voyage and the provider order wins", async () => {
+test("rerank_blend is off at default flags and the provider order wins", async () => {
     const outcome = await run(undefined);
     assert.equal(resolveSearchFlags().rerank_blend, false);
     assert.equal(outcome.rerankerApplied, true);
@@ -222,39 +221,6 @@ test("rerank_blend on changes the order, so the default is not silently blending
     // Blending 0.5*providerRank + 0.5*(fusedRank) over the same permutation
     // gives a(1.5) < c(2.0) < b(3.0) < d(3.5), i.e. a, c, b, d.
     assert.deepEqual(blendedOrder, ["a", "c", "b", "d"]);
-});
-
-test("rerank_blend is on at default flags for the local LateOn provider", async () => {
-    const outcome = await run(undefined, "lateon");
-    // The same permutation the explicit test uses: the blend gives a, c, b, d.
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.candidateId),
-        ["a", "c", "b", "d"],
-    );
-});
-
-test("an explicit rerank_blend:false turns the LateOn default off", async () => {
-    const outcome = await run({ rerank_blend: false }, "lateon");
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.candidateId),
-        ["c", "a", "d", "b"],
-    );
-});
-
-test("SATORI_SEARCH_FLAGS no-rerank_blend turns the LateOn default off", async () => {
-    const previous = process.env.SATORI_SEARCH_FLAGS;
-    try {
-        process.env.SATORI_SEARCH_FLAGS = "no-rerank_blend";
-        const outcome = await run(undefined, "lateon");
-        assert.deepEqual(
-            outcome.scored.map((entry) => entry.result.candidateId),
-            ["c", "a", "d", "b"],
-            "an env token must override the provider default",
-        );
-    } finally {
-        if (previous === undefined) delete process.env.SATORI_SEARCH_FLAGS;
-        else process.env.SATORI_SEARCH_FLAGS = previous;
-    }
 });
 
 test("an explicit rerank_blend:false is honoured even when the env enables it", async () => {

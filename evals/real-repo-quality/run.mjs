@@ -75,13 +75,8 @@ const fileSha256 = (relative) => sha256File(path.resolve(workspaceRoot, relative
  * leaves every unnamed flag at its default, so `--flags rerank_blend` was
  * recorded as compound_join=false, path_demotion=false when both were on.
  */
-function buildProvenance(resolveSearchFlags, defaultRerankBlendForProvider, constants, reservation, runtimeEnv) {
-    const resolvedFlags = resolveSearchFlags(passedFlags, {
-        // The tool resolves this provider default itself. Record the same
-        // value here, or a default LateOn run is labelled blend-off while it
-        // publishes the blended order.
-        rerank_blend: defaultRerankBlendForProvider(runtimeEnv.SATORI_RERANKER_PROVIDER),
-    });
+function buildProvenance(resolveSearchFlags, constants, reservation, runtimeEnv) {
+    const resolvedFlags = resolveSearchFlags(passedFlags);
     const gitSha = gitOut('rev-parse', 'HEAD');
     const dirtyDiff = execFileSync('git', ['diff', 'HEAD'], { encoding: 'utf8', cwd: workspaceRoot });
     const untracked = gitOut('ls-files', '--others', '--exclude-standard');
@@ -297,11 +292,11 @@ async function main() {
     // does, so it uses the production predicate rather than a local copy.
     const { isNonProductionDistractor } = await dist('packages/mcp/dist/core/search-non-production-path.js');
     setDistractorPathClassifier(isNonProductionDistractor);
-    const { resolveSearchFlags, defaultRerankBlendForProvider } = await dist('packages/mcp/dist/core/search-flags.js');
+    const { resolveSearchFlags } = await dist('packages/mcp/dist/core/search-flags.js');
     const searchConstants = await dist('packages/mcp/dist/core/search-constants.js');
     const reservation = await dist('packages/mcp/dist/core/search-expansion-reservation.js');
     const runtimeEnv = { ...await localOfflineEnvironment(), ...explicitRuntimeEnvironment() };
-    const provenance = buildProvenance(resolveSearchFlags, defaultRerankBlendForProvider, searchConstants, reservation, runtimeEnv);
+    const provenance = buildProvenance(resolveSearchFlags, searchConstants, reservation, runtimeEnv);
     const { scoreQuery, normalizeHit } = await import('./score.mjs');
     log(`provenance gitSha=${provenance.gitSha} dirtyTreeHash=${provenance.dirtyTreeHash ?? 'clean'} flags=${JSON.stringify(provenance.resolvedFlags)} reranker=${provenance.runtime.rerankerProvider ?? '?'}/${provenance.runtime.rerankerModel ?? '-'}`);
 

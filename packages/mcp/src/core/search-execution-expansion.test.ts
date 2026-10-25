@@ -147,11 +147,6 @@ test('resolveSearchFlags defaults compound_join and path_demotion on and the res
     assert.equal(explicit.compound_join, false);
     assert.equal(explicit.path_demotion, true);
     assert.equal(explicit.rerank_blend, true);
-
-    // A runtime context default (the reranker provider policy) applies only
-    // when neither the env nor the caller names the flag.
-    assert.equal(resolveSearchFlags(undefined, { rerank_blend: true }).rerank_blend, true);
-    assert.equal(resolveSearchFlags({ rerank_blend: false }, { rerank_blend: true }).rerank_blend, false);
 });
 
 test('the synonyms flag no longer resolves', async () => {

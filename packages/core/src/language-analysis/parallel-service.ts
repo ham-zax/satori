@@ -221,6 +221,7 @@ export function createParallelLanguageAnalysisService(
             return await dispatch(input, 'indexing') as IndexingAnalysisResult;
         },
         releaseIdleWorkers(): void {
+            local.releaseIdleWorkers?.();
             if (pendingCount() > 0) return;
             if (idleTimer) clearTimeout(idleTimer);
             idleTimer = undefined;
@@ -235,6 +236,7 @@ export function createParallelLanguageAnalysisService(
                 entry.pending.clear();
             }
             await Promise.all([...all.map(retire), ...retiring]);
+            await local.dispose?.();
         },
     };
     return service as ParallelLanguageAnalysisPort & IndexingAnalysisCapability;

@@ -7,7 +7,7 @@ import {
 import { isLanguageCapabilitySupportedForLanguage, normalizeLanguageId } from '../language';
 import { analyzeWithCbmDefinitions, supportsCbmDefinitions } from './cbm-definition-adapter';
 import { CbmExtractorUnavailableError } from './cbm-extractor-host';
-import { recoverFlowSymbols } from './flow-recovery';
+import { createFlowRecoveryParser } from './flow-recovery';
 import { analyzeWithOxc } from './oxc-adapter';
 import { analyzeWithTreeSitter } from './tree-sitter-adapter';
 import type {
@@ -143,6 +143,7 @@ function emergencyFallbackResult(
 export function createLanguageAnalysisService(
     options: LanguageAnalysisServiceOptions = {},
 ): LanguageAnalysisPort {
+    const flowRecovery = createFlowRecoveryParser();
     const chunkOptions = {
         chunkSize: options.chunkSize,
         chunkOverlap: options.chunkOverlap,
@@ -214,7 +215,7 @@ export function createLanguageAnalysisService(
                 }
                 if ('typedJavaScriptRecoverable' in evidence && evidence.typedJavaScriptRecoverable) {
                     // Type-annotated (Flow) JavaScript is valid for its authors; keep its declarations searchable at symbol level.
-                    const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);
+                    const symbols = flowRecovery.recover(normalizedInput.content, normalizedInput.relativePath);
                     if (symbols.length > 0) {
                         return finishAnalysis({
                             backend: strategy.backend,
@@ -281,6 +282,12 @@ export function createLanguageAnalysisService(
             return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), CBM definition extractors, bounded text fallback';
         },
         getStrategyForLanguage: strategyForLanguage,
+        releaseIdleWorkers(): void {
+            flowRecovery.close();
+        },
+        async dispose(): Promise<void> {
+            flowRecovery.close();
+        },
     } as LanguageAnalysisPort & IndexingAnalysisCapability;
     return service;
 }

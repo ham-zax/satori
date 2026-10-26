@@ -101,6 +101,30 @@ test("missing name evidence abstains on a behavior description instead of droppi
     assert.equal(result.items[3]?.providerRank, 1);
 });
 
+const behaviorQuery = "Where does the product decide whether a speech transcription error is the learner mistake or an artifact?";
+const namedHelpers = ["error", "product", "transcription", "speech", "learner", "artifact"]
+    .map((name, index) => metadata(name, `src/cli-${index}.ts`));
+
+test("configuration declarations and module-level proxies abstain like an unnamed implementation", () => {
+    const result = order([
+        metadata("project", "pyproject.toml", "project", "class"),
+        metadata("request", "src/flask/globals.py", "request", "property"),
+        ...namedHelpers,
+    ], behaviorQuery);
+
+    assert.deepEqual(result.items.slice(0, 5).map(item => item.originalIndex), [2, 3, 0, 4, 1]);
+});
+
+test("narrative paths and file chunks keep only their provider vote", () => {
+    const result = order([
+        metadata("test_transcription_gate", "tests/test_gate.py"),
+        metadata("gate.py", "src/gate.py", "gate.py", "file"),
+        ...namedHelpers,
+    ], behaviorQuery);
+
+    assert.deepEqual(result.items.slice(-2).map(item => item.originalIndex), [0, 1]);
+});
+
 test("new publication metadata invalidates the identity cache", () => {
     const prior = metadata("tradeWorkflow", "src/actions.ts");
     const changed = metadata("drawWidget", "src/actions.ts");

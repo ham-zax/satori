@@ -454,3 +454,20 @@ Decision: variant B is rejected. Two variants regressed, so the stopping rule ap
 The prior and the within-file slot exchange interact. A next variant needs a diagnosis of that exchange first.
 A separate decision is also possible: accept g7 5→7 as a cost for f12 and f15. The fusion rank of g7 stays in the
 top ten, but only a fresh benchmark can show final ranks after grouping and disclosure.
+
+### Definition-fusion repair C, 27 October 2026
+
+The within-file slot exchange causes the g7 regression of variant B. The file chunks of binding_nomsgpack.go and binding.go
+(provider ranks 1 and 2) gain the prior and take fused slots 1 and 2. The exchange then gives each file's first slot to a
+name-matching definition (`StructValidator`, then `validate`), and both `validate` functions pass the target.
+
+Repair C gives the last-place prior to every candidate with metadata except narrative paths and file chunks. Configuration
+declarations and non-definition kinds now abstain like an unnamed implementation. Replay: f12 60→3, f15 39→2. The other
+20 replayed fusion ranks do not change. Two regression tests cover the new prior and both exclusions. Each one fails under
+its mutation (old rule, prior for all).
+
+Fresh held-out run, HEAD cc3ebe50 plus the patch in a separate worktree, same command and LateOn runtime as cohort-b.
+Wall time 1:56, peak RSS 1.28 GB. Evidence: `/home/hamza/.cache/satori-sfr-20261027/results`.
+hit@1 10/30 → 10/30, hit@5 20/30 → 21/30, hit@10 23/30 → 24/30. f12 changes from a miss to rank 3. No query loses rank.
+f15 stays a miss: fusion rank 2, then rank 48 after `preferImplementationCandidates`. That later demotion has a different
+owner and needs its own diagnosis. g5 is not repaired, because its target is a file chunk.

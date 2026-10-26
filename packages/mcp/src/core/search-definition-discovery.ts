@@ -10,7 +10,7 @@ export type DefinitionDiscoveryMetadata = Pick<SymbolRecord, "name" | "qualified
 
 const DEFINITION_KINDS = new Set(["function", "method", "constructor", "class", "struct", "enum", "interface", "type", "trait", "file"]);
 const QUERY_STOP_WORDS = new Set("the a an and or of to in for is are be does do where when how what which current against".split(" "));
-type DefinitionTerms = { terms: string[]; ownerTerms: string[] };
+type DefinitionTerms = { terms: string[]; ownerTerms: string[]; abstains: boolean };
 const termsByDefinition = new WeakMap<DefinitionDiscoveryMetadata, DefinitionTerms & { witness: string[] }>();
 
 export function allowsDefinitionDiscovery(input: {
@@ -47,14 +47,21 @@ function definitionTerms(metadata: DefinitionDiscoveryMetadata): DefinitionTerms
     const category = classifyPathCategory(relativePath);
     // Supporting evidence keeps its provider vote. It does not also get an
     // implementation-definition vote merely because it narrates the query.
-    const supporting = ["tests", "fixture", "docs", "generated", "example", "artifact", "landing"].includes(category)
-        || /(?:^|[._-])fixtures?(?:[._-]|$)/u.test(relativePath.split("/").pop() ?? "")
-        || isConfigurationPath(relativePath);
+    const narrative = ["tests", "fixture", "docs", "generated", "example", "artifact", "landing"].includes(category)
+        || /(?:^|[._-])fixtures?(?:[._-]|$)/u.test(relativePath.split("/").pop() ?? "");
+    const supporting = narrative || isConfigurationPath(relativePath);
     const validName = metadata.kind === "file" || /^[$_\p{L}][$_\p{L}\p{N}]*$/u.test(metadata.name);
     const ownerTerms = !supporting && DEFINITION_KINDS.has(metadata.kind) && validName
         ? [...tokenizeMetadataField(metadata.name), ...tokenizeMetadataField(metadata.qualifiedName)] : [];
     const terms = ownerTerms.length > 0 ? [...ownerTerms, ...tokenizeMetadataField(metadata.file)] : [];
-    const evidence = { witness, terms, ownerTerms };
+    // A definition the query cannot name keeps a last-place name prior: an
+    // implementation, a configuration declaration (pyproject.toml), or a
+    // non-definition kind (a module-level proxy). Without it, one provider vote
+    // falls behind every definition with two. Narrative paths would rise on
+    // provider fluency alone. File chunks would rise and then yield the slot to
+    // a same-file definition.
+    const abstains = !narrative && metadata.kind !== "file";
+    const evidence = { witness, terms, ownerTerms, abstains };
     termsByDefinition.set(metadata, evidence);
     return evidence;
 }
@@ -98,11 +105,11 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     if (queryTerms.length === 0) return { items: [...input.items], applied: false };
     const docs = input.items.map(item => {
         const metadata = input.metadata(item.originalIndex);
-        const evidence = metadata ? definitionTerms(metadata) : { terms: [], ownerTerms: [] };
+        const evidence = metadata ? definitionTerms(metadata) : { terms: [], ownerTerms: [], abstains: false };
         const { terms } = evidence;
         const counts = new Map<string, number>();
         for (const term of terms) counts.set(term, (counts.get(term) ?? 0) + 1);
-        return { item, metadata, ownerTerms: evidence.ownerTerms, counts, length: terms.length };
+        return { item, metadata, ownerTerms: evidence.ownerTerms, abstains: evidence.abstains, counts, length: terms.length };
     });
     const populated = docs.filter(doc => doc.length > 0);
     if (populated.length === 0) return { items: [...input.items], applied: false };
@@ -132,12 +139,10 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     const evidenceByItem = new Map(docs.map(doc => [doc.item, doc]));
     const score = (item: T) => {
         const evidence = evidenceByItem.get(item)!;
-        // A behavior description need not share the implementation's name.
-        // Missing definition evidence retains a bounded last-place prior for
-        // an actual implementation. It is not evidence against the body.
-        // Single-term lookup and supporting/file targets keep lexical semantics.
-        const abstentionRank = queryTerms.length > 1 && evidence.ownerTerms.length > 0
-            && evidence.metadata?.kind !== "file" ? scores.size + 1 : undefined;
+        // A behavior description need not share the declaration's name.
+        // Missing definition evidence is not evidence against the body.
+        // Single-term lookup keeps lexical semantics.
+        const abstentionRank = queryTerms.length > 1 && evidence.abstains ? scores.size + 1 : undefined;
         const rank = definitionRank.get(item) ?? abstentionRank;
         return 1 / (SEARCH_RRF_K + item.providerRank)
             + (rank !== undefined ? 1 / (SEARCH_RRF_K + rank) : 0);

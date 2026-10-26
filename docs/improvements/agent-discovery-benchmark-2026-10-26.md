@@ -289,3 +289,125 @@ The worker reports no tracked source edits, a clean worktree, and all owned
 sessions closed. Report and raw-artifact references:
 `/home/hamza/.cache/satori-remaining-benchmark-luna-20261026/report.md` and
 `/home/hamza/.cache/satori-remaining-benchmark-luna-20261026/report.json`.
+
+## WSL saved-artifact classification, 27 October 2026
+
+Continuation of SF-Q after the ARM handoff. Source HEAD is b83f9e00. No new benchmark runs.
+The original 30-query results and oracles remain unchanged: hit@1 10/30, hit@5 20/30, hit@10 23/30.
+
+Evidence root: `/home/hamza/.cache/satori-remaining-benchmark-luna-20261026/cohort-b/results`.
+`result.json` owns final scores. `harness-log.json` and saved response diagnostics own the stage observations.
+
+| Query | Final score rank | Provider rank | Fusion rank | Post-policy rank | Classification |
+|---|---:|---:|---:|---:|---|
+| g1 | 2 | 8 | 2 | 2 | Lower-ranked hit |
+| g2 | 4 | 1 | 6 | 6 | Lower-ranked hit |
+| g3 | 5 | 3 | 5 | 5 | Lower-ranked hit |
+| g4 | — | — | — | — | Candidate admission loss; target appears in dense retrieval and fusion |
+| g5 | — | 2 | 44 | 44 | Post-provider definition-fusion demotion |
+| g6 | — | 5 | 6 | 6 | Disclosure loss: explicit file_diversity_cap removal |
+| g7 | 5 | 15 | 5 | 5 | Lower-ranked hit |
+| g8 | 2 | 3 | 2 | 2 | Lower-ranked hit |
+| g9 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| g10 | 6 | 6 | 6 | 6 | Lower-ranked hit |
+| g11 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| g12 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| g13 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| g14 | 7 | 4 | 7 | 7 | Lower-ranked hit |
+| g15 | — | — | — | — | Zero target coverage; trace source and publication separately |
+| f1 | — | 18 | 13 | 13 | Ranking below disclosure cutoff |
+| f2 | 3 | 9 | 3 | 3 | Lower-ranked hit |
+| f3 | 3 | 1 | 3 | 3 | Lower-ranked hit |
+| f4 | 3 | 3 | 2 | 2 | Lower-ranked hit |
+| f5 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| f6 | 6 | 4 | 6 | 6 | Lower-ranked hit |
+| f7 | 2 | — | — | — | Lower-ranked hit |
+| f8 | 3 | 4 | 3 | 3 | Lower-ranked hit |
+| f9 | 1 | 5 | 1 | 1 | Rank-1 hit |
+| f10 | 1 | — | — | — | Rank-1 hit |
+| f11 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| f12 | — | 1 | 60 | 60 | Post-provider definition-fusion demotion |
+| f13 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| f14 | 1 | 1 | 1 | 1 | Rank-1 hit |
+| f15 | — | 2 | 39 | 49 | Definition-fusion demotion, then implementation preference |
+
+The seven top-10 misses separate into one zero-target query, three post-provider ranking losses,
+one explicit diversity removal, one candidate-admission loss, and one lower-ranked result.
+No query with target chunks is proven wholly absent from raw retrieval by this saved evidence.
+A null rank in a capped trace means not recorded, not absent from every candidate pool.
+
+### Demonstrated boundaries
+
+- g5: provider rank 2 becomes definition-fusion rank 44. f12: provider rank 1 becomes fusion rank 60.
+- f15: provider rank 2 becomes fusion rank 39, then post-policy rank 49.
+- The saved `rerank.orderAuthority` is `definition_fusion_order` for these cases.
+- `search-rerank-execution.ts:applyRerankOrder` records provider output, applies `fuseDefinitionDiscovery`, then records fusion output.
+- `preferImplementationCandidates` runs after that trace, explaining the distinct second boundary for f15.
+- The definition vote owner is `packages/mcp/src/core/search-definition-discovery.ts:fuseDefinitionDiscovery`.
+  The traces establish a proximate demotion, not a proven faulty policy or a safe replacement.
+- g6: target chunk `chunk_dc89fa59890fecbb` reaches grouped rank 6. The saved removal reason is `file_diversity_cap`.
+  `search-grouping.ts` owns this selection policy. The first three disclosed routergroup.go results are BasePath,
+  calculateAbsolutePath, and Any. The correct Group method is omitted.
+- g4: dense target ranks 80 and 58, MCP fusion rank 101, no recorded reranker-input target, grouped rank 91.
+  The recorded reranker input contains 128 candidates. Do not call this missing index coverage.
+- f1: provider rank 18 becomes combined rank 13 and remains outside the disclosed top ten.
+
+### Measurement limits and reporting
+
+The stage matcher accepts chunk IDs and evidence-line overlap. The final scorer checks displayed paths and symbol names.
+Those are different contracts. For f4, a class span includes the save_session evidence line, so the stage matcher reports
+rank 2 for SecureCookieSessionInterface. The final scorer correctly reports the actual save_session method at rank 3.
+This difference does not justify changing the frozen oracle or silently replacing final scores.
+
+The selected case file is cases-heldout.json, while the historical harness labels Gin and Flask as tune.
+The source defaults split from repository name in harness-logger.mjs. The control cohort is a separate default,
+not proof that these questions belong to a different case pack. Treat original split metadata as unreliable.
+Model provenance and the false zero-target exclusion warning were repaired on ARM.
+Preserve the original artifact values and the 30-query denominator. No fresh provider comparison exists.
+
+### Decision
+
+Decision: no search code change for SF-Q. Classification passes from saved evidence.
+Policy changes need a separate falsifiable repair and fixed-input validation.
+SF-C now investigates g15 using the saved policy, source snapshot, and navigation manifest.
+
+### g15 diagnosis: semantic input excluded from search
+
+SF-C checks the original Gin publication, not a rebuilt index. The pinned go.mod exists and has 1,600 bytes.
+Its SHA-256 is `9b7bd3c7674e6154d5d5fe93dc51c79e4b225302473e64fb94b421555ae69665`.
+The same hash appears in the publication's source.json. There are 124 source observations, 123 navigation files,
+and no unprocessed paths. go.mod is the only source-observed path absent from navigation.
+The original target set is empty, and the original navigation manifest has no go.mod entry.
+This is not evidence of a lost parser result or a partial publication.
+
+The producer path accounts for that partition:
+
+1. `assets/semantic-engine/semantic-languages.json` declares **/go.mod as a Go auxiliary with role manifest.
+2. `semantic/descriptor.ts:DefaultSemanticLanguageRegistry.isAuxiliaryPath` classifies the path from that declaration.
+3. `config/index-policy.ts:isObservableFileObservationByPolicy` admits auxiliary files for source observation.
+4. `isIndexableFileObservationByPolicy` returns false for auxiliaries before checking extensions or exact filenames.
+5. `core/indexing-pipeline.ts:readIndexableFileObservationInsideRoot` returns null when that search policy rejects the path.
+
+A direct check of the actual policy functions returns observable=true, searchable=false under both default
+and all-text profiles, with zero content-probe reads. README.md remains searchable as a neighboring case.
+The measured source commit 2f52b298 contains the same early exclusion. This is not a later ARM change.
+
+The earlier SF-D probe established that the exact-filename catalog includes go.mod and that a synthetic text
+chunker can produce a chunk. Those facts remain true, but they do not prove final search admission.
+The semantic-auxiliary guard runs first. The complete policy check corrects that earlier implication.
+
+Causal status: root for the absent search coverage under the measured contract. The auxiliary declaration
+and the explicit search/observation partition regenerate this outcome. Default ignore patterns and source
+absence are excluded by the original source observation and saved default policy. The guard acts before
+parsing, so changing the parser or reranker cannot restore this file. A catalog-only admission check is an
+invalid counterfactual because it omits the authoritative auxiliary guard.
+
+Decision: no product change in SF-C. The current contract deliberately excludes auxiliary files from search.
+`docs/improvements/manifest-file-search.md` already records this limitation and defers its redesign.
+`generation/auxiliary-publication.test.ts` requires the analogous Cargo manifest partition.
+The proposed feature must reconcile full/delta indexing, checkpoints, ownership, and file/config ranking.
+Do not remove one admission guard or weaken the 30-query oracle as a local fix.
+
+SF-C reaches review with the diagnosis established. The capability gap remains, with its existing deferred
+status. The original hit@1 10/30 and hit@5 20/30 scores remain unchanged. No new benchmark, source repair,
+index mutation, model download, or deployment occurs during this investigation.

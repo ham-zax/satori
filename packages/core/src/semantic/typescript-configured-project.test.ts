@@ -195,8 +195,13 @@ test('configured TypeScript project records and resolves a representative projec
                 appSource,
                 appText.indexOf('Shared().run'),
             )[0];
-            assert.equal(aliasDefinition?.kind, 'alias');
-            assert.equal(aliasDefinition?.fileName.replace(/\\/g, '/'), appSource.replace(/\\/g, '/'));
+            assert.ok(aliasDefinition);
+            assert.equal(aliasDefinition.kind, 'ImportSpecifier');
+            assert.equal(aliasDefinition.unresolvedAlias, true);
+            assert.equal(aliasDefinition.isAlias, true);
+            assert.equal(aliasDefinition.name, 'Shared');
+            assert.equal(appText.slice(aliasDefinition.span.start, aliasDefinition.span.end), 'Shared');
+            assert.equal(aliasDefinition.fileName.replace(/\\/g, '/'), appSource.replace(/\\/g, '/'));
             assert.equal(unbuiltSession.projectReferences.length, 1);
         } finally {
             unbuiltSession.dispose();
@@ -221,6 +226,15 @@ test('configured TypeScript project records and resolves a representative projec
                 definitionFile(builtSession, appSource, appText, 'Shared().run'),
                 path.join(root, 'lib/dist/index.d.ts').replace(/\\/g, '/'),
             );
+            const builtDefinition = builtSession.getDefinitionAtPosition(
+                appSource,
+                appText.indexOf('Shared().run'),
+            )[0];
+            assert.ok(builtDefinition);
+            assert.equal(builtDefinition.name, 'Shared');
+            assert.equal(builtDefinition.kind, 'ClassDeclaration');
+            assert.equal(builtDefinition.isAlias, true);
+            assert.ok(builtDefinition.span.end > builtDefinition.span.start);
         } finally {
             builtSession.dispose();
         }

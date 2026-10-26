@@ -27,6 +27,15 @@ export interface TypeScriptConfiguredProject {
     readonly identity: TypeScriptConfiguredProjectIdentity;
 }
 
+export interface TypeScriptDefinitionInfo {
+    readonly fileName: string;
+    readonly name: string;
+    readonly kind: string;
+    readonly span: { readonly start: number; readonly end: number };
+    readonly isAlias: boolean;
+    readonly unresolvedAlias: boolean;
+}
+
 export interface TypeScriptSemanticWalkMeasurement {
     readonly fileName: string;
     readonly callCount: number;
@@ -242,20 +251,33 @@ export class TypeScriptLanguageServiceSession {
         return this.session.resolveModuleName(containingFile, specifier, mode);
     }
 
-    getDefinitionAtPosition(fileName: string, position: number): readonly { fileName: string; kind: string }[] {
+    getDefinitionAtPosition(fileName: string, position: number): readonly TypeScriptDefinitionInfo[] {
         const program = this.getProgram();
         const source = program.getSourceFile(normalizedPath(fileName));
         if (!source) return [];
+        if (!Number.isSafeInteger(position) || position < 0 || position > source.text.length) return [];
+        const touching = ts.getTouchingPropertyName(source, position);
+        if (!ts.isIdentifier(touching) && !ts.isPrivateIdentifier(touching) && !ts.isStringLiteral(touching)) return [];
         const checker = program.getProject().checker;
-        const node = ts.getTokenAtPosition(source, position);
-        const symbol = checker.getSymbolAtLocation(node);
+        const symbol = checker.getSymbolAtPosition(source.fileName, position);
         if (!symbol) return [];
-        const alias = (symbol.flags & ts.SymbolFlags.Alias) !== 0;
-        const target = alias ? checker.getAliasedSymbol(symbol) : symbol;
-        const declarations = checker.isUnknownSymbol(target) ? symbol.declarations : target.declarations;
-        return declarations.flatMap(handle => {
+        const isAlias = (symbol.flags & ts.SymbolFlags.Alias) !== 0;
+        const aliased = isAlias ? checker.getAliasedSymbol(symbol) : undefined;
+        const unresolvedAlias = aliased !== undefined && checker.isUnknownSymbol(aliased);
+        const target = aliased !== undefined && !unresolvedAlias ? aliased : symbol;
+        return target.declarations.flatMap(handle => {
             const declaration = handle.resolve();
-            return declaration ? [{ fileName: declaration.getSourceFile().fileName, kind: checker.isUnknownSymbol(target) && alias ? 'alias' : 'unknown' }] : [];
+            if (!declaration) return [];
+            const declarationSource = declaration.getSourceFile();
+            const spanNode = ts.getNameOfDeclaration(declaration) ?? declaration;
+            return [{
+                fileName: normalizedPath(declarationSource.fileName),
+                name: target.name,
+                kind: ts.formatSyntaxKind(declaration.kind),
+                span: { start: spanNode.getStart(declarationSource), end: spanNode.end },
+                isAlias,
+                unresolvedAlias,
+            }];
         });
     }
 

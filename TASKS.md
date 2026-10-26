@@ -564,3 +564,65 @@ proposal only. No global rule, CI policy, compatibility fallback or dependency i
 All implementation/benchmark commands are finished. Handoff follow-up task is interrupted
 with no pending child runs. Final documentation/ledger commit follows the two reviewed code
 commits. No push or release occurs in this closeout.
+
+
+## Remaining repair run, 26 October 2026
+
+User authorizes deciding and implementing the two partial repairs and two open failures,
+then benchmarking. Parent reads the request as TypeScript proof evidence, authority labels,
+extra investigation calls and the Potion startup timeout. Proof evidence and labels share one
+owner and are merged. Broader benchmark coverage uses existing held-out/production corpora,
+not new invented oracles. Parent performs final review under the latest explicit instruction.
+TaskStartSnapshot: clean master 42cadef1. No processes or agents remain from the previous run.
+Execution update: user authorizes one T3 benchmark worker, GPT-6-luna at max effort.
+Dispatch budget one, no nested delegation or agent review. Parent keeps implementation and
+final review. Existing TASKS.md is the plan and state carrier. TDD mode off; deterministic failure regressions follow repository policy.
+No package version bumps, new dependencies/services, CI bypass, oracle weakening, model downloads,
+client-setting changes or live index deletion. Internal evidence identity changes only if needed.
+Changes follow demonstrated failure paths. No timeout increase without startup timing evidence.
+Stop a repair branch after two unsuccessful repairs and re-establish its mechanism.
+
+| id | status | depends | owner | acceptance | evidence |
+| FX-P | review | - | parent | Reproduce Potion readiness failure using the packed helper/model path, measure three runs with load/memory, identify the responsible boundary, and repair it with regression evidence. Packed compiler API and full release smoke pass, or report an unreproduced/environmental limit without inventing a fix. Refs: packages/core/src/embedding/potion-embedding.ts and tests, packages/cli/scripts/release-smoke.ts, existing /tmp/satori-pr-p0-packed-smoke.log. | Default startup budget is 5000 ms. The previous packed smoke reaches this timeout after native TypeScript checks pass. Cause unknown. Startup regression fails before repair and passes after it. All 29 Potion tests pass. Updated core build passes. Full post-repair packed smoke passes, including actual TypeScript API, Potion execution and LateOn native checks. Runtime size 963995060 bytes stays below the existing budget. No timeout increase. Logs in satori-remaining-repairs-20261026. |
+| FX-S | review | - | parent | Preserve supported alias/optional/field/constructor/inheritance/interface/branch proof facts from native compiler observations and classify authority correctly. Keep immutable common and held-out oracles, exact targets and conservative abstention. Add only justified proof kinds at the shared owner and persistence validator if required. Focused provider/converter/validation/publication tests pass, with zero wrong targets/false resolutions. Record every remaining unsupported expectation. Refs: TypeScript provider/converter, relationships/resolution.ts and resolution-claim-validation.ts, qualification adapter/corpora. | Baseline decisions 12/12, evidence 4/12, strict 3/12. Existing local allocations confirming static targets retain direct_binding. Immutable common corpus passes 12/12 strict/evidence/authority. Existing combined common+held-out/production corpus passes 21/21 for decisions, strict evidence, strategy and authority, with zero false resolutions/wrong targets. Typed proof kinds are additive and validated at the shared owner. Constructor-field links abstain for overwritten/uninitialized fields; mutable origin alternatives remain candidate-only with explicit unknown reachability. Internal provider identity v12 invalidates old sidecars. 37 publication/state/validation tests and 22 final focused tests pass; workspace check passes before final additive mutable-proof detail. Canonical dynamic abstention becomes unresolved while non-indexable unsupported remains unsupported, covered by both positive and negative assertions. |
+| FX-T | review | - | parent | Inspect the preserved freshness attempt with 16 calls and 265410 ms. Separate necessary verification, missing tool evidence and model/provider overhead. Repair only an evidenced Satori disclosure/navigation/guidance gap, preserving query quality and correctness. Compare before/after tool evidence on the same input and retain an unchanged control. Refs: priority snapshot suite opencode-2026-10-26T07-30-15-360Z-24baa346, search response owners and recommendedNextAction contracts. | Extra calls are observed. No cause is established. Do not cap calls or force final answers to improve the benchmark. Preserved transcript proves two retry calls fail at Potion readiness and one range read mixes codebaseRoot with top-level lines. First gap is repaired in FX-P. The read_file root description now explicitly separates exact-symbol continuation from ordinary ranges; runtime validation, authorization and outputs are unchanged. Other later calls inspect helper/constructor/caller source and are not declared unnecessary solely from the string-match milestone. No ranking change, forced answer or tool-call cap is added. Existing read-file root contract and 21 adapter/scorer tests pass. Agent-level improvement remains to measure. |
+| FX-B | in-progress | FX-P, FX-S, FX-T | parent prepares; T3 GPT-6-luna max executes | Build the checked implementation once, freeze source/runtime, run existing common and held-out semantic corpora and final task manifest version 4 in paired agent runs with the same model/options as the prior max run. Also run the existing 30-query held-out search corpus on pinned gin/Flask sequentially, using task-owned state and installed offline models. Keep its retrieval metrics separate from autonomous-agent metrics. Report per-task correctness, complete timing ranges, calls/tokens, machine load/memory, run identity and failures. Do not pool unlike metrics or claim a causal speedup across changed tasks. | Prior valid max run: Satori 3/3 exact and 3/3 freshness, native 3/3 and 2/3. Final manifest wording is unmeasured. |
+| FX-R | open | FX-B | parent | Review the complete repair personally, run necessary focused checks, commit only checked repairs and report residual limits. Preserve user work and original scores. Agents never mark done. | Latest user instruction retains parent review and commit ownership. No delegated reviewer. |
+
+
+FX-P diagnosis: baseline full packed smoke passes when run serially on the quiet host.
+Three fresh-process source-helper runs have median 363.025 ms startup and peak 208504 KiB RSS.
+Three matching TS-API-first runs have median 346.823 ms and peak 208364 KiB RSS. Machine load
+ranges 0.43-0.56 (one minute). Identical helper SHA256 at source and installed paths excludes
+binary drift for these probes. Logs: satori-remaining-repairs-20261026/potion-sequence-probes.log.
+The longest freshness attempt contains two actual Potion readiness errors before search succeeds,
+so retry overhead is a demonstrated component of FX-T, not merely model over-investigation.
+A deterministic worker-marker/parent-stall regression fails before repair with the same readiness
+error even though a complete valid frame reaches the pipe before the deadline. A silent-worker
+control passes its expected rejection. Existing request-expiry code already handles this Node
+poll ordering. Decision: code-change at Potion startup expiry, using one setImmediate poll catchup
+and current-child/starting-state guards. No timeout increase, retry loop or stderr disclosure.
+This closes the reproduced false-expiry class. The historical smoke's exact event-loop timing
+was not recorded, so that particular occurrence is not claimed as causally proved.
+
+
+Commit and delegation checkpoint: user requests committing checked repairs and delegating
+benchmark work, then prefers Luna max over OpenCode DeepSeek max as the worker. Live catalog
+advertises codex/gpt-6-luna with reasoningEffort=max. The measured autonomous agent stays
+DeepSeek V4.1 max to preserve comparison settings; this is distinct from the Luna coordinator.
+Fit gate: existing runners, frozen task manifests and prior raw outputs define the workload;
+valid 12-record agent results and the unchanged 30-query held-out scorer are executable checks;
+a wrong preparation can waste a run or invalidate evidence, so parent commits/builds first;
+one isolated worker can execute the sequential benchmarks while parent owns review.
+Final workspace check passes after all source edits, and full build passes. Required reports
+remain bounded: 21/21 semantic cases does not mean all TypeScript programs are proven. Full
+packed smoke passes after the startup repair. Source commits below preserve package versions.
+
+
+Checked implementation commits: 7c69c685 fixes queued Potion readiness versus startup expiry;
+7c69c685 retains the same configured timeout. The subsequent semantic commit preserves typed
+provenance and canonical authority, with strict/evidence/authority 21/21 and zero false targets.
+A separate read_file description commit distinguishes exact-symbol and range parameters.
+Final workspace check and build are in satori-remaining-repairs-20261026/{final-check,final-build}.log.
+Full packed smoke passes in packed-smoke-after.log. The benchmark worker must use the final
+committed source and current built runtime, with no edits during measurement.

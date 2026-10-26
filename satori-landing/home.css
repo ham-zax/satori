@@ -1496,6 +1496,12 @@ h3.minor {
 
 .hero-watch { margin-top: 1.25rem; }
 
+/* Block flow so a narrow screen wraps the label as text and keeps the arrow on the last line. */
+@media (max-width: 720px) {
+  .hero-watch { display: block; width: fit-content; padding-block: 0.6rem; line-height: 1.5; text-wrap: balance; }
+  .demo-video { margin-bottom: 1.5rem; }
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1080px) {
   .hero {
@@ -1934,4 +1940,152 @@ h3.minor {
 
 @media (max-width: 560px) {
   .plain-steps { grid-template-columns: 1fr; }
+}
+
+/* ---------- Section panels ----------
+   Every chapter is a rounded panel with its own muted hue, so the start of
+   each section is visible at a glance. --h is the OKLCH hue of the panel.
+   The same panels apply on desktop and phone; the phone block below only
+   tightens spacing and turns stacked cards into rows. */
+main { counter-reset: chapter; }
+.section[data-chapter] { counter-increment: chapter; }
+
+.hero           { --h: 28; }
+#plain          { --h: 75; }
+#how-it-works   { --h: 265; }
+#demo           { --h: 200; }
+#why            { --h: 320; }
+#ranking        { --h: 50; }
+#use-cases      { --h: 150; }
+#free           { --h: 235; }
+#quickstart     { --h: 28; }
+#maintenance    { --h: 180; }
+
+.hero,
+.section[data-chapter] {
+  position: relative;
+  isolation: isolate;
+  margin: 1rem 0;
+  padding: clamp(3rem, 6vw, 5rem) clamp(1.5rem, 5vw, 4.5rem) clamp(2.75rem, 5.5vw, 4.5rem);
+  /* clip, not hidden: hidden would make the panel a scroll container and
+     break the sticky heading in "How it works". */
+  overflow: clip;
+  border: 1px solid oklch(0.45 0.06 var(--h) / 0.45);
+  border-radius: 32px;
+  background:
+    radial-gradient(130% 55% at 50% 0%, oklch(0.36 0.08 var(--h) / 0.55), transparent 70%),
+    linear-gradient(180deg, oklch(0.25 0.045 var(--h)), oklch(0.19 0.025 var(--h)));
+}
+
+.hero { margin-top: 0.75rem; }
+
+/* Halftone dots that fade out under the heading. */
+.hero::after,
+.section[data-chapter]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, oklch(0.9 0.06 var(--h) / 0.13) 0.9px, transparent 1.4px);
+  background-size: 7px 7px;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent min(32%, 420px));
+  mask-image: linear-gradient(180deg, #000, transparent min(32%, 420px));
+  pointer-events: none;
+}
+
+.section[data-chapter]::before {
+  content: counter(chapter, decimal-leading-zero) " \00B7  " attr(data-chapter);
+  content: counter(chapter, decimal-leading-zero) " \00B7  " attr(data-chapter) / "";
+  display: block;
+  grid-column: 1 / -1;
+  margin-bottom: 1.1rem;
+  color: oklch(0.82 0.1 var(--h));
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.contact-section { margin-top: 2rem; }
+
+/* Quickstart: the section is the panel, so its inner frame goes flat. */
+.quickstart {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* Results and stack: grids with shared borders, cells in the panel hue. */
+.rank-results, .stack-grid {
+  gap: 1px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--line-strong);
+  overflow: hidden;
+}
+.rank-results article, .stack-grid li {
+  padding: 1.25rem 1.2rem;
+  border: 0;
+  border-radius: 0;
+  background: oklch(0.2 0.03 var(--h));
+}
+
+@media (max-width: 720px) {
+  .hero,
+  .section[data-chapter] {
+    margin: 0.75rem -0.5rem;
+    padding: 2.5rem 1.25rem 2.25rem;
+    border-radius: 28px;
+  }
+
+  .hero { margin-top: 0.5rem; padding-top: 2.25rem; }
+  .contact-section { margin-top: 1.5rem; }
+
+  /* Bento: one featured card, then divider rows. */
+  .bento { grid-template-columns: 1fr; gap: 0; }
+  .bento > .tile { grid-column: 1 / -1; }
+  .tile-speed { min-height: 0; margin-bottom: 1rem; padding: 1.4rem; }
+  .bento > .tile:not(.tile-speed) {
+    padding: 1.2rem 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+  }
+
+  /* Ranking steps: numbered rows. */
+  .rank-pipeline { grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .rank-pipeline li {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    gap: 0.3rem 0.75rem;
+    padding: 1.1rem 0;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+  }
+  .rank-pipeline li::before { grid-row: 1 / span 2; font-size: 0.95rem; line-height: 1.6; }
+  .rank-pipeline b, .rank-pipeline span { grid-column: 2; }
+
+  .rank-results, .stack-grid { grid-template-columns: 1fr 1fr; }
+  .rank-results article, .stack-grid li { padding: 1.1rem 1rem; }
+  .rank-results .rank-figure { font-size: clamp(1.35rem, 6.4vw, 1.75rem); white-space: normal; }
+  .rank-results p { font-size: 0.84rem; }
+
+  /* FAQ: the lead answer stays a card, the rest are rows. */
+  .faq { grid-template-columns: 1fr; gap: 0; }
+  .faq-lead { margin-bottom: 1rem; }
+  .faq-item:not(.faq-lead) {
+    padding: 1.1rem 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+  }
+
+  .section-actions .btn { width: 100%; }
 }

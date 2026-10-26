@@ -35,7 +35,7 @@ test('catalog filenames are admitted except secret-bearing env files', () => {
     assert.ok(getSupportedFilenamesForCapability('search').includes('.env'));
     assert.equal(exact.has('.env'), false);
     assert.equal(exact.has('.env.local'), false);
-    for (const filename of ['CMakeLists.txt', 'BUILD.bazel', 'Dockerfile', 'Jenkinsfile']) {
+    for (const filename of ['CMakeLists.txt', 'BUILD.bazel', 'Containerfile', 'Dockerfile', 'Jenkinsfile', 'Kustomization']) {
         assert.ok(exact.has(filename), filename);
     }
     const minimalExact = new Set(getIndexableExactFilenames(new Set(getSupportedExtensionsForIndexProfile('minimal'))));

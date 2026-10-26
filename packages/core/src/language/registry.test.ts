@@ -138,6 +138,40 @@ test('language registry routes special filenames to their languages without call
     }
 });
 
+test('language registry routes Containerfile, Terraform variable files, and Kustomization', () => {
+    assert.equal(getLanguageIdFromFilename('Containerfile'), 'dockerfile');
+    assert.equal(getLanguageIdFromFilename('deploy/Containerfile'), 'dockerfile');
+    assert.equal(getLanguageIdFromExtension('.tfvars'), 'hcl');
+    assert.equal(getLanguageIdFromExtension('tofu'), 'hcl');
+    assert.equal(getLanguageIdFromFilename('infra/prod.tfvars'), 'hcl');
+    assert.equal(getLanguageIdFromFilename('infra/main.tofu'), 'hcl');
+    assert.equal(getLanguageIdFromFilename('Kustomization'), 'kustomize');
+    assert.equal(getLanguageIdFromFilename('deploy/Kustomization'), 'kustomize');
+
+    assert.equal(pathDeterminedLanguageId('deploy/Containerfile'), 'dockerfile');
+    assert.equal(pathDeterminedLanguageId('infra/prod.tfvars'), 'hcl');
+    assert.equal(pathDeterminedLanguageId('infra/main.tofu'), 'hcl');
+    assert.equal(pathDeterminedLanguageId('deploy/Kustomization'), 'kustomize');
+    assert.equal(isSearchableLanguageSource('deploy/Containerfile', ''), true);
+    assert.equal(isSearchableLanguageSource('infra/main.tofu', ''), true);
+    assert.equal(isSearchableLanguageSource('deploy/Kustomization', ''), true);
+
+    // The new routes inherit their language's existing tier; they add no navigation support.
+    assert.equal(isLanguageCapabilitySupportedForFilename('Containerfile', 'search'), true);
+    assert.equal(isLanguageCapabilitySupportedForFilename('Containerfile', 'symbols'), false);
+    assert.equal(isLanguageCapabilitySupportedForFilename('Kustomization', 'search'), true);
+    assert.equal(isLanguageCapabilitySupportedForFilename('Kustomization', 'symbols'), false);
+    for (const extension of ['.tfvars', '.tofu']) {
+        for (const capability of ['search', 'symbols', 'owner', 'fileOutline', 'callGraphBuild'] as const) {
+            assert.equal(
+                isLanguageCapabilitySupportedForExtension(extension, capability),
+                isLanguageCapabilitySupportedForExtension('.hcl', capability),
+                `${extension} ${capability}`,
+            );
+        }
+    }
+});
+
 test('language registry exposes one canonical capability set', () => {
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'symbols'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'callGraphBuild'), true);

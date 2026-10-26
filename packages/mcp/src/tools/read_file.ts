@@ -52,7 +52,7 @@ export const readFileInputSchema = z.object({
         "ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected).",
     ),
     codebaseRoot: absoluteFilesystemPathSchema(
-        "Originating indexed root for an exact-symbol request. Preserve this root from the recommendation or symbol-context response when continuing a read.",
+        "Originating indexed root for open_symbol requests only. Preserve it when continuing an exact-symbol read. For start_line/end_line range reads, omit codebaseRoot and open_symbol.",
     ).optional(),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive). An end_line past the end of the file reads to the last line."),

@@ -497,10 +497,9 @@ export async function resolveRepoTargetChunkIds(stateRoot, repoDir, queries) {
             }
         }
         if (chunkIds.size === 0) {
-            // A judge target that does not exist in this index can never be
-            // retrieved, so the query is unanswerable rather than a miss. Aborting
-            // the run would discard every other query's result over a property of
-            // the judge, so record it loudly and let the scorer exclude it.
+            // Zero target matches are a coverage diagnostic, not grounds to
+            // remove a query from the scored denominator. Missing coverage must
+            // not improve reported quality.
             unanswerableQueryIds.push(q.id);
         }
         targetMap.set(q.id, chunkIds);
@@ -508,7 +507,7 @@ export async function resolveRepoTargetChunkIds(stateRoot, repoDir, queries) {
     if (unanswerableQueryIds.length > 0) {
         console.warn(
             `[harness] WARNING: ${unanswerableQueryIds.length} query target(s) resolved to zero chunks in ${repoDir}: `
-            + `${unanswerableQueryIds.join(', ')}. These are unanswerable against this index and are excluded from scored metrics.`,
+            + `${unanswerableQueryIds.join(', ')}. These queries remain in the scored denominator. Inspect index coverage before attributing a retrieval miss.`,
         );
     }
     return targetMap;

@@ -948,9 +948,9 @@ export class PublicationStore {
             ))) continue;
             if (!this.reserveForGc(canonicalRoot, ref.id)) continue;
             try {
-                assertMutationCurrent();
-                await deleteVectorCollection(collectionName, assertMutationCurrent);
-                assertMutationCurrent();
+                // Remove the descriptor before the collection: a failure between
+                // the two steps then leaves an unowned collection, never a
+                // readable descriptor whose collection is gone.
                 this.mutationCoordinator.publishWhileCurrent(lease, () => {
                     if (this.readCurrentPointer(canonicalRoot)?.publicationId === ref.id) {
                         throw new Error(`Publication '${ref.id}' became current during GC.`);
@@ -960,6 +960,8 @@ export class PublicationStore {
                     }
                     this.removeGeneration(canonicalRoot, ref.id);
                 });
+                assertMutationCurrent();
+                await deleteVectorCollection(collectionName, assertMutationCurrent);
                 removedCollections.push(collectionName);
             } finally {
                 this.releaseGcReservation(canonicalRoot, ref.id);

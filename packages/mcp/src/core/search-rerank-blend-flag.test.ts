@@ -112,9 +112,10 @@ function buildHost(results: FixtureCandidate[], reranker: Reranker | null): Sear
 function buildReranker(
     buildResults: (documents: readonly string[], candidateIds: readonly string[]) => RerankResult[],
     onCall?: (candidateIds: readonly string[]) => void,
+    provider = "voyage",
 ): Reranker {
     return {
-        getIdentity: () => ({ provider: "voyage", model: "test", profile: "blend" }),
+        getIdentity: () => ({ provider, model: "test", profile: "blend" }),
         rerank: async (_query, documents, options) => {
             const candidateIds = options?.identities || [];
             onCall?.(candidateIds);
@@ -183,8 +184,8 @@ const RESULTS = [
     candidate("d", "src/d.ts", 0.6),
 ];
 
-async function run(flags?: Record<string, boolean>) {
-    const reranker = buildReranker(permutedResults);
+async function run(flags?: Record<string, boolean>, provider = "voyage") {
+    const reranker = buildReranker(permutedResults, undefined, provider);
     const outcome = await runSearchExecution(
         buildInput(flags),
         buildHost(RESULTS, reranker),
@@ -202,6 +203,45 @@ test("rerank_blend is off at default flags and the provider order wins", async (
     assert.equal(outcome.orderAuthority, "reranker_order");
     // With the blend off the provider order is published verbatim, which for
     // PROVIDER_INDEX_ORDER = [2, 0, 3, 1] is c, a, d, b.
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["c", "a", "d", "b"],
+    );
+});
+
+test("LateOn enables rerank_blend by default and publishes the blended order", async () => {
+    const outcome = await run(undefined, "lateon");
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["a", "c", "b", "d"],
+    );
+});
+
+test("an explicit rerank_blend:false is honoured for LateOn", async () => {
+    const outcome = await run({ rerank_blend: false }, "lateon");
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["c", "a", "d", "b"],
+    );
+});
+
+test("SATORI_SEARCH_FLAGS=no-rerank_blend is honoured for LateOn", async () => {
+    const previous = process.env.SATORI_SEARCH_FLAGS;
+    try {
+        process.env.SATORI_SEARCH_FLAGS = "no-rerank_blend";
+        const outcome = await run(undefined, "lateon");
+        assert.deepEqual(
+            outcome.scored.map((entry) => entry.result.candidateId),
+            ["c", "a", "d", "b"],
+        );
+    } finally {
+        if (previous === undefined) delete process.env.SATORI_SEARCH_FLAGS;
+        else process.env.SATORI_SEARCH_FLAGS = previous;
+    }
+});
+
+test("a non-LateOn provider keeps rerank_blend off by default", async () => {
+    const outcome = await run(undefined, "voyage");
     assert.deepEqual(
         outcome.scored.map((entry) => entry.result.candidateId),
         ["c", "a", "d", "b"],

@@ -15,8 +15,10 @@ export type SearchFlags = {
     prf?: boolean;
     /**
      * Blends the provider rank with the fused-pool rank when ordering
-     * reranker results. Off by default: without it the provider order wins
-     * outright.
+     * reranker results. On by default for the LateOn provider, which measured
+     * better with it on; off for every other provider. Without it the provider
+     * order wins outright. An explicit caller value or SATORI_SEARCH_FLAGS
+     * always wins.
      */
     rerank_blend?: boolean;
     /**
@@ -103,13 +105,23 @@ function applyFlagToken(flags: Required<SearchFlags>, token: string): void {
     flags[name] = !lower.startsWith('no-') && !lower.startsWith('no_');
 }
 
+export interface SearchFlagProviderDefaults {
+    /**
+     * Provider-derived default for `rerank_blend`. The compile-time default is
+     * false; an explicit value from SATORI_SEARCH_FLAGS or the caller still
+     * wins.
+     */
+    readonly rerankBlend?: boolean;
+}
+
 /**
  * Resolve the effective flag set.
  *
- * Precedence: compile-time defaults, then SATORI_SEARCH_FLAGS, then explicit
- * caller flags. An explicit object only overwrites the keys it names, so a
- * partial object still leaves the remaining defaults in effect -- callers that
- * need the true runtime set must read the returned object, not the input.
+ * Precedence: compile-time defaults, then the optional provider default, then
+ * SATORI_SEARCH_FLAGS, then explicit caller flags. An explicit object only
+ * overwrites the keys it names, so a partial object still leaves the remaining
+ * defaults in effect -- callers that need the true runtime set must read the
+ * returned object, not the input.
  *
  * The only accepted explicit shapes are a record of booleans, or absent
  * (undefined/null). Anything else throws naming the offending type rather than
@@ -118,8 +130,16 @@ function applyFlagToken(flags: Required<SearchFlags>, token: string): void {
  * type whether its input was understood. SATORI_SEARCH_FLAGS remains the one
  * string-encoded path, and it is the harness that sets it.
  */
-export function resolveSearchFlags(explicitFlags?: Record<string, boolean> | null): SearchFlags {
-    const flags: Required<SearchFlags> = { ...DEFAULT_SEARCH_FLAGS };
+export function resolveSearchFlags(
+    explicitFlags?: Record<string, boolean> | null,
+    providerDefaults?: SearchFlagProviderDefaults,
+): SearchFlags {
+    const flags: Required<SearchFlags> = {
+        ...DEFAULT_SEARCH_FLAGS,
+        ...(providerDefaults?.rerankBlend === undefined
+            ? {}
+            : { rerank_blend: providerDefaults.rerankBlend }),
+    };
     const envStr = (typeof process !== 'undefined' && process.env?.SATORI_SEARCH_FLAGS) || '';
     if (envStr) {
         for (const f of envStr.split(',')) applyFlagToken(flags, f);

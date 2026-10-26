@@ -550,7 +550,12 @@ export function applyRerankOrder(args: {
                 })),
             );
         }
-        const executionFlags = resolveSearchFlags(input.flags);
+        const executionFlags = resolveSearchFlags(input.flags, {
+            // LateOn is the only provider measured with the blend on. The
+            // provider default still loses to SATORI_SEARCH_FLAGS and to an
+            // explicit caller value.
+            rerankBlend: rerankerIdentity(host)?.provider === "lateon",
+        });
         let itemsForPolicy = [...validatedItems];
         let definitionFusionApplied = false;
         if (allowsDefinitionDiscovery({

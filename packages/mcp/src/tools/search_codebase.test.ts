@@ -23,6 +23,97 @@ function buildWorkspacePolicy(roots: readonly string[]): SessionWorkspacePolicy 
 /** Session policy authorizing the synthetic '/repo' fixture used by existing tests. */
 const REPO_WORKSPACE_POLICY = buildWorkspacePolicy(['/repo']);
 
+function rawResponseFixture(count: number, content: string) {
+    return {
+        formatVersion: 3,
+        status: 'ok',
+        path: '/repo',
+        codebaseRoot: '/repo',
+        query: 'billing',
+        scope: 'runtime',
+        groupBy: 'symbol',
+        limit: count,
+        resultMode: 'raw',
+        results: Array.from({ length: count }, (_, index) => ({
+            file: `src/billing${index}.ts`,
+            span: { startLine: 1, endLine: 4 },
+            content,
+            score: 1 - index / 100,
+            indexedAt: null,
+            stalenessBucket: 'unknown',
+        })),
+    };
+}
+
+async function deliverRawResponse(text: string, limit: number, debugMode?: 'full') {
+    const response = { content: [{ type: 'text', text }], meta: { searchDiagnostics: { resultsAfterFilter: limit } } };
+    const ctx = {
+        capabilities: new CapabilityResolver(buildConfig()),
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: { handleSearchCode: async () => response },
+    } as unknown as ToolContext;
+    return searchCodebaseTool.execute({ path: '/repo', query: 'billing', resultMode: 'raw', limit, debugMode }, ctx);
+}
+
+test('raw final delivery bounds limit=20 and preserves complete ranked hits with omission warning', async () => {
+    const envelope = rawResponseFixture(20, 'x'.repeat(2100));
+    const text = JSON.stringify(envelope);
+    assert.ok(Buffer.byteLength(text, 'utf8') > 43080);
+    const response = await deliverRawResponse(text, 20);
+    assert.ok(Buffer.byteLength(response.content[0].text, 'utf8') <= 32768);
+    const delivered = JSON.parse(response.content[0].text);
+    assert.ok(delivered.results.length > 0 && delivered.results.length < 20);
+    assert.deepEqual(delivered.results, envelope.results.slice(0, delivered.results.length));
+    assert.equal(delivered.limit, 20);
+    assert.ok(delivered.warnings.some((warning: { code: string }) => warning.code === 'SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET'));
+    assert.deepEqual(response.meta, { searchDiagnostics: { resultsAfterFilter: 20 } });
+});
+
+test('raw final delivery measures escaped JSON and UTF-8 with indentation', async () => {
+    const envelope = rawResponseFixture(20, '\u{1f600}漢字\n"\\'.repeat(190));
+    const response = await deliverRawResponse(JSON.stringify(envelope, null, 2), 20);
+    assert.ok(Buffer.byteLength(response.content[0].text, 'utf8') <= 32768);
+    const delivered = JSON.parse(response.content[0].text);
+    assert.ok(delivered.results.length > 0 && delivered.results.length < 20);
+    assert.deepEqual(delivered.results, envelope.results.slice(0, delivered.results.length));
+});
+
+test('raw final delivery preserves ordinary response bytes and requested limits', async () => {
+    for (const limit of [1, 5, 20]) {
+        for (const indent of [undefined, 2]) {
+            const text = JSON.stringify(rawResponseFixture(limit, 'ordinary code'), null, indent);
+            const response = await deliverRawResponse(text, limit);
+            assert.equal(response.content[0].text, text);
+            assert.equal(response.isError, undefined);
+        }
+    }
+});
+
+test('raw final delivery discloses complete omission for a single oversized hit or metadata', async () => {
+    const fixtures = [
+        rawResponseFixture(1, 'x'.repeat(40000)),
+        { ...rawResponseFixture(20, 'ordinary code'), query: '漢'.repeat(12000) },
+        { ...rawResponseFixture(1, 'ordinary code'), hints: { proof: 'x'.repeat(40000) } },
+    ];
+    for (const envelope of fixtures) {
+        const response = await deliverRawResponse(JSON.stringify(envelope), envelope.limit);
+        assert.ok(Buffer.byteLength(response.content[0].text, 'utf8') <= 32768);
+        const delivered = JSON.parse(response.content[0].text);
+        assert.equal(response.isError, true);
+        assert.equal(delivered.status, 'not_ready');
+        assert.equal(delivered.code, 'SEARCH_RESULT_SET_PAGE_TOO_LARGE');
+        assert.match(delivered.message, /no raw chunks were returned/i);
+        assert.deepEqual(delivered.results, []);
+        assert.equal(delivered.recommendedNextAction, undefined);
+    }
+});
+
+test('raw full diagnostics retain their established separate response budget', async () => {
+    const text = JSON.stringify(rawResponseFixture(20, 'x'.repeat(2100)));
+    const response = await deliverRawResponse(text, 20, 'full');
+    assert.equal(response.content[0].text, text);
+});
+
 function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {
         name: 'test',

@@ -15,8 +15,10 @@ import type {
     SearchGroupedResultV2,
     SearchGroupedResponseEnvelope,
     SearchResponseEnvelope,
+    SearchRawResponseEnvelope,
 } from "./search-types.js";
 import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
+import { WARNING_CODES } from "./warnings.js";
 import type { SearchMustConstraintHint, SearchMustCoverage } from "./search-types.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import { resolveOmittedBeyondLimitGroupCount } from "./search-disclosure.js";
@@ -280,5 +282,58 @@ export function buildRawSearchEnvelope(input: SearchResponseCommonInput & {
         recommendedNextAction: buildTopRecommendedRawSearchAction(input.codebaseRoot, input.results),
         ...buildSearchResponseHints(input),
         results: input.results,
+    };
+}
+
+const RAW_SEARCH_RESPONSE_MAX_UTF8_BYTES = 32768;
+
+/** Final delivery owns the byte bound, including the serializer's whitespace. */
+export function boundSerializedRawSearchResponse(text: string): { text: string; isError?: true } {
+    const fits = (value: string) => Buffer.byteLength(value, "utf8") <= RAW_SEARCH_RESPONSE_MAX_UTF8_BYTES;
+    if (fits(text)) return { text };
+
+    const envelope = JSON.parse(text) as SearchRawResponseEnvelope;
+    const compact = JSON.stringify(envelope);
+    if (fits(compact)) return { text: compact };
+
+    if (envelope.status === "ok" && envelope.resultMode === "raw") {
+        const warningCode = WARNING_CODES.SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET;
+        const warnings = envelope.warnings?.some((warning) => warning.code === warningCode)
+            ? envelope.warnings
+            : [...(envelope.warnings ?? []), ...buildSearchWarningDetails([warningCode])];
+        let low = 1;
+        let high = envelope.results.length - 1;
+        let best: string | undefined;
+        while (low <= high) {
+            const count = Math.floor((low + high) / 2);
+            const results = envelope.results.slice(0, count);
+            const candidate = JSON.stringify({
+                ...envelope,
+                warnings,
+                recommendedNextAction: buildTopRecommendedRawSearchAction(envelope.codebaseRoot ?? envelope.path, results),
+                results,
+            });
+            if (fits(candidate)) {
+                best = candidate;
+                low = count + 1;
+            } else {
+                high = count - 1;
+            }
+        }
+        if (best !== undefined) return { text: best };
+    }
+
+    // Metadata and the first hit can each exceed the budget. Do not shorten
+    // their evidence or retain a navigation action when no hit can be served.
+    return {
+        text: JSON.stringify({
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
+            status: "not_ready",
+            resultMode: "raw",
+            code: "SEARCH_RESULT_SET_PAGE_TOO_LARGE",
+            message: "The search response metadata or first raw chunk cannot fit within the response byte budget. No raw chunks were returned. Run a narrower search or use grouped results.",
+            results: [],
+        }),
+        isError: true,
     };
 }

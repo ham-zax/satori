@@ -9,6 +9,7 @@ import {
     formatZodError,
 } from "./types.js";
 import { emitSearchTelemetry } from "../telemetry/search.js";
+import { boundSerializedRawSearchResponse } from "../core/search-response-envelopes.js";
 import {
     classifyVectorBackendError,
     formatSearchProviderConfigError,
@@ -484,6 +485,15 @@ export const searchCodebaseTool: McpTool = {
                 responseBytes: getResponseBytes(response),
             });
             return response;
+        }
+
+        if (input.resultMode === "raw" && input.debugMode !== "full") {
+            const bounded = boundSerializedRawSearchResponse(response.content[0].text);
+            response = {
+                ...response,
+                content: [{ ...response.content[0], text: bounded.text }, ...response.content.slice(1)],
+                ...(bounded.isError ? { isError: true } : {}),
+            };
         }
 
         const diagnostics = extractDiagnostics(response);

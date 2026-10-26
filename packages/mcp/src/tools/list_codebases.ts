@@ -204,15 +204,25 @@ export const listCodebasesTool: McpTool = {
             };
             // Bound concurrent sidecar reads and read leases; output order
             // comes from byStatus.indexed, not from completion order.
+            // After the first failure no worker takes another root, and the
+            // request waits for in-flight reads before it reports the error.
             let nextQualityIndex = 0;
-            await Promise.all(Array.from(
+            let qualityFailed = false;
+            const settled = await Promise.allSettled(Array.from(
                 { length: Math.min(LIST_CODEBASES_QUALITY_READ_CONCURRENCY, byStatus.indexed.length) },
                 async () => {
-                    while (nextQualityIndex < byStatus.indexed.length) {
-                        await readQuality(byStatus.indexed[nextQualityIndex++]);
+                    while (!qualityFailed && nextQualityIndex < byStatus.indexed.length) {
+                        try {
+                            await readQuality(byStatus.indexed[nextQualityIndex++]);
+                        } catch (error) {
+                            qualityFailed = true;
+                            throw error;
+                        }
                     }
                 },
             ));
+            const qualityFailure = settled.find((result) => result.status === 'rejected');
+            if (qualityFailure) throw qualityFailure.reason;
             for (const item of byStatus.indexed) {
                 const quality = qualityByPath.get(item.path) || "symbolQuality=unknown";
                 const probeSuffix = item.probeFailed

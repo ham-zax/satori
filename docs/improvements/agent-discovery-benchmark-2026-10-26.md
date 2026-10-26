@@ -250,3 +250,42 @@ Proposed follow-up: include the structured readiness reason in the harness's
 preflight error. The first launch only reports `not_ready`, so its exact cause
 cannot be established from that log. No readiness-policy change is proposed
 without that evidence, and this run does not implement one.
+
+
+## Luna final-manifest benchmark receipt
+
+The later suite `opencode-2026-10-26T08-58-40-256Z-464ba326` measures final task
+manifest version 4, protocol v4, on clean worktree commit `2f52b298`, with
+OpenCode 1.18.35 and DeepSeek V4.1 max. Luna coordinates execution and reports
+valid measurements for all 12 records. This receipt does not replace the older
+suite tables above. The user declines a deep audit or extra reruns.
+
+| Autonomous task | Satori | Native |
+|---|---:|---:|
+| known-exact-target | 3/3 | 3/3 |
+| unknown-freshness-reuse | 3/3 | 2/3 |
+
+Satori uses five tool calls in every freshness attempt. No Potion startup,
+provider, or quota error is observed. Native's failed freshness attempt exceeds
+the tool budget and reads before discovery. No scored attempt is repeated.
+Maximum visible tool result is 17,831 bytes. The autonomous task count stays two.
+
+A separate installed-LateOn retrieval cohort completes all 30 existing held-out
+Gin/Flask questions:
+
+| Repository | Hit at rank 1 | Hit within rank 5 |
+|---|---:|---:|
+| Gin | 4/15 | 9/15 |
+| Flask | 6/15 | 11/15 |
+
+These retrieval metrics are separate from the autonomous-agent and 21-case
+semantic results. Query `g15` has zero target chunks; its miss remains in the
+30-query denominator. The runner's `rerankerModel=rerank-3` field is stale for
+the active LateOn provider. The report discloses the mismatch and records 28
+LateOn calls; two Flask queries make no reranker call. This receipt does not
+claim general retrieval quality or a causal speedup across changed questions.
+
+The worker reports no tracked source edits, a clean worktree, and all owned
+sessions closed. Report and raw-artifact references:
+`/home/hamza/.cache/satori-remaining-benchmark-luna-20261026/report.md` and
+`/home/hamza/.cache/satori-remaining-benchmark-luna-20261026/report.json`.

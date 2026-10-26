@@ -200,6 +200,9 @@ export function buildPreservedManagedEnv(existing: unknown): Record<string, stri
     return out;
 }
 
+// Matches the Linux kernel's symlink-follow limit.
+const MAX_SYMLINK_HOPS = 40;
+
 // Client configs are often symlinks into a dotfiles repository. Rename the
 // temp file over the link target so the link and its target stay intact.
 function resolveSymlinkWriteTarget(filePath: string): string {
@@ -208,14 +211,19 @@ function resolveSymlinkWriteTarget(filePath: string): string {
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    try {
-        if (!fs.lstatSync(filePath).isSymbolicLink()) return filePath;
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return filePath;
-        throw error;
+    // Dangling link: follow every hop and create the file the last link names,
+    // so no intermediate link is replaced by the rename.
+    let current = filePath;
+    for (let hops = 0; hops <= MAX_SYMLINK_HOPS; hops += 1) {
+        try {
+            if (!fs.lstatSync(current).isSymbolicLink()) return current;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return current;
+            throw error;
+        }
+        current = path.resolve(path.dirname(current), fs.readlinkSync(current));
     }
-    // Dangling link: create the file it names.
-    return path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+    throw Object.assign(new Error(`Too many symbolic links resolving '${filePath}'.`), { code: "ELOOP" });
 }
 
 export function writeTextFileAtomic(requestedPath: string, content: string, mode?: number): void {

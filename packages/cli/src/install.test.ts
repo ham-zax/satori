@@ -4079,6 +4079,24 @@ test("client config mutations write through a symlinked config and keep the link
         prepareClaudeInstall(danglingLink, runtime).apply();
         assert.equal(fs.lstatSync(danglingLink).isSymbolicLink(), true);
         assert.match(fs.readFileSync(danglingTarget, "utf8"), /satori/);
+
+        // A dangling chain keeps every intermediate link.
+        const chainTarget = path.join(dotfiles, "chain-missing.json");
+        const middleLink = path.join(dotfiles, "chain-middle.json");
+        const chainLink = path.join(homeDir, "chain.json");
+        fs.symlinkSync(chainTarget, middleLink);
+        fs.symlinkSync(middleLink, chainLink);
+        prepareClaudeInstall(chainLink, runtime).apply();
+        assert.equal(fs.lstatSync(chainLink).isSymbolicLink(), true);
+        assert.equal(fs.lstatSync(middleLink).isSymbolicLink(), true);
+        assert.match(fs.readFileSync(chainTarget, "utf8"), /satori/);
+
+        const loopA = path.join(homeDir, "loop-a.json");
+        const loopB = path.join(homeDir, "loop-b.json");
+        fs.symlinkSync(loopB, loopA);
+        fs.symlinkSync(loopA, loopB);
+        assert.throws(() => prepareClaudeInstall(loopA, runtime).apply(), /Too many symbolic links|ELOOP/);
+        assert.equal(fs.lstatSync(loopA).isSymbolicLink(), true);
     });
 });
 

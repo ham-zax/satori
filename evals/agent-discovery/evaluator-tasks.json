@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "protocolVersion": "satori-agent-discovery-v3",
+  "version": 4,
+  "protocolVersion": "satori-agent-discovery-v4",
   "name": "Satori paired autonomous code-discovery tasks",
   "modelVisible": false,
   "sourceScope": [
@@ -51,7 +51,7 @@
     {
       "id": "unknown-freshness-reuse",
       "kind": "unknown_target",
-      "prompt": "Find the production code path that re-proves tracked-root readiness after source-freshness processing. Report the owning file, owning symbol, and its complete 1-based inclusive source span. Identify the active-sync branch that may serve the pinned previous Publication, the freshness-blocking branch, the second readiness proof after freshness, and the root-identity guard before search proceeds. Report all three graded relationships: one production caller, the blocked-readiness helper, and the second-readiness-proof callback referenced by the owner code. Verify every claim from source or relationship evidence.",
+      "prompt": "Find the production code path that re-proves tracked-root readiness after source-freshness processing. Report the owning file, owning symbol, and its complete 1-based inclusive source span. Identify the active-sync branch that may serve the pinned previous Publication, the freshness-blocking branch, the second readiness proof after freshness, and the root-identity guard before search proceeds. Report all three graded relationships: one production caller, the blocked-readiness helper, and the second-readiness-proof callback at its reference site in the owner file: the host-contract declaration or the invocation that the owner uses, not the callback's implementation definition. For freshnessBlockedStopsBeforeSecondProof, assess freshness modes other than skipped_requires_reindex. Describe that exception separately in behavioralConclusion. Verify every claim from source or relationship evidence.",
       "satoriQuery": "Find the production code path that re-proves tracked-root readiness after source-freshness processing. Identify the active-sync previous-Publication branch, freshness blocking, the second readiness proof, and the root-identity guard.",
       "taskFactsTemplate": {
         "servesPreviousGenerationDuringSync": "boolean",

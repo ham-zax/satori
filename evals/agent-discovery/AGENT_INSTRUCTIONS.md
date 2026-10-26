@@ -1,6 +1,11 @@
 # Satori OpenCode agent-discovery evaluation
 
-Protocol version: `satori-agent-discovery-v3`
+Protocol version: `satori-agent-discovery-v4`
+
+Protocol v4 makes the freshness callback relation refer explicitly to its call
+site in the owner file. The callback implementation is a separate location.
+Satori searches use the canonical indexed repository root. Use `path:` filters
+to restrict results to subdirectories. Archived v3 scores remain unchanged.
 
 ## Instruction for the OpenCode agent reading this file
 

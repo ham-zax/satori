@@ -38,7 +38,8 @@ import {
     summarizeSourceLedger,
 } from "./source-ledger.mjs";
 
-const PROTOCOL_VERSION = "satori-agent-discovery-v3";
+export const PROTOCOL_VERSION = "satori-agent-discovery-v4";
+export const TASK_MANIFEST_VERSION = 4;
 const DEFAULT_MODEL = "opencode/deepseek-v4-flash-free";
 const DEFAULT_REPETITIONS = 3;
 const PHASE0_ACCEPTANCE_REPETITIONS = 10;
@@ -234,8 +235,12 @@ function requireString(value, label) {
 
 export function loadTaskManifest(file = DEFAULT_TASKS_FILE) {
     const manifest = readJson(file);
-    if (!isRecord(manifest) || manifest.protocolVersion !== PROTOCOL_VERSION) {
-        throw new Error(`Task manifest must use ${PROTOCOL_VERSION}.`);
+    if (!isRecord(manifest)
+        || manifest.version !== TASK_MANIFEST_VERSION
+        || manifest.protocolVersion !== PROTOCOL_VERSION) {
+        throw new Error(
+            `Task manifest must use version ${TASK_MANIFEST_VERSION} and ${PROTOCOL_VERSION}.`,
+        );
     }
     if (!Array.isArray(manifest.tasks) || manifest.tasks.length === 0) {
         throw new Error("Task manifest must contain at least one task.");
@@ -448,6 +453,9 @@ function satoriPromptRules(repoRoot, task, mode) {
             limit: 5,
         }),
         "- Use target.file and target.symbolId from visible search evidence; do not invent them.",
+        `- Pass the canonical index root REPO_ROOT (${repoRoot}) as the path argument to satori_search_codebase, satori_file_outline, and satori_call_graph. Never pass a subdirectory path.`,
+        "- satori_read_file takes a production file path under packages/core/src or packages/mcp/src.",
+        "- Restrict a search to a subdirectory with a path: filter in the query, for example: path:packages/mcp/src/core.",
         "- Use the fewest Satori operations needed to prove the answer.",
     ];
     if (mode === "natural") return natural;
@@ -1629,6 +1637,11 @@ function displayObservationRate(stats, total) {
     return `${stats?.samples ?? 0}/${total}`;
 }
 
+function displayMeasurementValidity(validity) {
+    if (!validity) return "`unknown` (not supplied)";
+    return `\`${validity.status}\` (${validity.observedRunCount}/${validity.expectedRunCount} runs)`;
+}
+
 function signedDelta(satori, native) {
     if (satori?.median === null || native?.median === null) return "n/a";
     const delta = satori.median - native.median;
@@ -1640,17 +1653,24 @@ function signedDelta(satori, native) {
 }
 
 export function formatMarkdownReport(summary, metadata) {
+    const validity = metadata.measurementValidity;
     const lines = [
         "# OpenCode native vs Satori agent discovery",
         "",
         `- Suite: \`${metadata.suiteId}\``,
         `- Revision: \`${metadata.gitRevision}\``,
+        `- Protocol: \`${metadata.protocolVersion ?? PROTOCOL_VERSION}\``,
         `- OpenCode: \`${metadata.openCodeVersion}\``,
         `- Model: \`${metadata.model}\``,
         `- Run class: \`${metadata.runClass}\``,
         `- Mode: \`${metadata.mode}\``,
         `- Repetitions: ${metadata.repetitions} per task and arm`,
+        `- Measurement validity: ${displayMeasurementValidity(validity)}`,
+        ...(validity && !validity.valid
+            ? (validity.failureReasons ?? []).map((reason) => `  - \`${reason}\``)
+            : []),
         "- Values are median [range]. Timing is milliseconds; bytes are UTF-8 bytes.",
+        "- Section 1 reports target and source milestones; section 3 reports total arm wall time.",
         "",
         "## 1. Retrieval quality - all attempts",
         "",
@@ -1709,7 +1729,7 @@ export function formatMarkdownReport(summary, metadata) {
         "",
         "Final session totals include any investigation tail. Only correct runs contribute to this paired performance comparison.",
         "",
-        "| Task | Arm | Correct | Wall ms | Tool ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "| Task | Arm | Correct | Total wall ms | Tool ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
@@ -1732,7 +1752,7 @@ export function formatMarkdownReport(summary, metadata) {
         }
     }
     lines.push("", "### Correct-run Satori minus native median", "");
-    lines.push("| Task | Wall ms | Input tokens | Tool calls | Visible tool bytes |", "|---|---:|---:|---:|---:|");
+    lines.push("| Task | Total wall ms | Input tokens | Tool calls | Visible tool bytes |", "|---|---:|---:|---:|---:|");
     for (const [taskId, task] of Object.entries(summary)) {
         lines.push([
             `| ${taskId}`,
@@ -1748,7 +1768,7 @@ export function formatMarkdownReport(summary, metadata) {
         "",
         "This diagnostic includes failed attempts. It shows consumed resources, not equivalent successful-task performance.",
         "",
-        "| Task | Arm | Correct | Wall ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "| Task | Arm | Correct | Total wall ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
@@ -1773,7 +1793,7 @@ export function formatMarkdownReport(summary, metadata) {
         "",
         "## Raw Satori minus native median",
         "",
-        "| Task | Wall ms | Input tokens | Output tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "| Task | Total wall ms | Input tokens | Output tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
@@ -2027,7 +2047,11 @@ export async function main(argv = process.argv.slice(2)) {
         mode: options.mode,
         repetitions: options.repetitions,
     };
-    const report = formatMarkdownReport(summary, reportMetadata);
+    const report = formatMarkdownReport(summary, {
+        ...reportMetadata,
+        protocolVersion: PROTOCOL_VERSION,
+        measurementValidity,
+    });
     const aggregate = {
         protocolVersion: PROTOCOL_VERSION,
         ...reportMetadata,

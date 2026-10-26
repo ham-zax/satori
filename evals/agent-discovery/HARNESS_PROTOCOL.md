@@ -1,6 +1,11 @@
 # Satori Agent-Discovery Harness Protocol
 
-Protocol version: `satori-agent-discovery-v3`
+Protocol version: `satori-agent-discovery-v4`
+
+Protocol v4 makes the freshness callback relation refer explicitly to its call
+site in the owner file. The callback implementation is a separate location.
+Satori searches use the canonical indexed repository root. Use `path:` filters
+to restrict results to subdirectories. Archived v3 scores remain unchanged.
 
 This file defines collection and grading behavior for the executable OpenCode
 runner in `run-opencode.mjs`. Do not include this file or
@@ -184,7 +189,7 @@ portable result exchanged between harnesses:
 
 ```json
 {
-  "protocolVersion": "satori-agent-discovery-v3",
+  "protocolVersion": "satori-agent-discovery-v4",
   "runId": "harness-unique-id",
   "pairedRunId": "shared-id-for-native-and-satori",
   "repetition": 1,

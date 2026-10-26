@@ -23,9 +23,11 @@ import {
     loadTaskManifest,
     observationalStats,
     parseArgs,
+    PROTOCOL_VERSION,
     recordMcpToolDefinitions,
     rejectReusedSessions,
     summarizeRuns,
+    TASK_MANIFEST_VERSION,
     validateTaskKey,
 } from "./run-opencode.mjs";
 import {
@@ -188,6 +190,44 @@ test("generated prompts embed all run values and never request harness setup", (
     assert.doesNotMatch(prompt, /NATIVE_TOOL_PROFILE=/);
 });
 
+test("Satori prompts require the canonical index root and path filters", () => {
+    const satori = buildAgentPrompt({
+        repoRoot: "/repo",
+        task: knownTask,
+        arm: "satori",
+        mode: "natural",
+    });
+
+    assert.match(satori, /canonical index root REPO_ROOT \(\/repo\)/i);
+    assert.match(satori, /Never pass a subdirectory path/);
+    assert.match(satori, /satori_read_file takes a production file path/);
+    assert.match(satori, /path:packages\/mcp\/src\/core/);
+    assert.match(satori, /"path":"\/repo"/);
+
+    const coverage = buildAgentPrompt({
+        repoRoot: "/repo",
+        task: knownTask,
+        arm: "satori",
+        mode: "coverage",
+    });
+    assert.match(coverage, /canonical index root REPO_ROOT \(\/repo\)/i);
+    assert.match(coverage, /Tool-coverage mode requires/);
+
+    const native = buildAgentPrompt({
+        repoRoot: "/repo",
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+    });
+    assert.doesNotMatch(native, /canonical index root/i);
+    assert.match(native, /Use only grep, glob, and read/);
+    assert.match(native, /positive limit no greater than 200 lines/);
+    assert.match(
+        native,
+        /Every grep\/glob path and read file must be inside an allowed production source root/,
+    );
+});
+
 test("OpenCode command creates a new session instead of continuing another arm", () => {
     const args = buildOpenCodeRunArguments({
         model: "opencode/model",
@@ -322,6 +362,68 @@ test("unknown-target prompt explicitly requests every graded relationship", () =
     assert.match(task.prompt, /production caller/i);
     assert.match(task.prompt, /blocked-readiness helper/i);
     assert.match(task.prompt, /second-readiness-proof/i);
+});
+
+test("v4 task manifest makes the callback reference site explicit", () => {
+    const manifest = loadTaskManifest();
+    const task = manifest.tasks.find((candidate) => candidate.id === "unknown-freshness-reuse");
+
+    assert.equal(manifest.version, TASK_MANIFEST_VERSION);
+    assert.equal(manifest.protocolVersion, PROTOCOL_VERSION);
+    assert.equal(PROTOCOL_VERSION, "satori-agent-discovery-v4");
+    assert.match(task.prompt, /reference site in the owner file/i);
+    assert.match(task.prompt, /not the callback's implementation definition/i);
+    assert.match(task.prompt, /assess freshness modes other than skipped_requires_reindex/i);
+    assert.match(task.prompt, /Describe that exception separately in behavioralConclusion/);
+    assert.doesNotMatch(task.prompt, /callback referenced by the owner code/i);
+});
+
+test("both arms receive the same v4 task text", () => {
+    const task = loadTaskManifest().tasks.find(
+        (candidate) => candidate.id === "unknown-freshness-reuse",
+    );
+    const native = buildAgentPrompt({
+        repoRoot: "/repo",
+        task,
+        arm: "native",
+        mode: "natural",
+    });
+    const satori = buildAgentPrompt({
+        repoRoot: "/repo",
+        task,
+        arm: "satori",
+        mode: "natural",
+    });
+
+    assert.ok(native.includes(task.prompt));
+    assert.ok(satori.includes(task.prompt));
+    assert.match(native, /reference site in the owner file/i);
+    assert.match(satori, /reference site in the owner file/i);
+});
+
+test("task manifest rejects the archived v3 protocol and version", () => {
+    const manifest = JSON.parse(
+        fs.readFileSync(new URL("./evaluator-tasks.json", import.meta.url), "utf8"),
+    );
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-manifest-"));
+    const file = path.join(directory, "tasks.json");
+    try {
+        fs.writeFileSync(file, JSON.stringify({
+            ...manifest,
+            protocolVersion: "satori-agent-discovery-v3",
+        }));
+        assert.throws(
+            () => loadTaskManifest(file),
+            /version 4 and satori-agent-discovery-v4/,
+        );
+        fs.writeFileSync(file, JSON.stringify({ ...manifest, version: 2 }));
+        assert.throws(
+            () => loadTaskManifest(file),
+            /version 4 and satori-agent-discovery-v4/,
+        );
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });
 
 test("repository identity binds revision, tree, staged diff, and unstaged diff", async () => {
@@ -850,15 +952,24 @@ test("reporting separates retrieval, evidence route, and final agent cost", () =
         run("satori", true, 120),
     ];
     const summary = summarizeRuns(runs);
-    const report = formatMarkdownReport(summary, {
+    const metadata = {
         suiteId: "suite",
         gitRevision: "abc",
+        protocolVersion: "satori-agent-discovery-v4",
         openCodeVersion: "1.17.20",
         model: "opencode/model",
         runClass: "exploratory",
         mode: "natural",
         repetitions: 2,
-    });
+        measurementValidity: {
+            status: "valid",
+            valid: true,
+            expectedRunCount: 5,
+            observedRunCount: 5,
+            failureReasons: [],
+        },
+    };
+    const report = formatMarkdownReport(summary, metadata);
 
     assert.deepEqual(observationalStats(runs.filter((run) => run.grade.passed), "taskWallTimeMs"), {
         samples: 4,
@@ -880,6 +991,64 @@ test("reporting separates retrieval, evidence route, and final agent cost", () =
     assert.match(report, /Raw cost of all attempts/);
     assert.match(report, /100 \[1-300\]/);
     assert.match(report, /Raw Satori minus native median/);
+    assert.match(report, /- Suite: `suite`/);
+    assert.match(report, /- Revision: `abc`/);
+    assert.match(report, /- Protocol: `satori-agent-discovery-v4`/);
+    assert.match(report, /- Measurement validity: `valid` \(5\/5 runs\)/);
+    assert.match(report, /First target ms/);
+    assert.match(report, /First source ms/);
+    assert.match(report, /Total wall ms/);
+
+    const retrieval = report.slice(0, report.indexOf("## 2."));
+    const cost = report.slice(report.indexOf("## 3."), report.indexOf("## Raw cost"));
+    assert.doesNotMatch(retrieval, /Total wall ms/);
+    assert.match(cost, /Total wall ms/);
+});
+
+test("reporting prints measurement validity failures without hiding them", () => {
+    const run = (arm, passed) => ({
+        taskId: "task",
+        arm,
+        grade: { passed },
+        measurements: {
+            taskWallTimeMs: 1,
+            timeToFirstCorrectTargetMs: 1,
+            timeToFirstOwnerSourceMs: 1,
+            toolLatencyMs: 1,
+            apiInputTokens: 1,
+            apiOutputTokens: 1,
+            reasoningTokens: 1,
+            cachedInputTokens: 1,
+            visibleToolResultBytes: 1,
+            toolCalls: 1,
+            modelTurns: 1,
+            stepsToFirstCorrectTarget: 1,
+            stepsToFirstOwnerSource: 1,
+            stepsToVerifiedAnswer: 1,
+            investigationTailToolCalls: 0,
+        },
+    });
+    const report = formatMarkdownReport(summarizeRuns([run("native", true)]), {
+        suiteId: "suite",
+        gitRevision: "abc",
+        protocolVersion: "satori-agent-discovery-v4",
+        openCodeVersion: "1.17.20",
+        model: "opencode/model",
+        runClass: "exploratory",
+        mode: "natural",
+        repetitions: 1,
+        measurementValidity: {
+            status: "invalid",
+            valid: false,
+            expectedRunCount: 2,
+            observedRunCount: 1,
+            failureReasons: ["run_count:1/2", "missing_session:task:1:satori"],
+        },
+    });
+
+    assert.match(report, /- Measurement validity: `invalid` \(1\/2 runs\)/);
+    assert.match(report, /run_count:1\/2/);
+    assert.match(report, /missing_session:task:1:satori/);
 });
 
 test("agent result parser accepts compact JSON without a model-authored ledger", () => {

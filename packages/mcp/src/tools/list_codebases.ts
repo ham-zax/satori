@@ -12,6 +12,7 @@ import { formatRuntimeOwnersStatusLine } from "../core/runtime-owner.js";
 
 const listCodebasesInputSchema = z.object({}).strict();
 const comparePathAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const LIST_CODEBASES_QUALITY_READ_CONCURRENCY = 4;
 
 export const listCodebasesTool: McpTool = {
     name: "list_codebases",
@@ -173,7 +174,7 @@ export const listCodebasesTool: McpTool = {
             // F9: compact observed quality marker per ready root from the
             // Publication-local JSON registry used by manage_index summary.
             const qualityByPath = new Map<string, string>();
-            await Promise.all(byStatus.indexed.map(async (item) => {
+            const readQuality = async (item: (typeof byStatus.indexed)[number]): Promise<void> => {
                 if (item.navigationStatus !== 'valid' || !item.publication) {
                     qualityByPath.set(item.path, 'symbolQuality=unknown');
                     return;
@@ -200,7 +201,18 @@ export const listCodebasesTool: McpTool = {
                 } finally {
                     lease.release();
                 }
-            }));
+            };
+            // Bound concurrent sidecar reads and read leases; output order
+            // comes from byStatus.indexed, not from completion order.
+            let nextQualityIndex = 0;
+            await Promise.all(Array.from(
+                { length: Math.min(LIST_CODEBASES_QUALITY_READ_CONCURRENCY, byStatus.indexed.length) },
+                async () => {
+                    while (nextQualityIndex < byStatus.indexed.length) {
+                        await readQuality(byStatus.indexed[nextQualityIndex++]);
+                    }
+                },
+            ));
             for (const item of byStatus.indexed) {
                 const quality = qualityByPath.get(item.path) || "symbolQuality=unknown";
                 const probeSuffix = item.probeFailed

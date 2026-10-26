@@ -59,7 +59,12 @@ function fixture(t) {
         import * as lancedb from ${JSON.stringify(lanceUrl)};
         import path from 'node:path';
         import fs from 'node:fs';
-        export function explicitRuntimeEnvironment() { return {}; }
+        export function explicitRuntimeEnvironment() {
+            return {
+                SATORI_RERANKER_PROVIDER: process.env.SATORI_RERANKER_PROVIDER,
+                VOYAGEAI_RERANKER_MODEL: process.env.VOYAGEAI_RERANKER_MODEL,
+            };
+        }
         export async function localOfflineEnvironment() { return {}; }
         export async function openLocalSession({ stateRoot }) {
             fs.appendFileSync(${JSON.stringify(path.join(root, 'sessions'))}, 'started\\n');
@@ -125,11 +130,13 @@ function fixture(t) {
     return {
         repos, writeCases, root, outDir,
         sessionsStarted: () => fs.existsSync(path.join(root, 'sessions')),
-        run(names, revision = '1', extraArgs = [], extraEnv = {}) {
+        run(names, revision = '1', extraArgs = [], extraEnv = {}, unsetEnv = []) {
+            const env = { ...process.env, SATORI_HARNESS_TEST_REVISION: revision, ...extraEnv };
+            for (const key of unsetEnv) delete env[key];
             execFileSync(process.execPath, ['--import', preload, runner,
                 '--cases', casesFile, '--repos', names, '--state-root', stateRoot, '--out', outDir, ...extraArgs], {
                 cwd: workspaceRoot, encoding: 'utf8', timeout: 30_000,
-                env: { ...process.env, SATORI_HARNESS_TEST_REVISION: revision, ...extraEnv },
+                env,
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
             return Object.fromEntries(['result', 'harness-log', 'fused-pool'].map(name =>
@@ -145,6 +152,44 @@ test('a fresh state indexes before resolving targets and searching', t => {
     assert.ok(repo.indexing.events.some(event => event.args.action === 'create'));
     assert.deepEqual(output['harness-log'][0].targets, ['chunk-react']);
     assert.equal(repo.queries[0].responseStatus, 'ok');
+});
+
+test('reranker provenance records a model only for the Voyage provider', t => {
+    const f = fixture(t);
+    const lateonRuntime = f.run('react', 'lateon', [], {
+        SATORI_RERANKER_PROVIDER: 'lateon',
+        VOYAGEAI_RERANKER_MODEL: 'rerank-3',
+    })['harness-log'][0].provenance.runtime;
+    assert.deepEqual(lateonRuntime, {
+        profile: null,
+        rerankerProvider: 'lateon',
+        rerankerModel: null,
+        embeddingProvider: null,
+        embeddingModel: null,
+    });
+
+    const voyageRuntime = f.run('react', 'voyage', [], {
+        SATORI_RERANKER_PROVIDER: 'voyage',
+        VOYAGEAI_RERANKER_MODEL: 'rerank-3-lite',
+    })['harness-log'][0].provenance.runtime;
+    assert.deepEqual(voyageRuntime, {
+        profile: null,
+        rerankerProvider: 'voyage',
+        rerankerModel: 'rerank-3-lite',
+        embeddingProvider: null,
+        embeddingModel: null,
+    });
+
+    const missingProviderRuntime = f.run('react', 'missing-provider', [], {
+        VOYAGEAI_RERANKER_MODEL: 'rerank-3',
+    }, ['SATORI_RERANKER_PROVIDER'])['harness-log'][0].provenance.runtime;
+    assert.deepEqual(missingProviderRuntime, {
+        profile: null,
+        rerankerProvider: null,
+        rerankerModel: null,
+        embeddingProvider: null,
+        embeddingModel: null,
+    });
 });
 
 test('a failed search reports the tool error, not a missing fused pool', t => {

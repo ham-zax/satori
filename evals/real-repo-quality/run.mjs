@@ -94,7 +94,9 @@ function buildProvenance(resolveSearchFlags, constants, reservation, runtimeEnv)
         runtime: {
             profile: runtimeEnv.SATORI_RUNTIME_PROFILE ?? null,
             rerankerProvider: runtimeEnv.SATORI_RERANKER_PROVIDER ?? null,
-            rerankerModel: runtimeEnv.VOYAGEAI_RERANKER_MODEL ?? null,
+            rerankerModel: runtimeEnv.SATORI_RERANKER_PROVIDER === 'voyage'
+                ? runtimeEnv.VOYAGEAI_RERANKER_MODEL ?? null
+                : null,
             embeddingProvider: runtimeEnv.EMBEDDING_PROVIDER ?? null,
             embeddingModel: runtimeEnv.EMBEDDING_MODEL ?? null,
         },

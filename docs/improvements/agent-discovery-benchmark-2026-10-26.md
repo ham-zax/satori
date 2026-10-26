@@ -440,3 +440,17 @@ narrower prior (for example, configuration and variable owners only) recovers f1
 Disproof: any current fusion rank becomes worse. Stop after two variants with a regression and reset the diagnosis.
 Post-policy steps (`preferImplementationCandidates`, grouping, diversity) still apply after fusion. Only a fresh
 benchmark can confirm final scores.
+
+Follow-up, same day. Both regressions of repair A come from test paths. Five validate_test.go and
+default_validator_test.go chunks pass the g7 target, and four routes/gins/fs test chunks pass g10.
+The current exclusion of narrative paths (tests, fixtures, docs, examples) from the prior protects these queries.
+
+Variant B gives the prior to configuration paths, non-definition kinds and file chunks, and keeps the narrative
+exclusion. Ranks: f12 60→3, f15 39→2, g5 44→22, g7 5→7. The other 18 do not change. g7 regresses through a
+second mechanism. The file chunk binding_nomsgpack.go:47 (provider rank 1) gains the prior and rises. The
+within-file slot exchange then gives that slot to the name-matching `validate` function of the same file.
+
+Decision: variant B is rejected. Two variants regressed, so the stopping rule applies. Neither variant is committed.
+The prior and the within-file slot exchange interact. A next variant needs a diagnosis of that exchange first.
+A separate decision is also possible: accept g7 5→7 as a cost for f12 and f15. The fusion rank of g7 stays in the
+top ten, but only a fresh benchmark can show final ranks after grouping and disclosure.

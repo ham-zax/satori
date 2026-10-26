@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { readFileTool } from './read_file.js';
 import type { ToolContext } from './types.js';
@@ -68,4 +71,27 @@ test('recommended symbol reads and continuations retain their root across overla
     assert.equal((await read({ ...request, codebaseRoot: `${parent}/other` })).code, 'ROOT_BINDING_INVALID');
     assert.equal((await read({ ...request, path: `${child}/missing/file.ts`, codebaseRoot: `${child}/missing` })).code, 'NAVIGATION_UNAVAILABLE');
     assert.equal(composed, beforeDenied);
+});
+
+test('plain reads reject a final symlink even when its target is published in the same root', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-read-symlink-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, 'target.ts'), 'export const published = 1;\n');
+    fs.symlinkSync(path.join(root, 'target.ts'), path.join(root, 'link.ts'));
+    const publication = { publication: { canonicalRoot: root } };
+    const ctx = {
+        workspacePolicy: createSessionWorkspacePolicy({ roots: [root], homeDirectory: '/home/user', stateRoot: '/state' }),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [['target.ts', 'hash']] }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+    } as unknown as ToolContext;
+    const target = await readFileTool.execute({ path: path.join(root, 'target.ts') }, ctx);
+    assert.match(target.content[0].text, /export const published = 1;/);
+    const link = await readFileTool.execute({ path: path.join(root, 'link.ts') }, ctx);
+    assert.match(link.content[0].text, /symlink_rejected/);
+    assert.doesNotMatch(link.content[0].text, /export const published/);
 });

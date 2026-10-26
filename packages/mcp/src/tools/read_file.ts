@@ -833,7 +833,9 @@ export const readFileTool: McpTool = {
                 const sourceRead = await readAuthorizedPublishedSource({
                     workspacePolicy: ctx.workspacePolicy,
                     codebaseRoot: allowedRoot,
-                    requestedPath: absolutePath,
+                    // Pass the unresolved path so the authorizer can reject a
+                    // final symlink; absolutePath is already realpathed.
+                    requestedPath: resolvedPath,
                     publishedRelativePaths,
                     maxBytes,
                     sourceMeasurement: {
@@ -845,7 +847,7 @@ export const readFileTool: McpTool = {
                     // and byte check, so a watcher callback that observes the
                     // working tree cannot be used to influence the authorization
                     // decision; the touch still runs before the content read.
-                    onAuthorized: () => touchResolvedCodebaseRoot(absolutePath, ctx),
+                    onAuthorized: () => touchResolvedCodebaseRoot(absolutePath, ctx, allowedRoot),
                 });
                 sourceBytes = sourceRead.bytes;
                 sourceObservation = sourceRead.sourceMeasurementObservation;

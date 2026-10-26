@@ -1,8 +1,8 @@
 # Managed-runtime TypeScript compiler install, 26 October 2026
 
-Status: native compiler fix implemented and checked. The latest full smoke
-stops on Potion readiness after the TypeScript API check passes. Installed
-runtimes receive the repair at the next CLI release and reinstall.
+Status: native compiler and Potion startup fixes are checked. The latest full
+packed smoke passes TypeScript, Potion, and LateOn native execution checks.
+Installed runtimes receive the repair at the next CLI release and reinstall.
 
 ## Problem
 
@@ -94,3 +94,20 @@ with `Potion worker readiness timed out`, so it is not a full release-smoke
 pass. Its packed runtime is 963,988,221 bytes, below the 1,006,632,960-byte gate.
 The log is `/tmp/satori-pr-p0-packed-smoke.log`. The Potion timeout remains a
 separate integration limitation pending diagnosis.
+
+
+## Subsequent Potion startup repair
+
+The earlier readiness timeout remains recorded above. A later controlled test
+proves that the startup timer can expire before Node polls a valid ready frame
+already written by the helper during a parent event-loop stall. The startup
+expiry now gives I/O one poll opportunity and checks the current child and
+starting state. The five-second configured default does not change.
+
+The regression fails before the repair and passes afterward. All 29 Potion
+tests pass, including a silent-worker timeout control. The full packed smoke
+passes in
+`/home/hamza/.cache/satori-remaining-repairs-20261026/packed-smoke-after.log`.
+The old smoke's exact scheduling was not recorded, so that specific historical
+failure is not claimed as causally proved. This repair addresses the reproduced
+false-expiry class. Commit: `7c69c685`.

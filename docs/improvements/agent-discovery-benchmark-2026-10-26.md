@@ -471,3 +471,21 @@ Wall time 1:56, peak RSS 1.28 GB. Evidence: `/home/hamza/.cache/satori-sfr-20261
 hit@1 10/30 → 10/30, hit@5 20/30 → 21/30, hit@10 23/30 → 24/30. f12 changes from a miss to rank 3. No query loses rank.
 f15 stays a miss: fusion rank 2, then rank 48 after `preferImplementationCandidates`. That later demotion has a different
 owner and needs its own diagnosis. g5 is not repaired, because its target is a file chunk.
+
+### f15 diagnosis: implementation preference after fusion, 27 October 2026
+
+Query: "where are the Python build metadata, version, and runtime dependencies declared". Stage ranks in the repair C
+run: provider 2, fusion 2, reranker_output 48, grouped 44, disclosed miss.
+
+Two independent cues set `implementationSeeking` in `search-query-planning.ts`. The word "build" is in the
+implementation cue pattern. The capitalized word "Python" is an identifier token, and with "where are" it sets
+`ownerWhereSeeking`. `resolveSearchAnswerFocus` then returns `implementation`, and `preferImplementationCandidates`
+(`search-ranking-policy.ts`) places implementations, then adapters, then supporting candidates. `pyproject.toml` is
+a configuration path, so it moves behind every code candidate. A query with lowercase "python" and no "build" gets
+neutral focus.
+
+Known limit: f15 stays a miss at HEAD 8e60fb77. No classifier pattern changes to fit this query. The words "build" and
+"builder" also drive tune queries f3, f4, f9 and f10 and held-out queries g6 and g15, and a pattern tuned on held-out
+words makes the held-out measurement invalid. The general follow-up is one bounded combination of the post-reranker
+steps. That follow-up does not let a single step move a strong provider candidate out of the top ten. The ranking replay
+run in `TASKS.md` tracks it.

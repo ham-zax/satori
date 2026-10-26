@@ -43,10 +43,13 @@ export interface TypeScriptSemanticTarget {
 
 export interface TypeScriptBindingProof {
     readonly kind: 'same_file_definition' | 'relative_import' | 'absolute_import'
-        | 'constructor_origin' | 'allocation_origin';
+        | 'constructor_origin' | 'allocation_origin' | 'assignment_origin'
+        | 'alias_binding' | 'optional_receiver' | 'interface_contract'
+        | 'branch_origin' | 'field_origin' | 'class_inheritance' | 'flow_hop';
     readonly subject: string;
     readonly span: SourceSpan;
     readonly detail?: string;
+    readonly hop?: number;
 }
 
 export interface TypeScriptCallEvidence {
@@ -121,6 +124,7 @@ function bindingProof(
 interface ProjectDispatchContext {
     readonly classTypes: readonly ts.Type[];
     readonly targetsByTypeAndMember: Map<ts.Type, Map<string, readonly TypeScriptSemanticTarget[]>>;
+    readonly fieldBindingProofs: Map<ts.Symbol, TypeScriptBindingProof[]>;
 }
 
 function normalizeProjectPath(filePath: string): string {
@@ -412,6 +416,7 @@ function collectProjectDispatchContext(
     return {
         classTypes,
         targetsByTypeAndMember: new Map(),
+        fieldBindingProofs: new Map(),
     };
 }
 
@@ -721,6 +726,7 @@ function mutableLocalOriginCandidates(
     if (!owner?.body) return undefined;
 
     const targets: TypeScriptSemanticTarget[] = [];
+    const originAlternatives: TypeScriptBindingProof[] = [];
     let complete = true;
     const collect = (expression: ts.Expression): void => {
         const assignedTargets = assignmentTargetsForExpression(
@@ -734,6 +740,10 @@ function mutableLocalOriginCandidates(
             return;
         }
         targets.push(...assignedTargets);
+        originAlternatives.push(...bindingProof(
+            'branch_origin', expression, projectFilesByVirtualPath,
+            'Observed mutable-binding origin alternative; execution order and reachability are not established.',
+        ));
     };
 
     if (declaration.initializer) collect(declaration.initializer);
@@ -798,6 +808,7 @@ function mutableLocalOriginCandidates(
         decision: 'ambiguous',
         reason: 'multiple_executable_targets',
         targets: unique,
+        bindingProofs: originAlternatives,
     };
 }
 
@@ -868,7 +879,7 @@ function thisReceiverDispatchType(checker: ts.Checker, receiver: ts.Expression, 
     return constraint;
 }
 
-function memberCandidates(
+function memberCandidatesWithoutBindingProofs(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
@@ -1097,6 +1108,120 @@ function memberCandidates(
     };
 }
 
+function fieldBindingProofs(
+    checker: ts.Checker,
+    receiver: ts.Expression,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    cache: Map<ts.Symbol, TypeScriptBindingProof[]>,
+): TypeScriptBindingProof[] {
+    if (!ts.isPropertyAccessExpression(receiver)
+        || receiver.expression.kind !== ts.SyntaxKind.ThisKeyword) return [];
+    const symbol = resolvedSymbol(checker, checker.getSymbolAtLocation(receiver.name));
+    const declaration = symbol?.valueDeclaration?.resolve();
+    if (!symbol || !declaration || declaration.getSourceFile().fileName !== receiver.getSourceFile().fileName) return [];
+    const cached = cache.get(symbol);
+    if (cached) return cached;
+    const save = (proof: TypeScriptBindingProof[]): TypeScriptBindingProof[] => {
+        cache.set(symbol, proof);
+        return proof;
+    };
+    if (declaration.kind === ts.SyntaxKind.Parameter
+        && ts.isConstructorDeclaration(declaration.parent)) {
+        return save([
+            ...bindingProof('field_origin', declaration, projectFilesByVirtualPath),
+            ...bindingProof('constructor_origin', declaration, projectFilesByVirtualPath),
+        ]);
+    }
+    if (!ts.isPropertyDeclaration(declaration)) return save([]);
+    const proof = bindingProof('field_origin', declaration, projectFilesByVirtualPath);
+    if (declaration.initializer) {
+        return save(ts.isNewExpression(unwrapTransparentExpression(declaration.initializer))
+            ? [...proof, ...bindingProof('constructor_origin', declaration.initializer, projectFilesByVirtualPath)]
+            : []);
+    }
+    const owner = declaration.parent;
+    if (!ts.isClassLikeDeclaration(owner)) return save([]);
+    const writes: ts.BinaryExpression[] = [];
+    const visit = (node: ts.Node): void => {
+        if (ts.isBinaryExpression(node)
+            && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+            && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+            && ts.isPropertyAccessExpression(node.left)
+            && node.left.expression.kind === ts.SyntaxKind.ThisKeyword
+            && resolvedSymbol(checker, checker.getSymbolAtLocation(node.left.name)) === symbol) {
+            writes.push(node);
+        }
+        node.forEachChild(visit);
+    };
+    visit(owner);
+    // Only one direct constructor write establishes this specific parameter
+    // link. Uncertain or overwritten fields do not get origin evidence.
+    if (writes.length !== 1) return save([]);
+    const write = writes[0];
+    if (write.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+        || write.parent.kind !== ts.SyntaxKind.ExpressionStatement
+        || write.parent.parent.kind !== ts.SyntaxKind.Block
+        || !ts.isConstructorDeclaration(write.parent.parent.parent)) return save([]);
+    const constructor = write.parent.parent.parent;
+    const value = unwrapTransparentExpression(write.right);
+    if (!ts.isIdentifier(value)) return save([]);
+    const parameter = resolvedSymbol(checker, checker.getSymbolAtLocation(value))?.valueDeclaration?.resolve();
+    if (parameter?.kind !== ts.SyntaxKind.Parameter || parameter.parent !== constructor) return save([]);
+    return save([
+        ...proof,
+        ...bindingProof('constructor_origin', parameter, projectFilesByVirtualPath),
+        ...bindingProof('assignment_origin', write, projectFilesByVirtualPath),
+        ...bindingProof('flow_hop', write, projectFilesByVirtualPath).map((step) => ({ ...step, hop: 1 })),
+    ]);
+}
+
+function memberCandidates(
+    checker: ts.Checker,
+    call: ts.CallExpression | ts.NewExpression,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    dispatchContext: ProjectDispatchContext,
+): CandidateSet | undefined {
+    const candidates = memberCandidatesWithoutBindingProofs(checker, call, projectFilesByVirtualPath, dispatchContext);
+    const receiver = receiverForExpression(call.expression);
+    if (!candidates || !receiver) return candidates;
+    const proof = [...(candidates.bindingProofs ?? []), ...fieldBindingProofs(checker, receiver, projectFilesByVirtualPath, dispatchContext.fieldBindingProofs)];
+    if (callUsesOptionalReceiver(call)) {
+        proof.push(...bindingProof('optional_receiver', call.expression, projectFilesByVirtualPath));
+    }
+    const type = thisReceiverDispatchType(checker, receiver, checker.getTypeAtLocation(receiver));
+    const branches = type.isUnionType() ? type.getTypes() : [type];
+    for (const branch of branches) {
+        const declarations = resolvedSymbol(checker, branch.getSymbol())?.declarations
+            .map((handle) => handle.resolve()).filter((node): node is ts.Declaration => Boolean(node)) ?? [];
+        if (declarations.some(ts.isInterfaceDeclaration)) {
+            proof.push(...bindingProof('interface_contract', receiver, projectFilesByVirtualPath));
+        }
+        const propertyName = propertyNameForExpression(call.expression);
+        if (!propertyName || !candidates.targets.length) continue;
+        const property = resolvedSymbol(checker, checker.getPropertyOfType(branch, propertyName));
+        const methodOwners = property?.declarations.map((handle) => handle.resolve()?.parent)
+            .filter((node): node is ts.ClassLikeDeclaration => Boolean(node && ts.isClassLikeDeclaration(node))) ?? [];
+        for (const declaration of declarations) {
+            if (!ts.isClassLikeDeclaration(declaration)) continue;
+            for (const clause of declaration.heritageClauses ?? []) {
+                if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+                for (const base of clause.types) {
+                    const baseName = 'expression' in base ? base.expression : base.typeName;
+                    const baseDeclarations = resolvedSymbol(checker, checker.getSymbolAtLocation(baseName))?.declarations
+                        .map((handle) => handle.resolve()).filter((node): node is ts.Declaration => Boolean(node)) ?? [];
+                    if (methodOwners.some((owner) => baseDeclarations.some((baseDeclaration) => (
+                        baseDeclaration.getSourceFile().fileName === owner.getSourceFile().fileName
+                        && baseDeclaration.pos === owner.pos && baseDeclaration.end === owner.end
+                    )))) {
+                        proof.push(...bindingProof('class_inheritance', receiver, projectFilesByVirtualPath, base.getText()));
+                    }
+                }
+            }
+        }
+    }
+    return { ...candidates, bindingProofs: proof };
+}
+
 function directCandidates(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
@@ -1146,6 +1271,7 @@ function directCandidates(
                         projectFilesByVirtualPath,
                         module.text,
                     ));
+                    proofs.push(...bindingProof('alias_binding', call.expression, projectFilesByVirtualPath, module.text));
                 }
             } else if (targets[0].file === projectFilesByVirtualPath.get(
                 path.posix.normalize(call.getSourceFile().fileName.replace(/\\/g, '/')),

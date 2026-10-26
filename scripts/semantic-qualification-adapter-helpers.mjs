@@ -5,6 +5,11 @@ const PROOF_EVIDENCE = new Map([
     ['containing_caller', 'caller_identity'],
     ['absolute_import', 'direct_symbol_binding'],
     ['relative_import', 'direct_symbol_binding'],
+    ['alias_binding', 'alias_binding'],
+    ['optional_receiver', 'optional_receiver'],
+    ['interface_contract', 'interface_contract'],
+    ['branch_origin', 'branch_origin'],
+    ['assignment_origin', 'assignment_origin'],
     ['same_file_definition', 'direct_symbol_binding'],
     ['constructor_origin', 'constructor_origin'],
     ['parameter_annotation', 'receiver_type'],
@@ -101,6 +106,7 @@ export function neutralEvidenceFromResolutionClaim(claim, options = {}) {
 
 export function inferResolutionStrategy(claim, provider = {}) {
     const proofKinds = new Set((claim.proofSteps ?? []).map((step) => step.kind));
+    if (proofKinds.has('interface_contract')) return 'interface_dispatch';
     const reasonText = [
         provider.reason,
         ...(claim.proofSteps ?? [])

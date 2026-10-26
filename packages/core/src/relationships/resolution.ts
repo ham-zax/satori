@@ -63,6 +63,7 @@ export function resolutionAuthorityForProof(input: {
         step.kind === 'flow_hop'
         || step.kind === 'callback_origin'
         || step.kind === 'allocation_origin'
+        || step.kind === 'assignment_origin'
         || step.kind === 'field_origin'
     ))) {
         return 'origin_flow';
@@ -87,6 +88,10 @@ export type ResolutionProofStepKind =
     | 'containing_caller'
     | 'absolute_import'
     | 'relative_import'
+    | 'alias_binding'
+    | 'optional_receiver'
+    | 'interface_contract'
+    | 'branch_origin'
     | 'same_file_definition'
     | 'constructor_origin'
     | 'parameter_annotation'
@@ -94,6 +99,7 @@ export type ResolutionProofStepKind =
     | 'receiver_type_binding'
     | 'exact_target_definition'
     | 'allocation_origin'
+    | 'assignment_origin'
     | 'field_origin'
     | 'callback_origin'
     | 'class_inheritance'

@@ -6,4 +6,4 @@
  */
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v11';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v12';

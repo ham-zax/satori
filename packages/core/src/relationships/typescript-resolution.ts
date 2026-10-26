@@ -12,6 +12,7 @@ import type {
     ResolutionObservedCandidate,
     ResolutionProofStep,
 } from './resolution';
+import { resolutionAuthorityForProof } from './resolution';
 
 function spanMatches(
     symbol: SymbolRecord,
@@ -232,9 +233,8 @@ export function buildTypeScriptResolutionClaims(input: {
 
             if (occurrence.decision === 'resolved' && mappedTarget) {
                 decision = 'resolved';
-                authority = occurrence.bindingProofs?.some((step) => step.kind === 'allocation_origin')
-                    ? 'origin_flow'
-                    : 'direct_binding';
+                // The shared proof classifier derives resolved authority below.
+                authority = 'direct_binding';
                 relationshipType = caller ? 'CALLS' : 'REFERENCES';
                 target = mappedTarget;
             } else if (occurrence.decision === 'ambiguous') {
@@ -243,13 +243,20 @@ export function buildTypeScriptResolutionClaims(input: {
                 relationshipType = 'REFERENCES';
             } else {
                 decision = 'unresolved';
-                authority = occurrence.decision === 'unsupported' ? 'unsupported' : 'unresolved';
+                authority = occurrence.decision === 'unsupported'
+                    && occurrence.reason !== 'dynamic_receiver'
+                    && occurrence.reason !== 'dynamic_callee' ? 'unsupported' : 'unresolved';
                 relationshipType = 'REFERENCES';
                 if (occurrence.decision === 'resolved') {
                     detail = 'Compiler target did not map to one canonical Satori target instance.';
                 }
             }
 
+            const proof = proofSteps(occurrence, caller, mappedTarget, decision, detail);
+            const flowHops = proof.filter((step) => step.kind === 'flow_hop').length;
+            if (decision === 'resolved') {
+                authority = resolutionAuthorityForProof({ decision, proofSteps: proof, flowHops });
+            }
             claims.push({
                 providerId: input.providerId,
                 providerVersion: input.providerVersion,
@@ -280,9 +287,9 @@ export function buildTypeScriptResolutionClaims(input: {
                 decision,
                 relationshipType,
                 resolutionAuthority: authority,
-                proofSteps: proofSteps(occurrence, caller, mappedTarget, decision, detail),
+                proofSteps: proof,
                 dependencyKeys: dependencyKeys(occurrence, input.environmentConfigId),
-                flowHops: 0,
+                flowHops,
             });
         }
 

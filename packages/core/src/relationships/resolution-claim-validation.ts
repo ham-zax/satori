@@ -14,6 +14,10 @@ const RESOLUTION_PROOF_STEP_KINDS = new Set([
     'containing_caller',
     'absolute_import',
     'relative_import',
+    'alias_binding',
+    'optional_receiver',
+    'interface_contract',
+    'branch_origin',
     'same_file_definition',
     'constructor_origin',
     'parameter_annotation',
@@ -21,6 +25,7 @@ const RESOLUTION_PROOF_STEP_KINDS = new Set([
     'receiver_type_binding',
     'exact_target_definition',
     'allocation_origin',
+    'assignment_origin',
     'field_origin',
     'callback_origin',
     'class_inheritance',
@@ -31,6 +36,7 @@ const RESOLUTION_PROOF_STEP_KINDS = new Set([
 ]);
 const RESOLUTION_CALL_CONSTRUCT_SET = new Set<string>(RESOLUTION_CALL_CONSTRUCTS);
 const ORIGIN_FLOW_PROOF_KINDS = new Set([
+    'assignment_origin',
     'flow_hop',
     'callback_origin',
     'allocation_origin',

@@ -4052,6 +4052,36 @@ test("client config mutations preserve original bytes on write or rename failure
 });
 
 
+test("client config mutations write through a symlinked config and keep the link", async () => {
+    await withTempHome(async (homeDir) => {
+        const runtime = { command: process.execPath, args: [launcherPath(homeDir)] };
+        const dotfiles = path.join(homeDir, "dotfiles");
+        fs.mkdirSync(dotfiles);
+        const cases = [
+            ["json", prepareClaudeInstall, "{}\n"],
+            ["toml", prepareCodexInstall, 'model = "example"\n'],
+            ["jsonc", prepareOpenCodeInstall, "{ // keep comment\n}\n"],
+        ] as const;
+        for (const [extension, install, initial] of cases) {
+            const targetPath = path.join(dotfiles, `config.${extension}`);
+            const linkPath = path.join(homeDir, `config.${extension}`);
+            fs.writeFileSync(targetPath, initial);
+            fs.symlinkSync(targetPath, linkPath);
+            install(linkPath, runtime).apply();
+            assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+            assert.equal(fs.readlinkSync(linkPath), targetPath);
+            assert.notEqual(fs.readFileSync(targetPath, "utf8"), initial);
+            assert.deepEqual(fs.readdirSync(homeDir).filter((name) => name.endsWith(".tmp")), []);
+        }
+        const danglingTarget = path.join(dotfiles, "missing.json");
+        const danglingLink = path.join(homeDir, "dangling.json");
+        fs.symlinkSync(danglingTarget, danglingLink);
+        prepareClaudeInstall(danglingLink, runtime).apply();
+        assert.equal(fs.lstatSync(danglingLink).isSymbolicLink(), true);
+        assert.match(fs.readFileSync(danglingTarget, "utf8"), /satori/);
+    });
+});
+
 test("managed runtime upgrade retains the active candidate when post-activation retirement fails", async () => {
     await withTempHome(async (homeDir) => {
         await installUpgradeSourceRuntime(homeDir, {

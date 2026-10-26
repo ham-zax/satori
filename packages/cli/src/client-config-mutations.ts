@@ -200,7 +200,26 @@ export function buildPreservedManagedEnv(existing: unknown): Record<string, stri
     return out;
 }
 
-export function writeTextFileAtomic(filePath: string, content: string, mode?: number): void {
+// Client configs are often symlinks into a dotfiles repository. Rename the
+// temp file over the link target so the link and its target stay intact.
+function resolveSymlinkWriteTarget(filePath: string): string {
+    try {
+        return fs.realpathSync(filePath);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    try {
+        if (!fs.lstatSync(filePath).isSymbolicLink()) return filePath;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return filePath;
+        throw error;
+    }
+    // Dangling link: create the file it names.
+    return path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+}
+
+export function writeTextFileAtomic(requestedPath: string, content: string, mode?: number): void {
+    const filePath = resolveSymlinkWriteTarget(requestedPath);
     ensureParentDir(filePath);
     if (mode === undefined) {
         try {

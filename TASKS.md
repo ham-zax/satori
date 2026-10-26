@@ -453,3 +453,114 @@ class-level pair-rotation evidence is present at rank 3 but fails the unchanged 
 oracle. Different architecture predicates do not establish one comparable capability.
 The later Python production fix has independent regression/MCP proof and does not rewrite
 these pre-fix scores. All source work is already committed and pushed as 1fa26e08.
+
+
+## Priority repair run, 26 October 2026
+
+User authorizes P0 inline, P1 on GPT-6.1-sol low/medium, and P2/P3 on OpenCode
+DeepSeek max through T3 V2. The model reading follows the existing DeepSeek naming.
+Run budget: four scoped worker turns. Latest user instruction replaces the delegated review with a handoff follow-up and final parent review.
+One scoped task per agent. Independent nodes may run in parallel, as Hamza clarified.
+One fix round, two only for a demonstrated public-contract risk. Parent alone edits this ledger.
+No package version bumps, publishing, model downloads, live index deletion or original-score edits.
+TaskStartSnapshot: master 47821dde. Twelve staged files contain the existing installer repair
+and benchmark reports. Preserve every staged edit. P0 reuses that repair and strengthens its
+packed native-API check. Each worker owns separate files and must preserve peer edits.
+Method: subagent-driven-development and long-task-continuation with this ledger as sole state.
+Fit gate: preserved transcripts and the common corpus define failures; focused regression checks
+are executable; a wrong proof claim corrupts evidence, so preserve abstention; delegation splits
+three independent owners while parent checks client installation.
+
+| id | status | depends | owner | acceptance | evidence |
+| PR-P0 | review | - | parent | Required TypeScript 7.1 platform compiler installs with optional dependencies omitted. Existing closure manifests invalidate missing compiler identity. Packed runtime creates and closes the native API and parses a source file. Preserve versions and staged work. Refs: packages/cli/src/managed-runtime-closure.ts, install-application.ts, managed-package.ts, CLI manifest, packages/cli/scripts/release-smoke.ts, scripts/release-graph.mjs and focused tests. | Existing staged repair. Clean isolated omit-only install fails and explicit binary install starts/closes API. 110 installer tests and 30 release-graph tests pass. Packed API proof runs in managed exec session 7448, log /tmp/satori-pr-p0-packed-smoke.log. Parent added a real API createSourceFile call with retained-file disposal and API close in finally. Packed smoke exits 1 after native TypeScript API parse/disposal/close pass, during the later independent Potion readiness check. Log: /tmp/satori-pr-p0-packed-smoke.log. Packed runtime size 963988221 bytes stays below 1006632960-byte budget. Full release smoke is not green; Potion timeout remains an integration limitation. |
+| PR-P1A | review | - | T3 GPT-6.1-sol medium | Investigate and repair lost TypeScript proof evidence and authority at the actual converter/provider owner. Preserve exact targets, abstention and immutable common-corpus assertions. Run common qualification and focused semantic checks. Explain any unsupported oracle expectation rather than synthesizing proofs. Own core relationship TypeScript converter/provider evidence and their tests plus scripts/semantic-qualification-adapter-helpers.mjs and its focused tests only. Refs: packages/core/src/relationships/typescript-resolution.ts, packages/core/src/semantic/typescript-compiler-provider.ts, scripts/typescript-semantic-qualification.mjs, scripts/semantic-relationship-qualification.mjs, evals/semantic-relationship-qualification/corpus.json. | Baseline common corpus: semantic 12/12, strict evidence 1/12, wrong targets zero. No child may edit corpus assertions or claim this proves a TS7 regression. T3 taskId node:delegated-task:command%3Amcp%3Ad4311d0b-fa29-40eb-b094-6ddfaf5a0997%3Adelegate-task%3Asatori-pr-p1a-20261026-r1. Running, selected model/options checked. Parent independently checks 13 focused core tests, two adapter tests and a fresh common qualification: semantic 12/12, evidence 4/12, strict 3/12, wrong targets/false resolutions zero. Retained gaps: field/constructor assignment/alias/optional/inheritance/interface/branch proofs and dynamic authority mismatch. Parent advances internal ts-compiler identity v10 to v11 to invalidate old evidence, with package versions unchanged. Seven descriptor/persisted-state tests pass after the internal identity change. Score artifact /tmp/satori-pr-parent-qualification-score.json. This is a partial proof repair, not full corpus acceptance. |
+| PR-P1B | review | - | T3 GPT-6.1-sol medium | Bound raw search disclosure at the response owner so a valid limit-20 request cannot exceed the 32768-byte visible-result budget. Preserve valid JSON, ranking and full results below budget. Make omissions explicit through established disclosure contracts. Add Unicode, oversized chunk and ordinary-result regression checks. Own MCP search response serialization/envelopes, affected types and tool tests only. Refs: packages/mcp/src/core/search-response-envelopes.ts, search-types.ts, packages/mcp/src/tools/search_codebase.ts and tests. | Original bench-full Satori r3 emits 41387 bytes. Later bench-full2 emits 43080 bytes. Grouped response policy and semantic ranking are out of scope. T3 taskId node:delegated-task:command%3Amcp%3Ad4311d0b-fa29-40eb-b094-6ddfaf5a0997%3Adelegate-task%3Asatori-pr-p1b-20261026-r1. Running, selected model/options checked. Parent immediately reviews public response contract and independently checks 59 focused MCP tests, all pass. Real archived r3 response shrinks 41387 to 31975 UTF-8 bytes, retains the identical first 12 of 20 complete hits and adds the existing omission warning. Old transcript remains unchanged. Single oversized hit/metadata yields existing SEARCH_RESULT_SET_PAGE_TOO_LARGE; full diagnostics keep their separate budget. |
+| PR-P23 | review | - | T3 OpenCode DeepSeek max | Repair freshness task definition/reference ambiguity in a new versioned task specification without changing archived scores. Clarify allowed search-root guidance, implementation-versus-call-site relationships, and run/metric/validity reporting. Add focused harness tests. Analyze extra calls and the later incorrect fact from preserved evidence without changing agent answers or expanding benchmark claims. Own evals/agent-discovery/evaluator-tasks.json, run-opencode.mjs, run-opencode.test.mjs and docs/improvements/agent-discovery-benchmark-2026-10-26.md only. | Original bench-full r1/r2 fail only callback-file match; r3 also exceeds byte limit. All original Satori facts/owner/span match. Later bench-full2 has an independent wrong fact. Two tasks and curated first query remain disclosed limits. T3 taskId node:delegated-task:command%3Amcp%3Ad4311d0b-fa29-40eb-b094-6ddfaf5a0997%3Adelegate-task%3Asatori-pr-p23-20261026-r1. Running, selected model/options checked. Parent independently checks all 42 harness tests. Parent synchronizes AGENT_INSTRUCTIONS.md and HARNESS_PROTOCOL.md to v4 and fixes the staged README rows to distinguish valid/invalid suites and the current Potion smoke failure. New wording remains unmeasured; original artifacts/scores stay unchanged. |
+| PR-HANDOFF | review | PR-P23 | existing OpenCode worker, handoff only | Return owned changes, tests, unresolved defects and owned processes. No new edits, tests, models or review. | Latest direct user request. Steer sent to existing PR-P23 thread. Follow-up taskId node:delegated-task:65515b87-ceb4-4dfd-8218-d6a3eb8fac2e, running. Final review belongs to the parent. Parent recovers completed implementation handoff from original terminal result. Extra cleanup reply is blocked in worker-native nested review started at 07:28, outside packet scope. After explicit handoff request at 07:36 cannot return, parent stops follow-up task and its review descendants per latest user direction. No implementation work is lost. |
+| PR-BENCH | review | PR-P0, PR-P1A, PR-P1B, PR-P23 | parent | Check the integrated diff, build once serially, and rerun the benchmark only against an immutable checkout with distinct run identity. Keep old scores and identify total task time separately from source-discovery time. Stop on model quota or environmental blocker and report it honestly. | No delegated dispatch reserved. Baseline bench-full final clean-worktree check fails. Integrated build and a task-owned frozen snapshot are next. Main retains partial semantic work uncommitted under the latest commit instruction. Retry suite opencode-2026-10-26T07-30-15-360Z-24baa346 completes with valid 12/12 measurement records. Satori exact/freshness 3/3 and 3/3; native 3/3 and 2/3. Exit 1 reflects one native budget-exhausted attempt, not invalid measurement. Snapshot stays clean. Tested task manifest is version 3; final parent clarification version 4 remains unmeasured. |
+| PR-REVIEW | review | PR-HANDOFF | parent Codex, per latest user instruction | One final review of the complete graph diff and acceptance evidence. Check proof authenticity, bounded disclosure, packed native installation, benchmark validity and preserved staged work. Report concrete findings. | Latest user instruction: parent reviews personally after agent handoff, then commits checked work. No delegated reviewer. Parent moves rows to review, never done. Parent reviews the full graph personally per latest user instruction. Corrected the proof authority regression, synchronized protocol docs/status claims, and clarified the freshness boolean exception in task manifest version 4 while preserving archived keys/scores. No remaining known blocker in the reviewed repair code. Remaining limitations: partial proof coverage, unmeasured final question wording, and separate Potion smoke timeout. Parent checks 36 publication/provider tests, 42 harness tests, 21 qualification/adapter tests, seven identity/state tests, builds and workspace check. No delegated final reviewer. |
+
+
+Priority-run commit checkpoint: Hamza requests committing only the checked repairs.
+Parent commits PR-P0 as e13623bd (`fix(cli): install the required TypeScript native compiler`)
+and PR-P1B as 0d1708f4 (`fix(mcp): bound raw search responses by UTF-8 bytes`).
+Only the nine installer/release-code paths and three raw-response paths enter those commits.
+Existing staged documentation, partial proof work, benchmark edits and this ledger remain intact
+and uncommitted. Fresh pnpm run check exits 0. Existing focused acceptance results remain valid.
+No package versions change. Full smoke still fails at the later Potion readiness check.
+The graph remains active and retains its one final independent review after integrated checks.
+
+
+Integration checkpoint: parent checks PR-P23 with 42 passing tests and synchronizes its two
+protocol documents and the staged summary rows. Builds pass for core, MCP and CLI. The initial
+publication check exposes three authority regressions in the uncommitted proof patch. Parent
+narrows origin_flow to cases where allocation changes the static target set. Same-target
+allocation retains constructor proof and direct_binding. A regression covers both cases.
+All 36 focused/provider/publication tests now pass without changing old assertions. The fresh
+workspace check passes. The two earlier checked commits remain unchanged.
+Benchmark snapshot is /home/hamza/.cache/satori-priority-20261026/snapshot-0vmt4a8j, frozen SHA
+06dca384d6740b0f23ef363c652a2bf084129a82. Its earlier candidate snapshot was never measured.
+Original global opencode now reports v2.1.4 and lacks the expected resolved Satori config.
+Use existing pinned /tmp/opencode/oc118/node_modules/.bin/opencode v1.18.35 and the prior
+benchmark's profile through task-owned opencode-benchmark, with isolated state/vector paths.
+The temporary shell wrapper passes shellcheck. No global/client settings change. Isolated
+snapshot index preparation is running in exec session 2991, log /tmp/satori-pr-index-setup.log.
+Do not start a scored run until status is ok. Do not edit snapshot source/runtime after that.
+
+
+Snapshot index preparation completes with status ok and closes its MCP session. The readiness
+witness is /home/hamza/.cache/satori-priority-20261026/index-ready.json. Parent starts one v4
+scored run on the frozen snapshot: pinned OpenCode 1.18.35, DeepSeek V4.1 max, three repetitions
+per task/arm, prepare=status, separate results directory. Managed exec session 46493. Log /tmp/satori-pr-v4-benchmark.log.
+Max effort differs from the old high-effort runs, so cross-run timing deltas cannot isolate the
+repair. The run's internal paired arms retain identical model settings. No snapshot files or
+runtime outputs may change while the run is active. A cancellation notification for task
+node:delegated-task:28b64a2c-560f-4284-a3ae-a5736f1614df does not match this graph's completed
+PR-P23 taskId. No replacement worker or extra dispatch is started.
+
+
+First v4 launch stops in preflight before any scored task: prepareSatori sees not_ready.
+Exec 46493 exits 1. No scores are claimed. A separate reopened status check returns ok for the
+same immutable snapshot and isolated state, with an active startup sync reported. The exact
+reason for the first transient not_ready is not captured by the harness error, so do not claim
+a root cause. Parent permits one retry after the observed ok status, preserving first log.
+Retry log /tmp/satori-pr-v4-benchmark-retry.log. If readiness fails again, stop this branch,
+record the blocker, and proceed to the single final audit rather than retrying blindly.
+
+
+The single retry passes index preflight and writes run-manifest.json under
+results/opencode-2026-10-26T07-30-15-360Z-24baa346. Managed exec session 55832 owns the run.
+Source/runtime snapshot stays clean and frozen. Scored attempts remain pending.
+
+
+Hamza explicitly changes the final-review method: request agent handoff, review personally as
+parent Codex, then commit. That overrides the earlier delegated-review requirement. Parent
+steers the already active PR-P23 follow-up, without spawning a reviewer. Existing P1A/P1B
+terminal summaries are recovered as handoff evidence. The frozen benchmark continues separately
+and cannot be invalidated by main-checkout review or commits.
+
+
+Final parent-review result: reviewed changes commit as b4c56e1f (supported TypeScript binding
+proofs) and 80cdf946 (freshness reference-site/exception wording, canonical
+root guidance and run reporting). No package version changes. Original scores and frozen
+snapshot remain intact. Only Hamza marks rows done. The worker-native extra review is
+interrupted after the handoff request cannot return while that review tool runs. Its original
+completed implementation handoff is retained. No further agent work is pending in that task.
+Brief retrospective: a worker started a nested review outside its no-delegation packet and
+blocked cleanup handoff. Use its saved terminal result and stop extra turns once parent takes
+review ownership. A cold status returned not_ready before a later ok status; preserve that
+unscored failure and one successful preflight retry rather than hiding it in scored results.
+Remaining work is explicitly limited to the retained proof gaps, the separate Potion readiness
+failure, and measurement of final manifest version 4 wording. No release-readiness claim.
+
+
+Commit preparation: final code and report review covers tracked staged/unstaged changes and
+both new focused test files against the 47821dde baseline. The semantic patch is explicitly
+partial (12/12 decisions, 4/12 evidence, 3/12 strict). The new v4 run is valid with 12 records,
+Satori 6/6 and native 5/6 across the two tasks. Final manifest version 4 wording remains
+unmeasured. Broad product/latency claims are withheld. The parent performs the required brief
+retrospective using the loaded retro guidance; the benchmark document records a diagnostic
+proposal only. No global rule, CI policy, compatibility fallback or dependency is added.
+All implementation/benchmark commands are finished. Handoff follow-up task is interrupted
+with no pending child runs. Final documentation/ledger commit follows the two reviewed code
+commits. No push or release occurs in this closeout.

@@ -18,6 +18,8 @@ bridge is now the default-on `behavior_alt_terms` flag in `9abe9006`; on the
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [Satori vs native agent discovery, 26 October 2026](agent-discovery-benchmark-2026-10-26.md) | Valid v3 and v4 suites; final question clarification unmeasured | Keeps suites distinct and separates total agent time from discovery time. The frozen v4 snapshot passes Satori 3/3 on each task versus native 3/3 and 2/3. Final manifest version 4 clarifies the freshness exception and remains unmeasured. Two tasks and a curated first query limit the conclusions. |
+| [Managed-runtime TypeScript compiler install, 26 October 2026](typescript-runtime-install-2026-10-26.md) | Native compiler fix checked and committed; latest full smoke fails on Potion readiness | Explicit platform compiler installation restores the TypeScript 7 API in a packed runtime with optional dependencies omitted. Focused tests pass. The latest full release smoke reaches a later Potion readiness timeout, so it is not a release pass. Existing clients need the updated CLI and reinstall. |
 | [Semantic resolution repairs, 25 October 2026](semantic-repair-2026-10-25.md) | Implemented and checked | Six Python resolution and TypeScript resource repairs, 120 focused tests, workspace checks, and two review rounds. |
 | [MCP benchmark contract follow-ups, 25 October 2026](mcp-benchmark-contract-followups-2026-10-25.md) | Proposed | Records the readiness delay, inconsistent scoring labels and reviewer quota failure, with bounded follow-up checks. |
 | [Dependency refresh test follow-ups, 25 October 2026](dependency-refresh-test-followups-2026-10-25.md) | Proposed | Records the compiled LateOn test entry and installer assertions that reject valid Node executable paths. |

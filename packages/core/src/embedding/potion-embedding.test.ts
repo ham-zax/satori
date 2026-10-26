@@ -28,6 +28,59 @@ type TestPotionEmbeddingConstructor = new (config: {
 
 const TestPotionEmbedding = PotionEmbedding as unknown as TestPotionEmbeddingConstructor;
 
+test('Potion startup accepts readiness already in the pipe after an event-loop stall', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-potion-startup-'));
+    const helperPath = path.join(root, 'ready-worker.cjs');
+    const marker = path.join(root, 'ready-written');
+    const frame = JSON.stringify({
+        ready: true, modelLoadedOnce: true, retainedTokenLimit: 4096, networkBlocked: true,
+    }) + '\n';
+    fs.writeFileSync(helperPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+process.stdout.write(${JSON.stringify(frame)}, () => fs.writeFileSync(${JSON.stringify(marker)}, String(Date.now())));
+process.stdin.resume();
+`, { mode: 0o755 });
+    const embedding = new TestPotionEmbedding({
+        helperPath, modelPath: root, requestTimeoutMs: 500, startupTimeoutMs: 1000, maxBatchItems: 1,
+    });
+    t.after(async () => {
+        await embedding.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    const started = Date.now();
+    const readiness = (embedding as unknown as { start(): Promise<void> }).start();
+    // The marker proves the helper flushed its complete ready frame before
+    // the deadline. Keep the parent from polling the pipe until after it.
+    while (!fs.existsSync(marker) && Date.now() - started < 1000) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+    assert.ok(fs.existsSync(marker), 'helper must write readiness before the deadline');
+    assert.ok(Number(fs.readFileSync(marker, 'utf8')) - started < 1000);
+    while (Date.now() - started < 1100) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+    await readiness;
+});
+
+test('Potion startup still rejects a worker that never reports readiness', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-potion-silent-'));
+    const helperPath = path.join(root, 'silent-worker.cjs');
+    fs.writeFileSync(helperPath, '#!/usr/bin/env node\nprocess.stdin.resume();\n', { mode: 0o755 });
+    const embedding = new TestPotionEmbedding({
+        helperPath, modelPath: root, requestTimeoutMs: 500, startupTimeoutMs: 100, maxBatchItems: 1,
+    });
+    t.after(async () => {
+        await embedding.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    await assert.rejects(
+        (embedding as unknown as { start(): Promise<void> }).start(),
+        (error: unknown) => error instanceof EmbeddingProviderError
+            && error.code === 'EMBEDDING_PROVIDER_TIMEOUT'
+            && error.message === 'Potion worker readiness timed out.',
+    );
+});
+
 const FAKE_WORKER = String.raw`#!/usr/bin/env node
 const readline = require('node:readline');
 

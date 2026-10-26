@@ -500,11 +500,16 @@ export class PotionEmbedding extends Embedding {
         });
 
         const startupTimer = setTimeout(() => {
-            this.failWorker(providerError({
-                code: 'EMBEDDING_PROVIDER_TIMEOUT',
-                retryable: true,
-                message: 'Potion worker readiness timed out.',
-            }));
+            // As with request expiry, synchronous parent work can leave an
+            // already-written ready frame waiting behind expired timers.
+            setImmediate(() => {
+                if (this.child !== child || this.state !== 'starting') return;
+                this.failWorker(providerError({
+                    code: 'EMBEDDING_PROVIDER_TIMEOUT',
+                    retryable: true,
+                    message: 'Potion worker readiness timed out.',
+                }));
+            });
         }, this.startupTimeoutMs);
         this.startupPromise.finally(() => clearTimeout(startupTimer)).catch(() => undefined);
         return this.startupPromise;

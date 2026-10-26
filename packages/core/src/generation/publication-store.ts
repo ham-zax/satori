@@ -557,12 +557,21 @@ export class PublicationStore {
                 throw new Error(`Publication state contains unsupported root entry '${publicationRoot}'.`);
             }
             const pointerPath = path.join(publicationRoot, 'current.json');
-            let pointer: CurrentPublicationPointer;
+            let rawPointer: string;
             try {
-                pointer = parseCurrentPointer(JSON.parse(fs.readFileSync(pointerPath, 'utf8')), pointerPath);
+                rawPointer = fs.readFileSync(pointerPath, 'utf8');
             } catch (error) {
                 if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
                 throw error;
+            }
+            let pointer: CurrentPublicationPointer;
+            try {
+                pointer = parseCurrentPointer(JSON.parse(rawPointer), pointerPath);
+            } catch (error) {
+                // A corrupt pointer fails only its own root: getCurrentState still
+                // throws for that root, and the other roots stay listable.
+                console.warn(`Skipping Publication state with a corrupt current pointer at '${pointerPath}': ${String(error)}`);
+                continue;
             }
             const descriptorPath = path.join(
                 publicationRoot,
@@ -995,11 +1004,22 @@ export class PublicationStore {
             const candidateReceipts = this.listCandidateReceiptsInPublicationRoot(publicationRoot);
 
             const pointerPath = path.join(publicationRoot, 'current.json');
-            let current: CurrentPublicationPointer | null = null;
+            let rawPointer: string | null = null;
             try {
-                current = parseCurrentPointer(JSON.parse(fs.readFileSync(pointerPath, 'utf8')), pointerPath);
+                rawPointer = fs.readFileSync(pointerPath, 'utf8');
             } catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            }
+            let current: CurrentPublicationPointer | null = null;
+            if (rawPointer !== null) {
+                try {
+                    current = parseCurrentPointer(JSON.parse(rawPointer), pointerPath);
+                } catch (error) {
+                    // Without a trusted pointer no generation is provably orphaned:
+                    // keep this root untouched and continue with the other roots.
+                    console.warn(`Skipping startup cleanup for a corrupt current pointer at '${pointerPath}': ${String(error)}`);
+                    continue;
+                }
             }
 
             const canonicalRoot = this.resolveStartupCanonicalRoot(

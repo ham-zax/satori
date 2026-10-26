@@ -197,3 +197,33 @@ test('cold startup still rejects previously corrupted source metadata without a 
     }, SyntaxError);
     assert.equal(fs.readFileSync(sourcePath, 'utf8'), corruptContents);
 });
+
+test('a corrupt current pointer fails only its own root at startup and in listing', (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-corrupt-pointer-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const corruptRoot = fs.realpathSync(fs.mkdtempSync(path.join(directory, 'corrupt-')));
+    const healthyRoot = fs.realpathSync(fs.mkdtempSync(path.join(directory, 'healthy-')));
+    const runtime = new RootMutationRuntime({ stateDir: path.join(directory, 'mutations') });
+    const options = { stateRoot: path.join(directory, 'state'), mutationCoordinator: getRootMutationCoordinator(runtime) };
+    const corruptPublicationRoot = writeCurrent(options.stateRoot, corruptRoot);
+    const healthyPublicationRoot = writeCurrent(options.stateRoot, healthyRoot);
+    const pointerPath = path.join(corruptPublicationRoot, 'current.json');
+    fs.writeFileSync(pointerPath, '{"version":');
+    const corruptOrphan = path.join(corruptPublicationRoot, 'generations', 'orphan', 'source.json');
+    const healthyOrphan = path.join(healthyPublicationRoot, 'generations', 'orphan', 'source.json');
+    for (const [file, canonicalRoot] of [[corruptOrphan, corruptRoot], [healthyOrphan, healthyRoot]]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ canonicalRoot }));
+    }
+    const warnings: string[] = [];
+    t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.join(' ')); });
+
+    const store = new PublicationStore(options);
+    assert.equal(fs.existsSync(corruptOrphan), true, 'cleanup leaves a root without a trusted pointer untouched');
+    assert.equal(fs.existsSync(healthyOrphan), false, 'cleanup continues for healthy roots');
+    assert.deepEqual(store.listCurrent().map((ref) => ref.publication.canonicalRoot), [healthyRoot]);
+    assert.throws(() => store.getCurrentState(corruptRoot), SyntaxError);
+    assert.equal(warnings.length, 2);
+    for (const warning of warnings) assert.ok(warning.includes(pointerPath));
+    assert.equal(fs.readFileSync(pointerPath, 'utf8'), '{"version":');
+});

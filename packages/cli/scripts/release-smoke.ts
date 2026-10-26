@@ -10,6 +10,7 @@ import {
     resolveLanceDbNativePackage,
     resolveLateOnNativePackages,
     resolveOxcParserNativePackage,
+    resolveTypeScriptNativePackage,
 } from "../src/managed-runtime-closure.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
@@ -21,9 +22,10 @@ import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.
 
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // Optional native packages remain omitted; required host-native LanceDB,
-// oxc-parser, and LateOn/Sharp packages are installed explicitly and measured
-// by the gate below. The temporary 960 MiB budget covers the measured 901 MiB
-// closure after dependency upgrades; the deferred size investigation is in docs/RELEASING.md.
+// oxc-parser, TypeScript, and LateOn/Sharp packages are installed explicitly
+// and measured by the gate below. The temporary 960 MiB budget covers the
+// measured 919 MiB closure after the TypeScript compiler addition; the
+// deferred size investigation is in docs/RELEASING.md.
 const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
 
 interface PackageManifest {
@@ -102,7 +104,7 @@ function isPathWithin(rootPath: string, candidatePath: string): boolean {
         && !path.isAbsolute(relative);
 }
 
-function installAndVerifyPackedReleaseClosure(
+async function installAndVerifyPackedReleaseClosure(
     sourceRoots: {
         cli: string;
         mcp: string;
@@ -146,6 +148,7 @@ function installAndVerifyPackedReleaseClosure(
         tarballs.cli,
         lanceDbNativePackage,
         resolveOxcParserNativePackage(runtimeClosure),
+        resolveTypeScriptNativePackage(runtimeClosure),
         ...lateOnNativePackages,
     ], {
         cwd: installRoot,
@@ -231,6 +234,51 @@ function installAndVerifyPackedReleaseClosure(
     }
     if (!isPathWithin(installRoot, resolvedOxcBinding)) {
         throw new Error("Packed MCP resolved the oxc-parser native binding outside the installed release closure.");
+    }
+    const typeScriptNativeSpecifier = resolveTypeScriptNativePackage({ vectorStore: "LanceDB" });
+    const typeScriptNativePackageName = typeScriptNativeSpecifier.slice(
+        0,
+        typeScriptNativeSpecifier.lastIndexOf("@"),
+    );
+    const resolvedTypeScriptPackageJson = requireFromMcp.resolve("typescript/package.json");
+    const resolvedTypeScriptNative = requireFromMcp.resolve(
+        `${typeScriptNativePackageName}/package.json`,
+    );
+    if (!isPathWithin(installRoot, resolvedTypeScriptPackageJson)) {
+        throw new Error("Packed MCP resolved typescript outside the installed release closure.");
+    }
+    if (!isPathWithin(installRoot, resolvedTypeScriptNative)) {
+        throw new Error("Packed MCP resolved the TypeScript host compiler outside the installed release closure.");
+    }
+    // TypeScript does not export the internal resolver, so import the installed
+    // file by path. Its own `import.meta.resolve` call then starts from the
+    // packed `typescript/lib` directory and must find the host package there.
+    const typeScriptGetExePath = path.join(
+        path.dirname(resolvedTypeScriptPackageJson),
+        "lib",
+        "getExePath.js",
+    );
+    const { default: getTypeScriptExePath } = (await import(
+        pathToFileURL(typeScriptGetExePath).href
+    )) as { default: () => string };
+    const typeScriptExe = getTypeScriptExePath();
+    if (!isPathWithin(installRoot, typeScriptExe)) {
+        throw new Error("TypeScript resolved its host compiler outside the installed release closure.");
+    }
+    const { API } = requireFromMcp("typescript/sync") as typeof import("typescript/sync");
+    const typeScriptApi = new API({ runExternalCode: false });
+    try {
+        const sourceText = "export const value: number = 1;";
+        const retained = typeScriptApi.createSourceFile("packed-runtime-probe.ts", sourceText);
+        try {
+            if (retained.sourceFile.text !== sourceText) {
+                throw new Error("Packed TypeScript native API did not parse the probe source.");
+            }
+        } finally {
+            retained.dispose();
+        }
+    } finally {
+        typeScriptApi.close();
     }
     const { parseSync } = requireFromMcp("oxc-parser") as {
         parseSync?: (
@@ -574,7 +622,7 @@ async function main(): Promise<void> {
         const cliTarballPath = packPackage(packageRoot, smokePackDir);
         const baseEnv = isolatedSmokeEnv(smokeHomeDir);
         assertPackedBootstrapCli(cliTarballPath, bootstrapRoot, baseEnv);
-        const packed = installAndVerifyPackedReleaseClosure(
+        const packed = await installAndVerifyPackedReleaseClosure(
             {
                 cli: packageRoot,
                 mcp: mcpPackageRoot,

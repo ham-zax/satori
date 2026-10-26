@@ -52,6 +52,7 @@ const CORE_PACKAGE_JSON = JSON.parse(
 ) as { name: string; version: string; dependencies?: Record<string, string> };
 const EXPECTED_PACKAGE_SPECIFIER = `${PACKAGE_JSON.name}@${PACKAGE_JSON.version}`;
 const EXPECTED_OXC_BINDING_SPECIFIER = `@oxc-parser/binding-linux-x64-gnu@${CORE_PACKAGE_JSON.dependencies?.["oxc-parser"]}`;
+const EXPECTED_TYPESCRIPT_COMPILER_SPECIFIER = `@typescript/typescript-linux-x64@${CORE_PACKAGE_JSON.dependencies?.["typescript"]}`;
 
 function executeInstallCommand(
     command: InstallCommandInput,
@@ -240,6 +241,7 @@ function installRuntimePackageStub(
         assert.equal(args[packageIndex - 1], "--");
         assert.notEqual(args.indexOf("--omit=optional"), -1);
         assert.notEqual(args.indexOf(EXPECTED_OXC_BINDING_SPECIFIER), -1);
+        assert.notEqual(args.indexOf(EXPECTED_TYPESCRIPT_COMPILER_SPECIFIER), -1);
         const packageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
         const entryPath = path.join(packageRoot, relativeEntry);
         fs.mkdirSync(path.dirname(entryPath), { recursive: true });

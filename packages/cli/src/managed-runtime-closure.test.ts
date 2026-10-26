@@ -11,6 +11,7 @@ import {
     resolveLanceDbNativePackage,
     resolveLateOnNativePackages,
     resolveOxcParserNativePackage,
+    resolveTypeScriptNativePackage,
     writeManagedRuntimeClosureManifest,
 } from "./managed-runtime-closure.js";
 
@@ -27,6 +28,11 @@ const corePackageJson = JSON.parse(fs.readFileSync(corePackageJsonPath, "utf8"))
 const oxcParserVersion = corePackageJson.dependencies?.["oxc-parser"];
 const oxcParserPackageJsonPath = createRequire(corePackageJsonPath).resolve("oxc-parser/package.json");
 const oxcParserPackageJson = JSON.parse(fs.readFileSync(oxcParserPackageJsonPath, "utf8")) as {
+    optionalDependencies?: Record<string, string>;
+};
+const typeScriptVersion = corePackageJson.dependencies?.["typescript"];
+const typeScriptPackageJsonPath = createRequire(corePackageJsonPath).resolve("typescript/package.json");
+const typeScriptPackageJson = JSON.parse(fs.readFileSync(typeScriptPackageJsonPath, "utf8")) as {
     optionalDependencies?: Record<string, string>;
 };
 
@@ -164,6 +170,70 @@ test("rejects a platform without a published oxc-parser native binding", () => {
     );
 });
 
+test("resolves the exact host-native TypeScript compiler for the host platform", () => {
+    assert.equal(
+        resolveTypeScriptNativePackage({
+            vectorStore: "LanceDB",
+            platform: "linux",
+            architecture: "x64",
+            libc: "gnu",
+        }),
+        `@typescript/typescript-linux-x64@${typeScriptVersion}`,
+    );
+    assert.equal(
+        resolveTypeScriptNativePackage({
+            vectorStore: "LanceDB",
+            platform: "darwin",
+            architecture: "arm64",
+        }),
+        `@typescript/typescript-darwin-arm64@${typeScriptVersion}`,
+    );
+    assert.equal(
+        resolveTypeScriptNativePackage({
+            vectorStore: "LanceDB",
+            platform: "win32",
+            architecture: "x64",
+        }),
+        `@typescript/typescript-win32-x64@${typeScriptVersion}`,
+    );
+});
+
+test("mapped TypeScript compiler packages match the upstream optional dependency metadata", () => {
+    const cases = [
+        ["linux", "x64", "gnu", "@typescript/typescript-linux-x64"],
+        ["linux", "x64", "musl", "@typescript/typescript-linux-x64"],
+        ["linux", "arm64", "gnu", "@typescript/typescript-linux-arm64"],
+        ["darwin", "arm64", undefined, "@typescript/typescript-darwin-arm64"],
+        ["darwin", "x64", undefined, "@typescript/typescript-darwin-x64"],
+        ["win32", "x64", undefined, "@typescript/typescript-win32-x64"],
+    ] as const;
+    for (const [platform, architecture, libc, packageName] of cases) {
+        const specifier = resolveTypeScriptNativePackage({
+            vectorStore: "LanceDB",
+            platform,
+            architecture,
+            ...(libc ? { libc } : {}),
+        });
+        assert.equal(specifier, `${packageName}@${typeScriptVersion}`);
+        assert.equal(typeScriptPackageJson.optionalDependencies?.[packageName], typeScriptVersion);
+    }
+});
+
+test("rejects a host without a managed TypeScript compiler target", () => {
+    assert.throws(
+        () => resolveTypeScriptNativePackage({
+            vectorStore: "LanceDB",
+            platform: "linux",
+            architecture: "s390x",
+        }),
+        (error: unknown) => (
+            error instanceof CliError
+            && error.token === "E_USAGE"
+            && /unsupported on linux\/s390x/.test(error.message)
+        ),
+    );
+});
+
 test("runtime closure manifest distinguishes slim LanceDB and Milvus installs", () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-runtime-closure-"));
     try {
@@ -199,8 +269,9 @@ test("closure identity pins the oxc-parser native binding", () => {
         };
         writeManagedRuntimeClosureManifest(runtimeRoot, closure);
         const manifest = JSON.parse(fs.readFileSync(path.join(runtimeRoot, ".satori-runtime-closure.json"), "utf8"));
-        assert.equal(manifest.formatVersion, 3);
+        assert.equal(manifest.formatVersion, 4);
         assert.equal(manifest.oxcParserNativePackage, `@oxc-parser/binding-linux-x64-gnu@${oxcParserVersion}`);
+        assert.equal(manifest.typeScriptNativePackage, `@typescript/typescript-linux-x64@${typeScriptVersion}`);
         assert.deepEqual(manifest.lateOnNativePackages, [
             "@img/sharp-linux-x64@0.35.5",
             "@img/sharp-libvips-linux-x64@1.3.4",
@@ -210,6 +281,12 @@ test("closure identity pins the oxc-parser native binding", () => {
         fs.writeFileSync(
             path.join(runtimeRoot, ".satori-runtime-closure.json"),
             JSON.stringify({ ...manifest, formatVersion: 2 }),
+        );
+        assert.equal(managedRuntimeClosureMatches(runtimeRoot, closure), false);
+
+        fs.writeFileSync(
+            path.join(runtimeRoot, ".satori-runtime-closure.json"),
+            JSON.stringify({ ...manifest, typeScriptNativePackage: undefined }),
         );
         assert.equal(managedRuntimeClosureMatches(runtimeRoot, closure), false);
     } finally {

@@ -163,6 +163,7 @@ export function readLocalReleaseGraph(cwd = process.cwd()) {
   if (
     cliRuntime.lanceDb !== packages.core.manifest.dependencies?.['@lancedb/lancedb']
     || cliRuntime.oxcParser !== packages.core.manifest.dependencies?.['oxc-parser']
+    || cliRuntime.typescript !== packages.core.manifest.dependencies?.['typescript']
     || cliRuntime.lateOn?.transformers !== packages.mcp.manifest.dependencies?.['@huggingface/transformers']
     || cliRuntime.lateOn?.onnxruntimeNode !== packages.mcp.manifest.dependencies?.['onnxruntime-node']
   ) {

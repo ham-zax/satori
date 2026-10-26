@@ -43,6 +43,7 @@
     "core": "0.10.2",
     "lanceDb": "0.40.0",
     "oxcParser": "0.155.0",
+    "typescript": "7.1.0-beta",
     "lateOn": {
       "transformers": "4.3.1",
       "onnxruntimeNode": "1.30.0",

@@ -134,6 +134,21 @@ test('server.json mismatch is rejected', () => {
   assert.throws(() => readLocalReleaseGraph(cwd), /server\.json version .* must equal local MCP version 6\.8\.0/);
 });
 
+test('stale TypeScript compiler metadata is rejected', () => {
+  const cwd = standardWorkspace({
+    'packages/core/package.json': {
+      name: '@satori-code/core',
+      version: '3.6.0',
+      dependencies: {
+        '@lancedb/lancedb': '0.31.0',
+        'oxc-parser': '0.139.0',
+        typescript: '7.1.0-beta',
+      },
+    },
+  });
+  assert.throws(() => readLocalReleaseGraph(cwd), /native\/runtime versions are stale/);
+});
+
 test('non-workspace MCP dependency on Core is rejected', () => {
   const cwd = standardWorkspace({
     'packages/mcp/package.json': {

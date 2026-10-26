@@ -24,6 +24,19 @@ const OXC_PARSER_NATIVE_PACKAGES = new Map<string, string>([
     ["win32-ia32-", "@oxc-parser/binding-win32-ia32-msvc"],
     ["win32-x64-", "@oxc-parser/binding-win32-x64-msvc"],
 ]);
+// TypeScript 7 ships its compiler as a host-native optional dependency and
+// resolves it upward from the installed `typescript` package. The managed
+// runtime installs with --omit=optional, so every host needs its exact
+// platform package installed beside the MCP runtime or semantic analysis fails
+// with "Unable to resolve @typescript/typescript-<platform>-<arch>".
+const TYPESCRIPT_NATIVE_PACKAGES = new Map<string, string>([
+    ["darwin-arm64-", "@typescript/typescript-darwin-arm64"],
+    ["darwin-x64-", "@typescript/typescript-darwin-x64"],
+    ["linux-arm64-", "@typescript/typescript-linux-arm64"],
+    ["linux-x64-", "@typescript/typescript-linux-x64"],
+    ["win32-arm64-", "@typescript/typescript-win32-arm64"],
+    ["win32-x64-", "@typescript/typescript-win32-x64"],
+]);
 const MANAGED_RUNTIME_CLOSURE_FILE = ".satori-runtime-closure.json";
 
 export interface ManagedRuntimeClosure {
@@ -35,13 +48,15 @@ export interface ManagedRuntimeClosure {
 }
 
 type ManagedRuntimeClosureIdentity = Readonly<{
-    // Format 3 adds the host-native Sharp closure required by LateOn. Older
-    // manifests intentionally fail closed and trigger a fresh generation.
-    formatVersion: 3;
+    // Format 4 adds the host-native TypeScript compiler package required by
+    // semantic analysis. Older manifests intentionally fail closed and trigger
+    // a fresh generation.
+    formatVersion: 4;
     omitOptional: true;
     vectorStore: InstallVectorStore;
     lanceDbNativePackage: string | null;
     oxcParserNativePackage: string;
+    typeScriptNativePackage: string;
     lateOnNativePackages: readonly string[];
 }>;
 
@@ -51,6 +66,10 @@ function readManagedLanceDbVersion(): string {
 
 function readManagedOxcParserVersion(): string {
     return readManagedRuntimeRelease().oxcParser;
+}
+
+function readManagedTypeScriptVersion(): string {
+    return readManagedRuntimeRelease().typescript;
 }
 
 function detectLinuxLibc(): "gnu" | "musl" {
@@ -103,6 +122,22 @@ export function resolveOxcParserNativePackage(
     return `${packageName}@${readManagedOxcParserVersion()}`;
 }
 
+export function resolveTypeScriptNativePackage(
+    closure: ManagedRuntimeClosure,
+): string {
+    const platform = closure.platform ?? process.platform;
+    const architecture = closure.architecture ?? process.arch;
+    const packageName = TYPESCRIPT_NATIVE_PACKAGES.get(`${platform}-${architecture}-`);
+    if (!packageName) {
+        throw new CliError(
+            "E_USAGE",
+            `The Satori managed runtime is unsupported on ${platform}/${architecture}: no managed TypeScript compiler target exists for this host.`,
+            2,
+        );
+    }
+    return `${packageName}@${readManagedTypeScriptVersion()}`;
+}
+
 export function resolveLateOnNativePackages(
     closure: ManagedRuntimeClosure,
 ): readonly string[] {
@@ -128,13 +163,14 @@ export function resolveManagedRuntimeClosureIdentity(
     closure: ManagedRuntimeClosure,
 ): ManagedRuntimeClosureIdentity {
     return {
-        formatVersion: 3,
+        formatVersion: 4,
         omitOptional: true,
         vectorStore: closure.vectorStore,
         lanceDbNativePackage: closure.vectorStore === "LanceDB"
             ? resolveLanceDbNativePackage(closure)
             : null,
         oxcParserNativePackage: resolveOxcParserNativePackage(closure),
+        typeScriptNativePackage: resolveTypeScriptNativePackage(closure),
         lateOnNativePackages: resolveLateOnNativePackages(closure),
     };
 }
@@ -162,6 +198,8 @@ export function managedRuntimeClosureMatches(
                 === expected.lanceDbNativePackage
             && (actual as Record<string, unknown>).oxcParserNativePackage
                 === expected.oxcParserNativePackage
+            && (actual as Record<string, unknown>).typeScriptNativePackage
+                === expected.typeScriptNativePackage
             && Array.isArray((actual as Record<string, unknown>).lateOnNativePackages)
             && JSON.stringify((actual as Record<string, unknown>).lateOnNativePackages)
                 === JSON.stringify(expected.lateOnNativePackages);

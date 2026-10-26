@@ -6,12 +6,14 @@ import { CliError } from "./errors.js";
 const MANAGED_PACKAGE_NAME = "@satori-code/mcp";
 const CORE_PACKAGE_NAME = "@satori-code/core";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
+const EXACT_PRERELEASE_VERSION = /^\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/;
 
 export interface ManagedRuntimeRelease {
     mcp: string;
     core: string;
     lanceDb: string;
     oxcParser: string;
+    typescript: string;
     lateOn: {
         transformers: string;
         onnxruntimeNode: string;
@@ -35,6 +37,20 @@ function exactVersion(value: unknown, field: string): string {
         throw new CliError(
             "E_USAGE",
             `CLI managed-runtime metadata field ${field} must be an exact major.minor.patch version; received ${JSON.stringify(value)}.`,
+            2,
+        );
+    }
+    return value;
+}
+
+function exactVersionWithPrerelease(value: unknown, field: string): string {
+    if (
+        typeof value !== "string"
+        || (!EXACT_VERSION.test(value) && !EXACT_PRERELEASE_VERSION.test(value))
+    ) {
+        throw new CliError(
+            "E_USAGE",
+            `CLI managed-runtime metadata field ${field} must be an exact version, optionally with a prerelease suffix; received ${JSON.stringify(value)}.`,
             2,
         );
     }
@@ -70,6 +86,7 @@ export function readManagedRuntimeRelease(): ManagedRuntimeRelease {
         core: exactVersion(release.core, "core"),
         lanceDb: exactVersion(release.lanceDb, "lanceDb"),
         oxcParser: exactVersion(release.oxcParser, "oxcParser"),
+        typescript: exactVersionWithPrerelease(release.typescript, "typescript"),
         lateOn: Object.freeze({
             transformers: exactVersion(lateOn.transformers, "lateOn.transformers"),
             onnxruntimeNode: exactVersion(lateOn.onnxruntimeNode, "lateOn.onnxruntimeNode"),

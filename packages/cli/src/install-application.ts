@@ -47,6 +47,7 @@ import {
     resolveLanceDbNativePackage,
     resolveLateOnNativePackages,
     resolveOxcParserNativePackage,
+    resolveTypeScriptNativePackage,
     type ManagedRuntimeClosure,
     writeManagedRuntimeClosureManifest,
 } from "./managed-runtime-closure.js";
@@ -162,6 +163,7 @@ export function installManagedRuntimeCandidate(
             ? [resolveLanceDbNativePackage(closure)]
             : []),
         resolveOxcParserNativePackage(closure),
+        resolveTypeScriptNativePackage(closure),
         ...resolveLateOnNativePackages(closure),
     ];
     // Never reinstall into a directory that may still be the target of the

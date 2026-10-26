@@ -173,6 +173,7 @@ function proofSteps(
             span: occurrence.callSpan,
         });
     }
+    proof.push(...occurrence.bindingProofs ?? []);
     if ((occurrence.candidates?.length ?? 0) > 0) {
         proof.push({
             kind: 'candidate_set',
@@ -231,7 +232,9 @@ export function buildTypeScriptResolutionClaims(input: {
 
             if (occurrence.decision === 'resolved' && mappedTarget) {
                 decision = 'resolved';
-                authority = 'direct_binding';
+                authority = occurrence.bindingProofs?.some((step) => step.kind === 'allocation_origin')
+                    ? 'origin_flow'
+                    : 'direct_binding';
                 relationshipType = caller ? 'CALLS' : 'REFERENCES';
                 target = mappedTarget;
             } else if (occurrence.decision === 'ambiguous') {

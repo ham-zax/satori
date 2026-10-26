@@ -65,6 +65,9 @@ export function neutralEvidenceFromResolutionClaim(claim, options = {}) {
     const evidence = [];
     const seen = new Set();
     const target = options.target;
+    const overloadAmbiguity = (claim.proofSteps ?? []).some((step) => (
+        step.kind === 'ambiguity' && step.subject === 'multiple_overload_candidates'
+    ));
     for (const step of claim.proofSteps ?? []) {
         const kind = PROOF_EVIDENCE.get(step.kind);
         if (!kind) continue;
@@ -83,6 +86,15 @@ export function neutralEvidenceFromResolutionClaim(claim, options = {}) {
             ...(step.detail ? { detail: step.detail } : {}),
             ...(span ? { file, span: { ...span } } : {}),
         });
+        // These reasons identify compiler-observed mechanisms, not target guesses.
+        if (step.kind === 'candidate_set' && overloadAmbiguity) {
+            evidence.push({ kind: 'overload_candidate', subject: step.subject });
+        }
+        if (step.kind === 'unresolved_dependency' && (
+            step.subject === 'dynamic_receiver' || step.subject === 'dynamic_callee'
+        )) {
+            evidence.push({ kind: 'dynamic_construct', subject: step.subject });
+        }
     }
     return evidence;
 }

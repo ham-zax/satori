@@ -41,6 +41,14 @@ export interface TypeScriptSemanticTarget {
     readonly ownerName?: string;
 }
 
+export interface TypeScriptBindingProof {
+    readonly kind: 'same_file_definition' | 'relative_import' | 'absolute_import'
+        | 'constructor_origin' | 'allocation_origin';
+    readonly subject: string;
+    readonly span: SourceSpan;
+    readonly detail?: string;
+}
+
 export interface TypeScriptCallEvidence {
     readonly sourceFile: string;
     readonly callSpan: SourceSpan;
@@ -52,6 +60,7 @@ export interface TypeScriptCallEvidence {
     readonly receiverType?: string;
     readonly target?: TypeScriptSemanticTarget;
     readonly candidates?: readonly TypeScriptSemanticTarget[];
+    readonly bindingProofs?: readonly TypeScriptBindingProof[];
 }
 
 export interface TypeScriptProjectEvidence {
@@ -89,6 +98,24 @@ interface CandidateSet {
     readonly reason: TypeScriptSemanticReason;
     readonly receiverType?: string;
     readonly targets: readonly TypeScriptSemanticTarget[];
+    readonly bindingProofs?: readonly TypeScriptBindingProof[];
+}
+
+function bindingProof(
+    kind: TypeScriptBindingProof['kind'],
+    node: ts.Node,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    detail?: string,
+): TypeScriptBindingProof[] {
+    const sourceFile = node.getSourceFile();
+    const file = projectFilesByVirtualPath.get(path.posix.normalize(sourceFile.fileName.replace(/\\/g, '/')));
+    if (!file) return [];
+    return [{
+        kind,
+        subject: node.getText(sourceFile),
+        span: file.sourceMap.spanFromUtf16(node.getStart(sourceFile), node.end),
+        ...(detail ? { detail } : {}),
+    }];
 }
 
 interface ProjectDispatchContext {
@@ -608,10 +635,22 @@ function immutableLocalOriginCandidates(
     if (!targets || targets.length === 0) return undefined;
 
     const unique = uniqueTargets(targets);
+    const staticProperty = checker.getPropertyOfType(checker.getTypeAtLocation(receiver), propertyName);
+    const staticTargets = implementationsForSymbol(checker, staticProperty, projectFilesByVirtualPath);
+    // Preserve compiler binding authority when allocation confirms the same
+    // target. Origin flow is needed only when it changes the static target set.
+    const confirmsStaticBinding = unique.every((target) => (
+        staticTargets.some((candidate) => targetKey(candidate) === targetKey(target))
+    ));
     return {
         decision: unique.length === 1 ? 'resolved' : 'ambiguous',
         reason: unique.length === 1 ? 'single_executable_target' : 'multiple_executable_targets',
         targets: unique,
+        bindingProofs: bindingProof(
+            confirmsStaticBinding ? 'constructor_origin' : 'allocation_origin',
+            receiver,
+            projectFilesByVirtualPath,
+        ),
     };
 }
 
@@ -908,6 +947,9 @@ function memberCandidates(
                 reason: targets.length === 1 ? 'single_executable_target' : 'multiple_executable_targets',
                 receiverType: receiverTypeText,
                 targets,
+                bindingProofs: ts.isNewExpression(unwrapTransparentExpression(receiver))
+                    ? bindingProof('constructor_origin', receiver, projectFilesByVirtualPath)
+                    : [],
             };
         }
     }
@@ -1069,7 +1111,8 @@ function directCandidates(
         };
     }
 
-    const symbol = resolvedSymbol(checker, checker.getSymbolAtLocation(call.expression));
+    const binding = checker.getSymbolAtLocation(call.expression);
+    const symbol = resolvedSymbol(checker, binding);
     const symbolTargets = implementationsForSymbol(checker, symbol, projectFilesByVirtualPath);
     const signature = signatureTarget(checker, call, projectFilesByVirtualPath);
     const targets = uniqueTargets(signature ? [...symbolTargets, signature] : symbolTargets);
@@ -1082,10 +1125,39 @@ function directCandidates(
         };
     }
     if (targets.length === 1) {
+        const proofs: TypeScriptBindingProof[] = [];
+        if (ts.isNewExpression(call) && signature?.kind === 'constructor') {
+            proofs.push(...bindingProof('constructor_origin', call, projectFilesByVirtualPath));
+        }
+        // A signature target alone does not prove a lexical symbol binding.
+        if (symbolTargets.some((target) => targetKey(target) === targetKey(targets[0]))) {
+            if (binding && (binding.flags & ts.SymbolFlags.Alias) !== 0) {
+                for (const handle of binding.declarations) {
+                    let declaration: ts.Node | undefined = handle.resolve();
+                    while (declaration && declaration.kind !== ts.SyntaxKind.ImportDeclaration) {
+                        declaration = declaration.parent;
+                    }
+                    if (!declaration) continue;
+                    const module = (declaration as ts.ImportDeclaration).moduleSpecifier;
+                    if (!ts.isStringLiteralLikeNode(module)) continue;
+                    proofs.push(...bindingProof(
+                        module.text.startsWith('.') ? 'relative_import' : 'absolute_import',
+                        call.expression,
+                        projectFilesByVirtualPath,
+                        module.text,
+                    ));
+                }
+            } else if (targets[0].file === projectFilesByVirtualPath.get(
+                path.posix.normalize(call.getSourceFile().fileName.replace(/\\/g, '/')),
+            )?.projectPath) {
+                proofs.push(...bindingProof('same_file_definition', call.expression, projectFilesByVirtualPath));
+            }
+        }
         return {
             decision: 'resolved',
             reason: 'single_executable_target',
             targets,
+            bindingProofs: proofs,
         };
     }
 
@@ -1130,6 +1202,7 @@ function evidenceForCall(
         ...(candidates.receiverType ? { receiverType: candidates.receiverType } : {}),
         ...(candidates.decision === 'resolved' && target ? { target } : {}),
         ...(candidates.targets.length > 0 ? { candidates: candidates.targets } : {}),
+        ...(candidates.bindingProofs?.length ? { bindingProofs: candidates.bindingProofs } : {}),
     };
 }
 

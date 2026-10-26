@@ -2231,7 +2231,8 @@ export class SyncManager {
         this.sourceObservationState.clearCodebase(codebasePath);
         this.watcherCandidatePolicies.delete(codebasePath);
         this.watcherGenerations.delete(codebasePath);
-        this.activeIgnoreReconciles.delete(codebasePath);
+        // activeIgnoreReconciles is owned by runIgnoreReconcile, which removes its
+        // entry when the flight settles; lifecycle drain must still see it here.
         this.watcherLifecycleStates.delete(codebasePath);
         this.watcherErrorCodes.delete(codebasePath);
     }

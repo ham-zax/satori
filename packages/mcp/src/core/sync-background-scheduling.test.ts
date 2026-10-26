@@ -477,3 +477,37 @@ test("ignored paths schedule nothing and ignore controls retain reconciliation",
     assert.deepEqual(calls, []);
     assert.equal(manager.getWatcherObservation("/repo").pending, false);
 });
+
+test("stop drains an ignore reconcile that is still in flight after its root is unwatched", async (t) => {
+    const completion = deferred();
+    const { manager } = await createFixture(t, {
+        mutationRuntime: {
+            assertCurrent: () => {},
+            isCurrent: () => true,
+            run: async <T>(_root: string, _action: string, work: () => Promise<T>) => await work(),
+            runOutsideMutationScope: <T>(work: () => T) => work(),
+            getCurrentOperation: () => undefined,
+            getActiveMutation: () => undefined,
+            updateCurrentOperation: () => ({}),
+        } as never,
+    });
+    const internal = manager as unknown as {
+        reconcileIgnoreRulesChange(...args: unknown[]): Promise<unknown>;
+        runIgnoreReconcile(root: string): Promise<unknown>;
+    };
+    t.mock.method(internal, "reconcileIgnoreRulesChange", async () => {
+        await completion.promise;
+        return { mode: "reconciled" };
+    });
+    const reconcile = internal.runIgnoreReconcile("/repo");
+    await settle();
+    await manager.unwatchCodebase("/repo");
+    let stopped = false;
+    const stopping = manager.stopAndDrainLifecycle().then(() => { stopped = true; });
+    await settle();
+    assert.equal(stopped, false, "stop must wait for the in-flight reconcile");
+    completion.resolve();
+    await reconcile;
+    await stopping;
+    assert.equal(stopped, true);
+});

@@ -79,3 +79,39 @@ test('GC keeps the vector collection when generation removal fails', async (t) =
     assert.deepEqual(deleted, []);
     assert.equal(store.getById(repoRoot, 'old')?.id, 'old');
 });
+
+test('GC retries a recorded collection delete after the delete failed', async (t) => {
+    const { repoRoot, store, collectGarbage } = await gcFixture(t);
+    await assert.rejects(
+        collectGarbage(async () => { throw new Error('injected collection delete failure'); }),
+        /injected collection delete failure/,
+    );
+    assert.equal(store.getById(repoRoot, 'old'), null, 'descriptor is already gone');
+
+    const deleted: string[] = [];
+    const removed = await collectGarbage(async (name) => { deleted.push(name); });
+    assert.deepEqual(removed, ['old-collection']);
+    assert.deepEqual(deleted, ['old-collection']);
+
+    const third: string[] = [];
+    assert.deepEqual(await collectGarbage(async (name) => { third.push(name); }), []);
+    assert.deepEqual(third, [], 'the record is removed after the retried delete');
+});
+
+test('GC drops a recorded delete without deleting a collection that is referenced again', async (t) => {
+    const { repoRoot, store, collectGarbage } = await gcFixture(t);
+    t.mock.method(store as unknown as { removeGeneration(): void }, 'removeGeneration', () => {
+        throw new Error('injected generation removal failure');
+    });
+    await assert.rejects(collectGarbage(async () => undefined), /injected generation removal failure/);
+    t.mock.restoreAll();
+    assert.equal(store.getById(repoRoot, 'old')?.id, 'old', 'descriptor still references the collection');
+
+    const deleted: string[] = [];
+    const removed = await collectGarbage(async (name) => {
+        assert.equal(store.getById(repoRoot, 'old'), null, 'only the normal GC path deletes the collection');
+        deleted.push(name);
+    });
+    assert.deepEqual(removed, ['old-collection']);
+    assert.deepEqual(deleted, ['old-collection'], 'the stale record adds no second delete');
+});

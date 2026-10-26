@@ -294,6 +294,33 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
     return Object.freeze(publication);
 }
 
+interface PendingCollectionDelete {
+    version: 1;
+    canonicalRoot: string;
+    publicationId: PublicationId;
+    collectionName: string;
+}
+
+function parsePendingCollectionDelete(value: unknown, sourcePath: string): PendingCollectionDelete {
+    if (
+        !isRecord(value)
+        || value.version !== 1
+        || typeof value.canonicalRoot !== 'string'
+        || typeof value.publicationId !== 'string'
+        || typeof value.collectionName !== 'string'
+        || value.collectionName.length === 0
+    ) {
+        throw new Error(`Pending collection delete at '${sourcePath}' is invalid.`);
+    }
+    assertPublicationId(value.publicationId);
+    return {
+        version: 1,
+        canonicalRoot: value.canonicalRoot,
+        publicationId: value.publicationId,
+        collectionName: value.collectionName,
+    };
+}
+
 function parseCurrentPointer(value: unknown, sourcePath: string): CurrentPublicationPointer {
     if (
         !isRecord(value)
@@ -948,6 +975,22 @@ export class PublicationStore {
         const removedCollections: string[] = [];
         const assertMutationCurrent = (): void => this.mutationCoordinator.assertCurrent(lease);
 
+        // Retry deletes that an earlier GC recorded but did not finish. A
+        // record whose collection is referenced again is dropped, not deleted.
+        const candidateCollections = new Set(
+            this.listCandidateReceiptsForRoot(canonicalRoot).map((receipt) => receipt.collectionName),
+        );
+        for (const pending of this.listPendingCollectionDeletes(canonicalRoot)) {
+            const referenced = candidateCollections.has(pending.collectionName)
+                || publications.some((ref) => ref.publication.vector.collectionName === pending.collectionName);
+            if (!referenced) {
+                assertMutationCurrent();
+                await deleteVectorCollection(pending.collectionName, assertMutationCurrent);
+                removedCollections.push(pending.collectionName);
+            }
+            this.removePendingCollectionDelete(canonicalRoot, pending.publicationId);
+        }
+
         for (const ref of publications) {
             const collectionName = ref.publication.vector.collectionName;
             if (protectedCollections.has(collectionName)) continue;
@@ -959,7 +1002,9 @@ export class PublicationStore {
             try {
                 // Remove the descriptor before the collection: a failure between
                 // the two steps then leaves an unowned collection, never a
-                // readable descriptor whose collection is gone.
+                // readable descriptor whose collection is gone. The durable
+                // pending-delete record, written first, lets the next GC finish
+                // the collection delete.
                 this.mutationCoordinator.publishWhileCurrent(lease, () => {
                     if (this.readCurrentPointer(canonicalRoot)?.publicationId === ref.id) {
                         throw new Error(`Publication '${ref.id}' became current during GC.`);
@@ -967,11 +1012,13 @@ export class PublicationStore {
                     if ((this.readLeasesByRoot.get(canonicalRoot)?.get(ref.id) ?? 0) !== 0) {
                         throw new Error(`Publication '${ref.id}' acquired a read lease during GC.`);
                     }
+                    this.writePendingCollectionDelete(canonicalRoot, ref.id, collectionName);
                     this.removeGeneration(canonicalRoot, ref.id);
                 });
                 assertMutationCurrent();
                 await deleteVectorCollection(collectionName, assertMutationCurrent);
                 removedCollections.push(collectionName);
+                this.removePendingCollectionDelete(canonicalRoot, ref.id);
             } finally {
                 this.releaseGcReservation(canonicalRoot, ref.id);
             }
@@ -1335,6 +1382,75 @@ export class PublicationStore {
         this.fsyncDirectory(candidatesRoot);
         try {
             fs.rmdirSync(candidatesRoot);
+            this.fsyncDirectory(this.publicationRoot(canonicalRoot));
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY') throw error;
+        }
+    }
+
+    private pendingCollectionDeletesRoot(canonicalRoot: string): string {
+        return path.join(this.publicationRoot(canonicalRoot), 'pending-collection-deletes');
+    }
+
+    private pendingCollectionDeletePath(canonicalRoot: string, publicationId: string): string {
+        assertPublicationId(publicationId);
+        return path.join(this.pendingCollectionDeletesRoot(canonicalRoot), `${publicationId}.json`);
+    }
+
+    private writePendingCollectionDelete(
+        canonicalRoot: string,
+        publicationId: PublicationId,
+        collectionName: string,
+    ): void {
+        const record: PendingCollectionDelete = { version: 1, canonicalRoot, publicationId, collectionName };
+        // Stage outside the record directory so enumeration never sees a temp file.
+        this.replaceDurableFile(
+            this.pendingCollectionDeletePath(canonicalRoot, publicationId),
+            `${JSON.stringify(record, null, 2)}\n`,
+            this.publicationRoot(canonicalRoot),
+        );
+        this.fsyncDirectory(this.publicationRoot(canonicalRoot));
+    }
+
+    private listPendingCollectionDeletes(canonicalRoot: string): PendingCollectionDelete[] {
+        const recordsRoot = this.pendingCollectionDeletesRoot(canonicalRoot);
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(recordsRoot, { withFileTypes: true });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+            throw error;
+        }
+
+        const records: PendingCollectionDelete[] = [];
+        for (const entry of entries) {
+            const recordPath = path.join(recordsRoot, entry.name);
+            if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) {
+                throw new Error(`Publication state contains unsupported pending collection delete entry '${recordPath}'.`);
+            }
+            const publicationId = entry.name.slice(0, -'.json'.length);
+            assertPublicationId(publicationId);
+            const record = parsePendingCollectionDelete(JSON.parse(fs.readFileSync(recordPath, 'utf8')), recordPath);
+            if (record.canonicalRoot !== canonicalRoot || record.publicationId !== publicationId) {
+                throw new Error(`Pending collection delete '${recordPath}' does not match its addressed root/id.`);
+            }
+            records.push(record);
+        }
+        return records.sort((left, right) => left.publicationId.localeCompare(right.publicationId));
+    }
+
+    private removePendingCollectionDelete(canonicalRoot: string, publicationId: string): void {
+        const recordPath = this.pendingCollectionDeletePath(canonicalRoot, publicationId);
+        try {
+            fs.unlinkSync(recordPath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw error;
+        }
+        const recordsRoot = path.dirname(recordPath);
+        this.fsyncDirectory(recordsRoot);
+        try {
+            fs.rmdirSync(recordsRoot);
             this.fsyncDirectory(this.publicationRoot(canonicalRoot));
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY') throw error;

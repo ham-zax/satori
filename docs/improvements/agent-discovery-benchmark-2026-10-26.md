@@ -411,3 +411,32 @@ Do not remove one admission guard or weaken the 30-query oracle as a local fix.
 SF-C reaches review with the diagnosis established. The capability gap remains, with its existing deferred
 status. The original hit@1 10/30 and hit@5 20/30 scores remain unchanged. No new benchmark, source repair,
 index mutation, model download, or deployment occurs during this investigation.
+
+### Definition-fusion demotion: mechanism and rejected repair, 27 October 2026
+
+Source HEAD 7ef689d6. The fusion code is unchanged since the measured commit 2f52b298. No benchmark run.
+
+Mechanism. `fuseDefinitionDiscovery` gives each candidate a provider vote. It gives a second vote from definition-name
+BM25 or, for a multi-term query, an abstention prior at rank `scores.size + 1`. Commit f12c9c31 (SEARCH-F) limits
+that prior to implementation definitions with owner terms. Other candidates get only the provider vote. They then
+fall below almost every implementation definition, also definitions with low provider rank. The three demoted
+targets are all in that group:
+
+- g5: the target chunk context.go:488-502 belongs to the file symbol `context.go` (kind file).
+- f12: the targets are module-level `LocalProxy` variables in src/flask/globals.py, which have no definition kind.
+- f15: pyproject.toml is a configuration path, so the code classifies it as supporting evidence.
+
+Replay. `/tmp/sf-replay/replay.mts` (not kept) maps the saved `reranker_provider_output` candidates to the saved
+publication symbols and runs the actual function. The replay reproduces the saved fusion order exactly for all 22
+queries with `definition_fusion_order`. The other 8 queries use provider or retrieval order.
+
+Candidate repair A gives the abstention prior to every candidate without a name match. Fusion-stage target ranks:
+f12 60→3, f15 39→3, g5 44→25. Regressions: g7 5→12, g10 6→9. The other 15 replayed ranks do not change.
+Decision: repair A is rejected and not committed. The regression of g7 out of the top ten disproves it as a safe
+policy. g5 also stays outside the top ten.
+
+Next falsifiable step: explain the g7 and g10 regressions from the replay before any other variant. Claim: a
+narrower prior (for example, configuration and variable owners only) recovers f12 and f15 without a regression.
+Disproof: any current fusion rank becomes worse. Stop after two variants with a regression and reset the diagnosis.
+Post-policy steps (`preferImplementationCandidates`, grouping, diversity) still apply after fusion. Only a fresh
+benchmark can confirm final scores.

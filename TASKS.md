@@ -746,3 +746,34 @@ before cancellation completes, so `close` may omit a released/replaced worker.
 `createWorkerProvider` constructs from one bootstrap result but records a second result
 as its witness, which can hide a configuration change during construction. Parent is
 checking these before the single independent review. No new task or dispatch is added.
+
+Sync handoff checkpoint, 2026-10-27: commit
+`c7214df216bf4e30fb7950545cf1c7624577d600` contains the verified sync work.
+SL-5 remains in-progress because universal latency reduction is not established.
+SL-R is at review after the single independent review and one repair round.
+The three-dispatch budget is exhausted, and both owned worker sessions are closed.
+No task is marked done. Go/TypeScript benchmarks precede the final lifecycle repairs;
+the exact commit still needs a matched benchmark. The parent checked the final
+sources with the focused MCP tests and `pnpm run check`. Current limitations and
+measurement details are in `docs/improvements/change-proportional-sync.md`,
+"Handoff checkpoint, 2026-10-27". Resume SL-5 only within a renewed ledger budget.
+First establish the exact-commit baseline, then profile the remaining Go definition
+and resolution cost. Stop before a new dispatch while the budget is exhausted.
+The separate staged ranking ledger belongs to another run and must be preserved.
+
+## Ranking replay run, 27 October 2026
+
+Hamza asks for a general ranking improvement, not one-off rules. Plan: a reusable offline stage
+replay, tune-pack traces, then one bounded combination of the post-reranker steps. Hamza approved
+steps 1 and 2 ("continue"). Step 3 changes search behavior and needs a new approval. Workers: Claive
+Codex `gpt-6.1-terra`, effort `high` for specified mechanical work, `xhigh` for complex work. Parent
+owns design and acceptance. Agents move tasks to review. Only Hamza marks done. Run budget: 2
+dispatches (one replay worker, one final independent review). Tune pack: `cases.json` (react,
+polars, flatbuffers, 28 queries). Held-out pack `cases-heldout.json` is for final checks only.
+
+| id | status | depends | owner | acceptance | evidence |
+| RR-1 | review | - | parent inline | Record the f15 diagnosis and its known limit in docs/improvements/agent-discovery-benchmark-2026-10-26.md. Commit only that file. | Commit 02c48594 adds section "f15 diagnosis: implementation preference after fusion", 1 file, 18 lines, pushed. |
+| RR-2 | in-progress | - | claive codex terra high (worker a01cc7cb4320, worktree /home/hamza/.cache/satori-rr-20261027/wt-replay) | Replay tool in evals/real-repo-quality: from a saved result.json and its state root, replay reranker_provider_output through definition fusion and preferImplementationCandidates with the real source functions. The replayed reranker_fusion_output and reranker_output orders equal the saved orders for every held-out query, or the tool reports each difference. A focused node test passes. | - |
+| RR-3 | open | - | parent inline | One tune-pack benchmark run at HEAD in a separate worktree, with candidate traces saved. Record wall time, peak RSS and machine load. | - |
+| RR-4 | open | RR-2, RR-3 | parent inline | Replay baseline on the tune pack and the held-out pack: provider, fusion, role-preference and final hit@1/5/10 per query. Report it and stop for Hamza's step-3 decision. | - |
+| RR-R | open | RR-4 | claive reviewer | One independent review of the final diff. | - |

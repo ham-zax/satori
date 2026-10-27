@@ -239,8 +239,9 @@ For six real edit publications, median navigation delta was 854 ms, including
 navigation checkpoint 621 ms. Sidecar stage was 462 ms, relationship delta
 351 ms, and activation 165 ms. These spans overlap, so do not add them. The
 Python trace does not establish whether whole-language analysis dominates its
-navigation checkpoint. Go and TypeScript still show whole-language analysis as
-their main measured cost. The Python run provides no fresh-worker baseline.
+navigation checkpoint. Go still pays whole-project native analysis. The
+TypeScript resolution span remains expensive, but its registry count does
+not prove whole-language analysis. The Python run provides no fresh-worker baseline.
 
 The later Go HEAD comparison used `--sync-gap 6000`, three runs per side:
 edit wall median fell from 13,426 to 9,408 ms, and worker round trip median
@@ -248,7 +249,7 @@ from 11,868 to 7,691 ms. Load was 3.2 → 3.1 before and 7.8 → 3.6 after.
 Peak index process-tree RSS was 1,907 MB before and 2,103 MB after. The after
 build included uncommitted changes. Standby memory was not isolated in this run.
 
-Current disposition: issue 3 is fixed for this probe. Issue 1 did not recur in
+Disposition at this checkpoint, superseded by the SL-5 section below: issue 3 is fixed for this probe. Issue 1 did not recur in
 the current Python runs, but its historical cause remains unproven. Issues 2,
 4, 5 and 6 remain. Full warm-versus-cold publication equivalence and the final
 independent review remain outstanding. The one-file Python sync remains above
@@ -333,6 +334,28 @@ Remaining issues:
 The old TypeScript RSS uncertainty is resolved by the main-process sampler.
 The old TypeScript whole-language-analysis claim is withdrawn. No claim of
 universal latency reduction or dependency-scoped native call resolution is made.
+
+### Handoff checkpoint, 2026-10-27
+
+Commit `c7214df216bf4e30fb7950545cf1c7624577d600` contains the standby,
+native parse reuse, rebuilt engine assets, tests and measurement records.
+The Go and TypeScript benchmarks above precede the final lifecycle repairs.
+The parent checked the repaired sources with 30 focused MCP tests and
+`pnpm run check`. The final fixture cleanup adjustment passed its ten
+standby tests. No matched benchmark of the exact commit was run.
+
+Python still lacks a matched before/after run, a full warm/cold publication
+equivalence case, and an idle standby measurement comparable to the final
+Go/TypeScript probes. The historical 376 MB Python standby sample came from
+the earlier invalid edit probe and does not close that evidence gap.
+
+The next cost reduction remains partial. Read current task status and the
+exhausted three-dispatch budget in `TASKS.md`, not the historical checkpoints.
+The independent review and one repair round are complete. Further worker
+work requires a renewed ledger budget. Both owned worker sessions are closed.
+Temporary run reports and measurement helpers were removed after their
+commands, values and limitations were recorded here. Worker history remains
+available through Claive IDs in the ledger.
 
 ## When to do it
 

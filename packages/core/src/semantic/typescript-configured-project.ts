@@ -235,8 +235,13 @@ export class TypeScriptLanguageServiceSession {
     private session: TypeScriptProgramSession;
     private readonly sourceBudget?: TypeScriptSourceBudgetTracker;
 
-    constructor(configPath: string, resourceBudget?: TypeScriptSourceBudget) {
-        this.project = loadTypeScriptConfiguredProject(configPath);
+    constructor(
+        configPath: string,
+        resourceBudget?: TypeScriptSourceBudget,
+        /** A parsed project whose witness the caller already verified. */
+        project?: TypeScriptConfiguredProject,
+    ) {
+        this.project = project ?? loadTypeScriptConfiguredProject(configPath);
         this.sourceBudget = resourceBudget ? new TypeScriptSourceBudgetTracker(resourceBudget) : undefined;
         this.session = this.createSession();
     }

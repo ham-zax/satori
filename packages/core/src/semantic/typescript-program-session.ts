@@ -7,6 +7,7 @@ import {
     readTypeScriptFileBytes, TypeScriptReadLimitError,
     TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
 } from './typescript-bounded-reader';
+import type { TypeScriptFsObservationRecorder } from './typescript-fs-observation';
 
 export interface TypeScriptSourceReader {
     readonly maxFileBytes: number;
@@ -37,28 +38,68 @@ export class TypeScriptProgramSession {
         private readonly options: CompilerOptions,
         private readonly sourceBudget?: TypeScriptSourceReader,
         private readonly references?: readonly ProjectReference[],
+        /**
+         * Optional witness hook: records which paths the compiler asked about
+         * so a caller can prove later that the same inputs still hold. It only
+         * collects paths, and every callback still returns `serverFS.useOS`, so
+         * the compiler observes exactly the same filesystem answers as before.
+         */
+        private readonly observation?: TypeScriptFsObservationRecorder,
     ) {
+        // The sentinel lets the native layer answer from the OS directly. A
+        // recording session must route each call through JS, so only that
+        // session pays the callback; every other session keeps the sentinel.
+        const recorder = this.observation;
         this.api = new API({
             cwd: rootPath,
             runExternalCode: false,
             fs: {
-                directoryExists: serverFS.useOS,
-                fileExists: serverFS.useOS,
-                getAccessibleEntries: serverFS.useOS,
-                realpath: serverFS.useOS,
-                stat: serverFS.useOS,
+                directoryExists: recorder
+                    ? (directoryName) => {
+                        recorder.recordPath(directoryName);
+                        return serverFS.useOS;
+                    }
+                    : serverFS.useOS,
+                fileExists: recorder
+                    ? (fileName) => {
+                        recorder.recordPath(fileName);
+                        return serverFS.useOS;
+                    }
+                    : serverFS.useOS,
+                getAccessibleEntries: recorder
+                    ? (directoryName) => {
+                        recorder.recordListing(directoryName);
+                        return serverFS.useOS;
+                    }
+                    : serverFS.useOS,
+                realpath: recorder
+                    ? (pathName) => {
+                        recorder.recordRealpath(pathName);
+                        return serverFS.useOS;
+                    }
+                    : serverFS.useOS,
+                stat: recorder
+                    ? (pathName) => {
+                        recorder.recordPath(pathName);
+                        return serverFS.useOS;
+                    }
+                    : serverFS.useOS,
                 writeFile: serverFS.noop,
                 removeFile: serverFS.noop,
                 readFile: (fileName) => {
                     if (this.getResourceLimitFailure()) return undefined;
                     const override = this.overrides.get(path.resolve(fileName));
                     if (override !== undefined) {
-                        return this.admitRead(fileName, Buffer.byteLength(override, 'utf8')) ? override : undefined;
+                        if (!this.admitRead(fileName, Buffer.byteLength(override, 'utf8'))) return undefined;
+                        this.observation?.recordRead(fileName, override);
+                        return override;
                     }
                     try {
                         if (path.extname(fileName).toLowerCase() === '.json') {
                             const content = readTypeScriptFileBytes(fileName, this.jsonReadLimit(fileName));
-                            return this.admitRead(fileName, content.length) ? content.toString('utf8') : undefined;
+                            if (!this.admitRead(fileName, content.length)) return undefined;
+                            this.observation?.recordRead(fileName, content);
+                            return content.toString('utf8');
                         }
                         const stat = fs.statSync(fileName);
                         if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
@@ -67,6 +108,7 @@ export class TypeScriptProgramSession {
                             this.sourceBudget?.maxProjectBytes ?? Number.MAX_SAFE_INTEGER,
                         ));
                         if (!this.admitRead(fileName, content.length)) return undefined;
+                        this.observation?.recordRead(fileName, content);
                         return content.toString('utf8');
                     } catch (error) {
                         if (error instanceof TypeScriptReadLimitError) {
@@ -135,10 +177,11 @@ export class TypeScriptProgramSession {
                     const sourceFile = this.program.getSourceFile(fileName);
                     if (!sourceFile) throw new Error(`TypeScript snapshot lost source bytes for '${fileName}'.`);
                     bytes = Buffer.byteLength(sourceFile.text, 'utf8');
+                    this.observation?.recordRead(fileName, sourceFile.text);
                 }
                 if (isJson && bytes !== undefined && !this.jsonReadBytes.has(fileName)) this.admitRead(fileName, bytes);
                 if (!isJson && bytes !== undefined) this.sourceReadBytes.set(fileName, bytes);
-                if (bytes !== undefined && this.sourceBudget && !this.sourceBudget.admit(fileName, bytes)) break;
+                if (bytes !== undefined && !this.admitSource(fileName, bytes)) break;
             }
             for (const file of this.sourceReadBytes.keys()) {
                 if (!active.has(file)) this.sourceReadBytes.delete(file);
@@ -161,6 +204,13 @@ export class TypeScriptProgramSession {
         }
         if (this.sourceBudget && !this.sourceBudget.admit(fileName, bytes)) return false;
         this.sourceReadBytes.set(path.resolve(fileName), bytes);
+        this.observation?.recordSourceRead(fileName);
+        return true;
+    }
+
+    private admitSource(fileName: string, bytes: number): boolean {
+        if (this.sourceBudget && !this.sourceBudget.admit(fileName, bytes)) return false;
+        this.observation?.recordSourceRead(fileName);
         return true;
     }
 

@@ -335,6 +335,147 @@ The old TypeScript RSS uncertainty is resolved by the main-process sampler.
 The old TypeScript whole-language-analysis claim is withdrawn. No claim of
 universal latency reduction or dependency-scoped native call resolution is made.
 
+### Tree-cache collision repair, 2026-10-27
+
+The engine-local tree cache had 16,384 direct-mapped slots. On the 3,363-file
+Go clone, 395 files (11.7%) shared a slot with another path and lost their
+cached tree. The cache now has 65,536 slots and probes up to 64 entries before
+it parses without caching. The exact path-and-source witness is unchanged.
+
+Emscripten 3.1.64 was installed on the ARM host and the engine rebuilt (WASM
+digest `46fd320c`). Three cold resolves were 5,887 / 5,993 / 5,986 ms. Warm
+resolve fell from 2,690–2,695 to 1,777–1,789 ms. Prepare plus resolve fell
+from 3,861 + 3,086 to 3,799 + 2,138 and 3,802 + 2,022 ms. Output is identical:
+26,941 results with hash `392180f6097f8da6`. The five prewarm tests pass, and
+removing the source comparison fails the equal-length syntax-change test. The
+full edit-sync probe cannot run on this host, so these are engine-level
+numbers.
+
+#### End-to-end edit-sync A/B, WSL x86-64
+
+The full probe needs the x86-64 Potion helper, so the matched A/B ran on the
+WSL host (16 cores, 11 GiB, Emscripten 3.1.64). Both engines were built there
+from HEAD `368bbc27`; the only source difference was this cache change. The
+corpus was the trufflehog clone with 3,295 Go files. The command was the
+standard `--save-search 1 --ext .go --runs 3 --sync-gap 6000` probe, run as
+three alternating old/new pairs with no memory cap, because that host has no
+user systemd bus. Load stayed between 1.6 and 2.8.
+
+| Side | Sync wall, nine trials (ms) | Median |
+|---|---|---|
+| Old | 6,680 / 6,817 / 6,603 / 6,518 / 6,632 / 6,646 / 6,493 / 6,469 / 6,510 | 6,603 |
+| New | 5,996 / 6,041 / 6,804 / 5,988 / 5,963 / 6,144 / 6,009 / 6,000 / 6,010 | 6,009 |
+
+The median falls 594 ms (9.0%). The new side had the lower median in each
+paired run: 6,680→6,041, 6,632→5,988, 6,493→6,009. Ranges overlap because one
+new run reached 6,804 ms. Every one of the 18 search trials found the edited
+file. Peak index process-tree RSS was 2,470–2,492 MB old and 2,454–2,491 MB
+new, so the larger table costs no measurable peak. Both engines published
+24,529 results with hash `095cded2b906914e`, and the single-resolve bench moved
+from 3,756 to 3,499 ms.
+
+The span means move with the same sign: `navigation.semantic` 2,940→2,729 ms,
+`sync.parent.worker_round_trip` 4,382→4,194 ms, and
+`sync.publication_navigation_delta` 4,591→4,334 ms. Publication sidecar,
+payload and activation spans are unchanged, which is consistent with a parse
+saving rather than a publication change.
+
+Limit: this is one Go corpus on one host. The gain is about 9% of edit wall,
+not the 34% warm-resolve figure from the engine bench, because publication and
+worker steps dominate the sync.
+
+### TypeScript reference declaration reuse, 2026-10-27
+
+Discovery rebuilt every referenced project's declaration program on each run.
+The published value is only the declaration output path list, and probe runs
+showed it depends on compiler options and ordered root file names alone:
+content edits, type errors, emit failures, `isolatedDeclarations` violations,
+added project references and added `@types` packages left it equal, while an
+added file, a `.tsx`/`.mts`/`.cts` input, a deleted file and any output-root
+option changed it. A two-file library costs 115-124 ms in `getProgram` and 3 ms
+in `getDeclarationEmit`; `packages/core`'s 296 roots cost 900-971 ms. Parsing
+the configs costs about 40 ms, which is why the earlier parsed-config cache
+gained nothing.
+
+`TypeScriptReferenceDeclarationCache` keeps its entry and byte bounds and gains
+an optional disk backing under `options.stateDirectory`. One document per
+discovery root holds every proven proof plus a witness: format, provider and
+compiler version, root, config chain hashes, ordered file names, admission
+budget, and the compiler's own filesystem answers (probed path kinds, realpaths,
+directory listings, reads). Each read keeps the budget that admitted it and an
+aggregate digest of the exact bytes the compiler consumed. Reads are bounded and
+validated before any path is used, writes are atomic with a rename, and the name
+ends in `.reference-declarations.json`, so it never collides with the retired
+parsed-config file. Unproven proofs and resource failures are never saved, and a
+failed observation, content or budget check returns the computation instead of a
+guess. Metadata is read once per discovery, not once per project.
+
+Review repair, 27 October 2026. Two gaps could let a saved success outlive a
+fresh resource failure. A source edit can add an import or a triple-slash
+reference, so a fresh computation reads a file the saved observation never saw.
+The digest of every read now invalidates the proof on any content change. The
+verifier also charged every JSON file against the metadata transport budget
+only, while the native session charges imported JSON to the source budget. The
+session now records which budget admitted each read, and the verifier replays
+both charges. The format moved to 2, so documents from the first version are
+ignored.
+
+Local discovery seam, `getSourceControlFiles` on a composite fixture (library
+plus consumer), five samples per case, analyzer disposed between samples, HEAD
+`368bbc27` with 14 dirty entries. Two runs after the review repair:
+
+| Case | Run 1 (ms) | Run 2 (ms) | Builder spawns |
+|---|---|---|---|
+| Cold cache, fresh state directory each sample | 31.3 | 31.8 | 3 |
+| Warm, same analyzer | 18.2 | 19.4 | 2 |
+| Warm, new analyzer per sample | 18.5 | 17.8 | 2 |
+| Consumer source edit, new analyzer | 17.9 | 19.0 | 2 |
+| Referenced-source content edit (invalidates) | 29.6 | 29.3 | 3 |
+| Added referenced file (invalidates) | 31.8 | 29.5 | 3 |
+| Referenced tsconfig target edit (invalidates) | 32.8 | 30.7 | 3 |
+| Baseline: saved metadata ignored, new analyzer | 30.3 | — | 3 |
+
+The baseline is the same build with `/tmp/opencode/ts-ref-measure.ts` set to
+skip the metadata read from the harness, so no source or branch changed. One
+baseline run gave 28.0-30.6 ms for its new-analyzer cases. Peak process RSS was
+107-116 MB across the fixed runs. The spawn count falls from 3 to 2 only when a
+proof is reused, which is the declaration program. A referenced source edit now
+rebuilds it, because its contents decide which files the declaration program
+reads.
+
+Real-repository discovery seam, `/tmp/opencode/ts-cache-bench.cjs` on this
+repository (713 tracked TypeScript files, five plans, fresh state directory per
+cold sample, five samples per case, HEAD `368bbc27` with the same dirty tree):
+run 1 cold median 3,346 ms (3,611 / 3,302 / 3,381 / 3,282 / 3,346) and
+new-analyzer warm median 597 ms (597 / 567 / 601 / 620 / 585), a 2,749 ms
+saving. Run 2 cold median 3,312 ms (3,521 / 3,312 / 3,204 / 3,382 / 3,293) and
+warm median 582 ms (582 / 572 / 570 / 589 / 584), a 2,730 ms saving. Both runs
+save 82%. `getSourceControlFiles` returned the same 790 control paths cold,
+warm and with a fresh directory, and the five job keys matched. The saved
+document is 2.88 MB. Warm verification reads and hashes 28.1 MB over 3,208
+observed files on this repository, which adds about 140 ms to a hit and about
+100 ms to a cold capture. Cold discovery is about 0.8 s above the earlier 2,515
+ms baseline because capture stats every observed path and hashes every read.
+
+Equivalence: a consumer edit then a new analyzer matches a fresh state directory
+for `analyze` results and for `getSourceControlFiles`; a referenced-source edit
+that imports an oversized file matches fresh discovery instead of reusing the
+old success; sharded and unsharded runs agree; deleted and edited emitted
+declarations still change the consumer's environment identity; and an extended
+config outside the root still invalidates. Mutation checks: skipping the read
+digest fails the same-size cache test and the oversized-dependency analyzer
+test; skipping the source charge for JSON files fails the JSON program-input
+test.
+
+Limits: the fixture saving is 12 ms and the repository discovery saving is
+2,730-2,749 ms (82%). The content check costs about 140 ms on a repository hit
+and about 100 ms on a cold capture. No end-to-end edit-sync probe ran for
+TypeScript on this host, so no edit wall-time claim is made. Content edits to
+referenced sources now invalidate by design; consumer edits and unchanged
+inputs reuse. The retired parsed-config cache was not reinstated, and the
+parsed-project argument in `TypeScriptLanguageServiceSession` remains because
+discovery supplies it.
+
 ### Handoff checkpoint, 2026-10-27
 
 Commit `c7214df216bf4e30fb7950545cf1c7624577d600` contains the standby,

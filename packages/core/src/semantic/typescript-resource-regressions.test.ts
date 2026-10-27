@@ -208,7 +208,12 @@ test('warm reference proofs parse each config once and preserve declaration outp
     write(root, 'lib/tsconfig.json', JSON.stringify({ compilerOptions: options, files: ['main.ts'] }));
     write(root, 'lib/main.ts', 'export const value = 1;');
     const output = write(root, 'lib/dist/main.d.ts', 'export declare const value = 1;');
-    const cache = new TypeScriptReferenceDeclarationCache();
+    const cache = new TypeScriptReferenceDeclarationCache(128, 4 * 1024 * 1024, {
+        resourceBudget: {
+            maxFileBytes: 4 * 1024 * 1024,
+            maxProjectBytes: 64 * 1024 * 1024,
+        },
+    });
     assert.equal(referenceAuthorityReady(app, cache), referenceAuthorityReady(app));
     const original = childProcess.spawn;
     const spawn = t.mock.method(childProcess, 'spawn', original);

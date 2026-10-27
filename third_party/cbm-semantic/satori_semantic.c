@@ -110,7 +110,8 @@ typedef struct {
     bool virtual_newline;
 } SatoriStringInput;
 
-#define SATORI_TREE_CACHE_SLOTS 16384
+#define SATORI_TREE_CACHE_SLOTS 65536
+#define SATORI_TREE_CACHE_PROBE_LIMIT 64
 #define SATORI_TREE_CACHE_BYTES (32ULL * 1024ULL * 1024ULL)
 
 typedef struct {
@@ -140,6 +141,29 @@ static uint32_t satori_tree_cache_slot(const TSLanguage *language, const SatoriS
         hash = (hash ^ (unsigned char)sf->path[i]) * 1099511628211ULL;
     }
     return (uint32_t)(hash % SATORI_TREE_CACHE_SLOTS);
+}
+
+/* Finds the entry for this path, or the first empty slot on the probe chain.
+ * Returns NULL when the probe limit is reached. The caller then parses without
+ * caching, which costs time but never returns a wrong tree. */
+static SatoriTreeCacheEntry *satori_tree_cache_lookup(const TSLanguage *language,
+                                                      const SatoriSourceFile *sf,
+                                                      uint32_t *empty_slot) {
+    uint32_t slot = satori_tree_cache_slot(language, sf);
+    *empty_slot = UINT32_MAX;
+    for (uint32_t probe = 0; probe < SATORI_TREE_CACHE_PROBE_LIMIT; probe++) {
+        uint32_t index = (slot + probe) % SATORI_TREE_CACHE_SLOTS;
+        SatoriTreeCacheEntry *entry = &s_tree_cache[index];
+        if (!entry->tree) {
+            *empty_slot = index;
+            return NULL;
+        }
+        if (entry->path_len == sf->path_len
+            && memcmp(entry->bytes, sf->path, sf->path_len) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
 }
 
 static const char *satori_string_read(void *payload, uint32_t byte, TSPoint point,
@@ -177,9 +201,9 @@ static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf)
         satori_clear_tree_cache();
         s_tree_cache_language = language;
     }
-    SatoriTreeCacheEntry *entry = &s_tree_cache[satori_tree_cache_slot(language, sf)];
-    if (entry->tree && entry->path_len == sf->path_len && entry->source_len == sf->source_len
-        && memcmp(entry->bytes, sf->path, sf->path_len) == 0
+    uint32_t empty_slot;
+    SatoriTreeCacheEntry *entry = satori_tree_cache_lookup(language, sf, &empty_slot);
+    if (entry && entry->source_len == sf->source_len
         && memcmp(entry->bytes + entry->path_len, sf->source, sf->source_len) == 0) {
         return ts_tree_copy(entry->tree);
     }
@@ -202,8 +226,11 @@ static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf)
         ts_tree_edit(tree, &drop_virtual_newline);
     }
     uint64_t bytes = (uint64_t)sf->path_len + sf->source_len;
-    uint64_t old_bytes = entry->tree ? (uint64_t)entry->path_len + entry->source_len : 0;
-    if (tree && bytes <= SATORI_TREE_CACHE_BYTES
+    if (!entry && empty_slot != UINT32_MAX) entry = &s_tree_cache[empty_slot];
+    uint64_t old_bytes = entry && entry->tree
+        ? (uint64_t)entry->path_len + entry->source_len
+        : 0;
+    if (entry && tree && bytes <= SATORI_TREE_CACHE_BYTES
         && s_tree_cache_bytes - old_bytes <= SATORI_TREE_CACHE_BYTES - bytes) {
         char *copy = (char *)malloc((size_t)bytes);
         if (copy) {

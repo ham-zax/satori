@@ -4,7 +4,8 @@ import path from 'node:path';
 
 import * as ts from '../semantic/typescript-api';
 import { TypeScriptProgramSession } from '../semantic/typescript-program-session';
-import { TypeScriptReferenceDeclarationCache, type TypeScriptReferenceDeclarationState } from '../semantic/typescript-reference-cache';
+import { TypeScriptReferenceDeclarationCache, REFERENCE_DECLARATION_FORMAT, DEFAULT_REFERENCE_CACHE_ENTRIES, DEFAULT_REFERENCE_CACHE_BYTES, type TypeScriptReferenceDeclarationState } from '../semantic/typescript-reference-cache';
+import { TypeScriptFsObservationRecorder } from '../semantic/typescript-fs-observation';
 
 import {
     TYPESCRIPT_COMPILER_PROVIDER_ID,
@@ -71,6 +72,8 @@ interface ProjectPlan {
     readonly mode: ProjectMode;
     readonly rootPath: string;
     readonly configPath?: string;
+    /** The parsed config this plan was built from, reused by the language service. */
+    readonly configuredProject?: TypeScriptConfiguredProject;
     readonly relativeFiles: readonly string[];
     readonly absoluteFiles: readonly string[];
     /** Compiler root files that the configured/inferred LanguageService can load. */
@@ -312,20 +315,36 @@ function referenceDeclarationState(
     resourceBudget: TypeScriptSourceBudget,
 ): TypeScriptReferenceDeclarationState {
     const references = referenceConfigs(project);
+    // A saved proof is reusable only while every input that decided it still
+    // holds: the compiler and provider that produced it, the config chain, the
+    // ordered project membership and the admission budget. Source contents are
+    // pinned by the observation's read digest, because an edit can add imports
+    // and change which files a fresh computation reads and admits.
     const fingerprint = stableHash({
+        format: REFERENCE_DECLARATION_FORMAT,
+        providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+        compilerVersion: ts.version,
+        configPath: normalizeAbsolute(project.configPath),
         chain: project.configFiles.map(file => [file, fileContentHash(file)]),
         files: project.fileNames,
         resourceBudget,
     });
     const cached = cache?.get(project.configPath, fingerprint);
-    if (cached) return cached;
+    // Reference paths resolve on the filesystem and are not part of the
+    // fingerprint: a referenced config can appear or disappear without
+    // changing this project's config text. Always publish the current graph.
+    if (cached) return { ...cached, references };
     if (!project.options.declaration && !project.options.composite) {
         const state = { outputs: [], references, unproven: true };
         cache?.set(project.configPath, fingerprint, state);
         return state;
     }
+    // Every filesystem fact the computation reads is recorded, so a later hit
+    // can prove that the same program would be built and admitted again.
+    const observation = new TypeScriptFsObservationRecorder();
     const session = new TypeScriptProgramSession(path.dirname(project.configPath), project.fileNames,
-        { ...project.options, noEmit: false }, new TypeScriptSourceBudgetTracker(resourceBudget), project.projectReferences);
+        { ...project.options, noEmit: false }, new TypeScriptSourceBudgetTracker(resourceBudget), project.projectReferences,
+        observation);
     try {
         const program = session.getProgram();
         let resourceFailure = session.getResourceLimitFailure();
@@ -335,7 +354,7 @@ function referenceDeclarationState(
         resourceFailure = session.getResourceLimitFailure();
         if (resourceFailure) return { outputs: [], references, unproven: true, resourceFailure };
         const state = { outputs, references, unproven: false };
-        cache?.set(project.configPath, fingerprint, state);
+        cache?.set(project.configPath, fingerprint, state, observation.capture());
         return state;
     } finally { session.dispose(); }
 }
@@ -706,7 +725,7 @@ function assignProjectShards(plans: readonly ProjectPlan[], count: number): Map<
 
 export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private readonly sessions = new Map<string, CachedSession>();
-    private readonly referenceDeclarations = new TypeScriptReferenceDeclarationCache();
+    private readonly referenceDeclarations: TypeScriptReferenceDeclarationCache;
     private readonly rootStates = new Map<string, RootResolutionState>();
     private useCounter = 0;
     private activeAnalyses = 0;
@@ -731,6 +750,11 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         ) {
             throw new Error('TypeScript semantic resource budgets must be positive safe integers.');
         }
+        this.referenceDeclarations = new TypeScriptReferenceDeclarationCache(
+            DEFAULT_REFERENCE_CACHE_ENTRIES,
+            DEFAULT_REFERENCE_CACHE_BYTES,
+            { stateDirectory: this.options.stateDirectory, resourceBudget: this.resourceBudget },
+        );
     }
 
     supportsLanguage(language: string): boolean {
@@ -1314,6 +1338,12 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
 
     private discoverPlans(rootPath: string, relativeFiles: readonly string[]): ProjectPlan[] {
         const normalizedRoot = normalizeAbsolute(rootPath);
+        // Saved reference proofs belong to one discovery root, so they are read
+        // once here instead of once per project lookup.
+        this.referenceDeclarations.load(normalizedRoot, {
+            providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+            compilerVersion: ts.version,
+        });
         const configCache = new Map<string, TypeScriptConfiguredProject>();
         const configuredGroups = new Map<string, string[]>();
         const inferredFiles: string[] = [];
@@ -1390,6 +1420,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 mode: 'configured',
                 rootPath: normalizedRoot,
                 configPath: project.configPath,
+                configuredProject: project,
                 relativeFiles: sortedFiles,
                 absoluteFiles,
                 compilerRootFiles: project.fileNames,
@@ -1437,6 +1468,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         this.scheduleIdleRelease();
+        this.referenceDeclarations.flush();
         return plans.sort((left, right) => left.key.localeCompare(right.key));
     }
 
@@ -1452,7 +1484,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         const session: ProgramSession = plan.mode === 'configured'
-            ? new TypeScriptLanguageServiceSession(plan.configPath!, this.resourceBudget)
+            ? new TypeScriptLanguageServiceSession(plan.configPath!, this.resourceBudget, plan.configuredProject)
             : new InferredLanguageServiceSession(
                 plan.rootPath,
                 plan.absoluteFiles,

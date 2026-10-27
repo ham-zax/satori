@@ -21,7 +21,7 @@ function controlledWorkers(t: import('node:test').TestContext, postFailure?: { w
     const workers: FakeWorker[] = [];
     class FakeWorker extends EventEmitter {
         readonly exitGate = deferred<number>();
-        readonly requests: Array<{ id: number }> = [];
+        readonly requests: Array<{ id: number; prepareOnly?: true }> = [];
         terminateCalls = 0;
         postError?: Error;
         constructor() {
@@ -29,7 +29,7 @@ function controlledWorkers(t: import('node:test').TestContext, postFailure?: { w
             workers.push(this);
             if (workers.length === postFailure?.worker) this.postError = postFailure.error;
         }
-        postMessage(request: { id: number }) {
+        postMessage(request: { id: number; prepareOnly?: true }) {
             if (this.postError) throw this.postError;
             this.requests.push(request);
         }
@@ -57,6 +57,81 @@ function assertNoPending(analyzer: ThreadedWasmSemanticProjectAnalyzer) {
     assert.equal(analyzer['pendingRequests'].size, 0);
     assert.equal(analyzer['idleTimer'], null);
 }
+
+test('preparation succeeds without retiring the worker and removes its abort listener', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const controller = new AbortController();
+    const preparation = analyzer.prepareSourceTrees(SMALL_GO_PROJECT, controller.signal);
+    await flushMicrotasks();
+    assert.equal(workers[0].requests[0].prepareOnly, true);
+    workers[0].succeed();
+    await preparation;
+    controller.abort();
+    assert.equal(workers[0].terminateCalls, 0);
+    const analysis = analyzer.analyze(SMALL_GO_PROJECT);
+    await flushMicrotasks();
+    assert.equal(workers.length, 1);
+    assert.equal(workers[0].requests[1].prepareOnly, undefined);
+    workers[0].succeed();
+    await analysis;
+    workers[0].exitGate.resolve(0);
+    await analyzer.dispose();
+    assertNoPending(analyzer);
+});
+
+for (const failure of ['abort', 'failure'] as const) {
+    test(`preparation ${failure} drains its worker before settling or replacement`, async (t) => {
+        const { analyzer, workers } = controlledWorkers(t);
+        const controller = new AbortController();
+        let settled = false;
+        let rejection: unknown;
+        const preparation = analyzer.prepareSourceTrees(SMALL_GO_PROJECT, controller.signal)
+            .then(() => { settled = true; }, error => { settled = true; rejection = error; });
+        await flushMicrotasks();
+        const worker = workers[0];
+        if (failure === 'abort') controller.abort();
+        else worker.emit('message', { id: worker.requests[0].id, success: false, error: 'prepare failed' });
+        const next = analyzer.analyze(SMALL_GO_PROJECT);
+        await flushMicrotasks();
+        assert.equal(settled, false);
+        assert.equal(workers.length, 1);
+        assert.equal(worker.terminateCalls, 1);
+        assertNoPending(analyzer);
+        t.mock.timers.tick(1000);
+        await flushMicrotasks();
+        assert.equal(worker.terminateCalls, 1, 'the request timeout must be cleared');
+        assert.equal(settled, false);
+        worker.exitGate.resolve(0);
+        await preparation;
+        if (failure === 'abort') assert.equal(rejection, controller.signal.reason);
+        else assert.match(String(rejection), /prepare failed/);
+        await flushMicrotasks();
+        assert.equal(workers.length, 2);
+        workers[1].succeed();
+        await next;
+        workers[1].exitGate.resolve(0);
+        await analyzer.dispose();
+        assertNoPending(analyzer);
+    });
+}
+
+test('failed preparation termination keeps the worker owned until exit', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const controller = new AbortController();
+    const preparation = assert.rejects(analyzer.prepareSourceTrees(SMALL_GO_PROJECT, controller.signal));
+    await flushMicrotasks();
+    controller.abort();
+    await flushMicrotasks();
+    const terminationError = new Error('prepare termination failed');
+    workers[0].exitGate.reject(terminationError);
+    await preparation;
+    await assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), error => error === terminationError);
+    assert.equal(workers.length, 1);
+    assert.equal(analyzer.hasLiveWorker(), true);
+    workers[0].emit('exit', 1);
+    assert.equal(analyzer.hasLiveWorker(), false);
+    assertNoPending(analyzer);
+});
 
 for (const release of ['idle timer', 'explicit release'] as const) {
     test(`controlled retirement: ${release} remains owned and all drains join it`, async (t) => {

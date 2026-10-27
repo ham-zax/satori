@@ -108,6 +108,25 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
         return undefined;
     }
 
+    async prepareSourceTrees(input: SemanticProjectInput, signal?: AbortSignal): Promise<void> {
+        signal?.throwIfAborted();
+        if (!this.supportsLanguage(input.language)) return;
+        const engine = await this.engineProvider();
+        signal?.throwIfAborted();
+        const session = await engine.createSession(input.language);
+        try {
+            signal?.throwIfAborted();
+            for (const source of input.sourceFiles) {
+                if (Buffer.byteLength(source.source, 'utf8') <= this.maxSourceBytes) {
+                    session.addSource(source.path, source.source);
+                }
+            }
+            await session.prepare();
+        } finally {
+            session.destroy();
+        }
+    }
+
     async analyze(input: SemanticProjectInput): Promise<SemanticProjectEvidence> {
         if (!this.supportsLanguage(input.language)) {
             return {

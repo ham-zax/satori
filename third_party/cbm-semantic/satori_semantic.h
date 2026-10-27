@@ -180,6 +180,7 @@ EMSCRIPTEN_KEEPALIVE const char *satori_semantic_last_error(SatoriSemanticHandle
 EMSCRIPTEN_KEEPALIVE int satori_semantic_create(const char *language, uint32_t language_len, SatoriSemanticHandle *out_handle);
 EMSCRIPTEN_KEEPALIVE int satori_semantic_add_auxiliary(SatoriSemanticHandle handle, const char *role, uint32_t role_len, const char *path, uint32_t path_len, const char *source, uint32_t source_len);
 EMSCRIPTEN_KEEPALIVE int satori_semantic_add_source(SatoriSemanticHandle handle, const char *path, uint32_t path_len, const char *source, uint32_t source_len);
+EMSCRIPTEN_KEEPALIVE int satori_semantic_prepare(SatoriSemanticHandle handle);
 EMSCRIPTEN_KEEPALIVE int satori_semantic_resolve(SatoriSemanticHandle handle);
 EMSCRIPTEN_KEEPALIVE void satori_semantic_destroy(SatoriSemanticHandle handle);
 EMSCRIPTEN_KEEPALIVE void satori_semantic_free(SatoriSemanticHandle handle);

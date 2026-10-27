@@ -66,7 +66,7 @@ type ManageMaintenanceHandlersHost = {
     mutationRuntime: RootMutationRuntime;
     syncManager: Pick<
         SyncManager,
-        "assessReadFreshness" | "captureExternalSyncFlight"
+        "assessReadFreshness" | "captureExternalSyncFlight" | "syncWorkerStandby"
     >;
     trackedRootReadiness: Pick<
         TrackedRootReadiness,
@@ -835,6 +835,7 @@ export class ManageMaintenanceHandlers {
                         codebasePath: absolutePath,
                         execution,
                         mutationRuntime: this.host.mutationRuntime,
+                        standby: this.host.syncManager.syncWorkerStandby,
                     });
 
                     const operation = this.host.mutationRuntime.getCurrentOperation(absolutePath);

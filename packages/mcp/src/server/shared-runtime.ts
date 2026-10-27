@@ -271,6 +271,7 @@ export class SharedRuntimeHost {
             mutationRuntime: this.mutationRuntime,
             preparedReadObservationSource: (codebasePath) => this.providerRuntime.getPreparedReadObservation(codebasePath),
             externalSyncFlightSource: (codebasePath) => this.providerRuntime.captureExternalSyncFlight(codebasePath),
+            syncWorkerStandby: this.providerRuntime.externalSyncWorkerStandby,
         });
 
     }

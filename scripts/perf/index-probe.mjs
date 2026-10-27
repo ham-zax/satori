@@ -4,13 +4,15 @@
 // and prints Satori's own timing records (SATORI_PERF_TRACE) plus wall time.
 //
 //   node scripts/perf/index-probe.mjs <repo> [--edit <relative file>] [--log <file>] [--cpu-prof <dir>]
-//       [--save-search <N,N,...> --ext <.go> [--runs 3]] [--wait-timeout <ms>]
+//       [--save-search <N,N,...> --ext <.go> [--runs 3] [--sync-gap <ms>]] [--wait-timeout <ms>]
 //
 // --save-search measures save-to-search freshness: for each N it appends a unique
 // comment term to N tracked files with extension --ext, then searches for the
 // term with no sync ("idle") and right after a sync starts ("sync"). It reports
 // the first search's time, hits and freshness state, and the time from save until
 // every edited file is a hit. Each trial restores the files and syncs back.
+// --sync-gap waits that long before each trial's edit, as an agent that edits
+// some seconds after the last sync does (the sync worker standby warms up then).
 //
 // Run memory-capped, e.g.
 //   systemd-run --user --scope -q -p MemoryMax=7G -p MemorySwapMax=0 node scripts/perf/index-probe.mjs ../some-repo
@@ -22,11 +24,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requestCleanupSync } from './index-probe-sync.mjs';
+import { probeCurrentPublicationForPath, resolvePublicationNavigationRoot } from '../../packages/core/dist/generation/publication-store.js';
+import { readSymbolRegistrySidecar } from '../../packages/core/dist/symbols/sidecar-reads.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function parseArgs(argv) {
-    const options = { repo: null, edit: null, log: null, cpuProf: null, saveSearch: null, ext: null, runs: 3, waitTimeoutMs: 600_000 };
+    const options = { repo: null, edit: null, log: null, cpuProf: null, saveSearch: null, ext: null, runs: 3, syncGapMs: 0, waitTimeoutMs: 600_000 };
     const positiveInt = (value, flag) => {
         const number = Number(value);
         if (!Number.isInteger(number) || number <= 0) fail(`${flag} needs a positive integer, got ${value}`);
@@ -41,13 +45,14 @@ function parseArgs(argv) {
             case '--save-search': options.saveSearch = next().split(',').map((value) => positiveInt(value, '--save-search')); break;
             case '--ext': options.ext = next(); break;
             case '--runs': options.runs = positiveInt(next(), '--runs'); break;
+            case '--sync-gap': options.syncGapMs = positiveInt(next(), '--sync-gap'); break;
             case '--wait-timeout': options.waitTimeoutMs = positiveInt(next(), '--wait-timeout'); break;
             default:
                 if (options.repo) fail(`unexpected argument ${argv[i]}`);
                 options.repo = path.resolve(argv[i]);
         }
     }
-    if (!options.repo) fail('usage: index-probe.mjs <repo> [--edit <file>] [--log <file>] [--cpu-prof <dir>] [--save-search <N,...> --ext <.ext> [--runs 3]] [--wait-timeout <ms>]');
+    if (!options.repo) fail('usage: index-probe.mjs <repo> [--edit <file>] [--log <file>] [--cpu-prof <dir>] [--save-search <N,...> --ext <.ext> [--runs 3] [--sync-gap <ms>]] [--wait-timeout <ms>]');
     if (options.saveSearch && !options.ext?.startsWith('.')) fail('--save-search needs --ext <.extension>');
     return options;
 }
@@ -273,6 +278,7 @@ async function main() {
                 rerankerInputBytes: response?.hints?.debugSearch?.providerWork?.rerankerInputBytes,
             };
         };
+        if (options.syncGapMs > 0) await sleep(options.syncGapMs);
         for (const file of files) pendingRestores.set(path.join(options.repo, file), fs.readFileSync(path.join(options.repo, file)));
         try {
             for (const [file, original] of pendingRestores) fs.writeFileSync(file, Buffer.concat([original, Buffer.from(`\n${comment} ${term}\n`)]));
@@ -344,15 +350,27 @@ async function main() {
 
         if (options.saveSearch) {
             await syncAndWait();
+            const stateRoot = process.env.SATORI_STATE_ROOT || path.join(home, '.satori');
+            const publication = probeCurrentPublicationForPath(options.repo, { stateRoot });
+            if (publication.kind !== 'current' || publication.canonicalRoot !== fs.realpathSync(options.repo)) {
+                throw new Error('save-search needs a current publication for the probe repository');
+            }
+            const registry = await readSymbolRegistrySidecar({
+                normalizedRootPath: publication.canonicalRoot,
+                publicationId: publication.publicationId,
+                navigationRoot: resolvePublicationNavigationRoot(publication.canonicalRoot, publication.publicationId, stateRoot),
+            });
+            if (registry.status !== 'ok') throw new Error(`save-search cannot read the publication registry: ${registry.status}`);
+            const indexed = new Set(registry.registry.manifest.files.map((file) => file.path));
             const tracked = await new Promise((resolve, reject) => {
                 const git = spawn('git', ['-C', options.repo, 'ls-files', '-z', `*${options.ext}`], { stdio: ['ignore', 'pipe', 'inherit'] });
                 let out = '';
                 git.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk; });
-                git.once('close', (code) => (code === 0 ? resolve(out.split('\0').filter(Boolean).sort()) : reject(new Error(`git ls-files exit ${code}`))));
+                git.once('close', (code) => (code === 0 ? resolve(out.split('\0').filter((file) => indexed.has(file)).sort()) : reject(new Error(`git ls-files exit ${code}`))));
             });
             const comment = options.ext === '.py' ? '#' : '//';
             for (const count of options.saveSearch) {
-                if (count > tracked.length) fail(`--save-search ${count} exceeds ${tracked.length} tracked ${options.ext} files`);
+                if (count > tracked.length) throw new Error(`--save-search ${count} exceeds ${tracked.length} indexed, tracked ${options.ext} files`);
                 // Even stride over the sorted list spreads the edits across directories.
                 const files = Array.from({ length: count }, (_, index) => tracked[Math.floor(index * tracked.length / count)]);
                 for (const mode of ['idle', 'sync']) {

@@ -23,6 +23,8 @@ export interface ThreadedSemanticAnalyzerOptions {
 interface PendingSemanticRequest {
     readonly worker: Worker;
     readonly timer: NodeJS.Timeout;
+    readonly prepareOnly?: true;
+    readonly removeAbortListener?: () => void;
     readonly resolve: (val: SemanticProjectEvidence) => void;
     readonly reject: (err: unknown) => void;
 }
@@ -54,6 +56,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
         if (!pending) return undefined;
         this.pendingRequests.delete(id);
         clearTimeout(pending.timer);
+        pending.removeAbortListener?.();
         this.scheduleIdleRelease();
         return pending;
     }
@@ -64,6 +67,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             if (pending.worker !== worker) continue;
             this.pendingRequests.delete(id);
             clearTimeout(pending.timer);
+            pending.removeAbortListener?.();
             requests.push(pending);
         }
         return requests;
@@ -156,7 +160,12 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             this.worker = worker;
 
             worker.on('message', (response: WasmWorkerResponse) => {
-                if (this.pendingRequests.get(response.id)?.worker !== worker) return;
+                const current = this.pendingRequests.get(response.id);
+                if (current?.worker !== worker) return;
+                if (!response.success && current.prepareOnly) {
+                    this.releaseWorker(new Error(response.error), worker);
+                    return;
+                }
                 const pending = this.takePending(response.id);
                 if (!pending) return;
                 if (response.success) {
@@ -193,6 +202,15 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
     }
 
     async analyze(input: SemanticProjectInput): Promise<SemanticProjectEvidence> {
+        return this.request(input);
+    }
+
+    async prepareSourceTrees(input: SemanticProjectInput, signal?: AbortSignal): Promise<void> {
+        signal?.throwIfAborted();
+        await this.request(input, true, signal);
+    }
+
+    private async request(input: SemanticProjectInput, prepareOnly?: true, signal?: AbortSignal): Promise<SemanticProjectEvidence> {
         if (this.failedRetirement) throw this.failedRetirement.error;
         if (this.disposed) {
             throw new Error('Semantic analyzer has been disposed');
@@ -206,6 +224,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
 
         // Another resumed caller can retire a replacement before this one resumes.
         while (this.retiring.size > 0 || this.failedRetirement) await this.awaitRetirements();
+        signal?.throwIfAborted();
         if (this.disposed) {
             throw new Error('Semantic analyzer has been disposed');
         }
@@ -216,7 +235,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             clearTimeout(this.idleTimer);
             this.idleTimer = null;
         }
-        const request: WasmWorkerRequest = { id, input };
+        const request: WasmWorkerRequest = { id, input, ...(prepareOnly ? { prepareOnly } : {}) };
 
         return new Promise<SemanticProjectEvidence>((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -227,7 +246,14 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
                 ), worker);
             }, this.requestTimeoutMs);
             timer.unref();
-            this.pendingRequests.set(id, { worker, timer, resolve, reject });
+            const onAbort = () => this.releaseWorker(signal?.reason, worker);
+            if (signal) signal.addEventListener('abort', onAbort, { once: true });
+            this.pendingRequests.set(id, { worker, timer, resolve, reject, prepareOnly,
+                ...(signal ? { removeAbortListener: () => signal.removeEventListener('abort', onAbort) } : {}) });
+            if (signal?.aborted) {
+                onAbort();
+                return;
+            }
             try {
                 worker.postMessage(request);
             } catch (error) {

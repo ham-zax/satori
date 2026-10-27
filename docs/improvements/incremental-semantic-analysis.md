@@ -1,6 +1,6 @@
 # Incremental semantic analysis on edit sync
 
-Status: deferred. Recorded 2026-09-28.
+Status: dependency-scoped analysis remains deferred; bounded parse reuse implemented and measured in SL-5. Recorded 2026-09-28, updated 2026-10-27.
 
 ## Question
 
@@ -59,3 +59,58 @@ When large repositories in these languages make edit sync the main complaint,
 and the ~3.5 s it can save per edit (on a ~3k-file Go repo) outweighs
 multi-day engine work and per-language soundness proofs. The shared per-sync
 costs above are a separate, cross-language target.
+
+## SL-5 bounded parse reuse, 27 October 2026
+
+The measured Go cost includes parsing unchanged sources. SL-5 first removes
+that parsing from a prepared standby's critical path. It does not reuse type
+registries, definitions, resolved calls, or source spans across different
+source inputs.
+
+The native parser owns a bounded cache of Tree-sitter trees. A cache hit needs
+the same grammar, source length, and exact source bytes. A hash only locates
+an entry. A mismatch calls the existing parser. Callers receive `ts_tree_copy`
+and retain their existing ownership and cleanup. Cache storage is bounded to
+32 MiB of owned source/path bytes and 16,384 direct-mapped slots. It retains
+only the current grammar, clearing earlier trees when the grammar changes.
+That prevents trees from another language raising a later analysis's peak.
+Collisions and pressure
+cost a parse; they cannot authorize reuse. The native module owns the cache
+until its semantic worker exits.
+
+Allocation failures under the cache's direct control skip insertion. The
+pinned Tree-sitter allocator aborts on exhaustion, including during tree
+copying. That existing native failure behavior remains unchanged; it cannot
+be treated as a recoverable cache miss without changing the upstream allocator.
+
+An explicit native prepare operation parses session sources without resolving
+calls. The WASM provider exposes optional preparation through its existing
+semantic analyzer port. The threaded provider uses its current request timeout,
+termination, and disposal path. The generation workflow prepares native source
+trees after loading the previous Publication's navigation state. It uses the
+same root-bound source reads and byte-hash check as the normal semantic path.
+It prepares only when the registry has exactly one supported native language.
+With one cached grammar, preparing several languages would retain only the
+last one's trees and could delay a request for another language. Such roots
+keep the normal analysis path.
+A changed source, an unsupported provider, or failed preparation keeps the
+normal analysis path available. A failed threaded preparation retires its
+worker before returning, so normal analysis gets a fresh native runtime.
+Preparation writes no Publication data.
+
+The sync worker aborts optional source-tree preparation when its start message
+arrives. The threaded provider terminates and drains that preparation before
+the operation continues. Navigation preload still completes under its existing
+contract. This keeps an unfinished speculative parse from delaying a request
+that does not need native analysis.
+
+Analysis still builds definitions, module and build context, and resolves calls
+against all current inputs. The common parser cache applies to the engine's
+native languages. TypeScript uses its compiler provider and receives the
+separate per-discovery config-client change recorded in TASKS.md.
+
+Required evidence: prepared and fresh-engine output equivalence for source,
+auxiliary, path, byte-position and language changes; a mutation check that
+breaks the source witness; bounded lifecycle checks; the existing native
+language tests; and three-run before/after edit probes with load and RSS.
+The idle standby memory and preparation time must also be reported.

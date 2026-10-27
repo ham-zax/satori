@@ -46,7 +46,7 @@ type SyncInternals = {
 
 function createFixture(
     t: TestContext,
-    options: { onClose?: () => Promise<void> } = {},
+    options: { onClose?: () => Promise<void>; onRelease?: (root: string) => Promise<void> } = {},
 ) {
     const watchers: FakeWatcher[] = [];
     const context = {
@@ -63,6 +63,9 @@ function createFixture(
     const manager = new SyncManager(context as never, {
         watchEnabled: true,
         mutationRuntime: mutationRuntime as never,
+        ...(options.onRelease ? { syncWorkerWarmup: {
+            prepare: () => {}, take: () => undefined, release: options.onRelease,
+        } } : {}),
     });
     const internal = manager as unknown as SyncInternals;
     t.mock.method(fs.promises, "stat", async () => ({ isDirectory: () => true } as never));
@@ -73,6 +76,84 @@ function createFixture(
     });
     return { manager, internal, watchers };
 }
+
+test("unwatch closes the watcher before releasing standby and waits for its drain", async (t) => {
+    const closeStarted = deferred();
+    const closeGate = deferred();
+    const releaseStarted = deferred();
+    const releaseGate = deferred();
+    const events: string[] = [];
+    const { manager } = createFixture(t, {
+        onClose: async () => { events.push('close'); closeStarted.resolve(); await closeGate.promise; },
+        onRelease: async (releasedRoot) => { events.push(`release:${releasedRoot}`); releaseStarted.resolve(); await releaseGate.promise; },
+    });
+    await manager.startWatcherMode();
+    let finished = false;
+    const unwatching = manager.unwatchCodebase(root).then(() => { finished = true; });
+    await closeStarted.promise;
+    const beforeClose = [...events];
+    closeGate.resolve();
+    await releaseStarted.promise;
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    const beforeRelease = finished;
+    releaseGate.resolve();
+    await unwatching;
+    assert.deepEqual(beforeClose, ['close']);
+    assert.equal(beforeRelease, false);
+    assert.deepEqual(events, ['close', `release:${root}`]);
+});
+
+test("stop drains standby release after watcher close", async (t) => {
+    const gate = deferred();
+    const started = deferred();
+    const { manager, watchers } = createFixture(t, {
+        onRelease: async () => { started.resolve(); await gate.promise; },
+    });
+    await manager.startWatcherMode();
+    let finished = false;
+    const stopping = manager.stopWatcherMode().then(() => { finished = true; });
+    const called = await Promise.race([started.promise.then(() => true), stopping.then(() => false)]);
+    const beforeRelease = finished;
+    gate.resolve();
+    await stopping;
+    assert.equal(called, true);
+    assert.equal(beforeRelease, false);
+    assert.equal(watchers[0].closeCount, 1);
+});
+
+test("stop joins a standby release already owned by unwatch", async (t) => {
+    const gate = deferred();
+    const started = deferred();
+    const { manager } = createFixture(t, {
+        onRelease: async () => { started.resolve(); await gate.promise; },
+    });
+    await manager.startWatcherMode();
+    const unwatching = manager.unwatchCodebase(root);
+    await started.promise;
+    let stopped = false;
+    const stopping = manager.stopWatcherMode().then(() => { stopped = true; });
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    const beforeRelease = stopped;
+    gate.resolve();
+    await Promise.all([unwatching, stopping]);
+    assert.equal(beforeRelease, false);
+});
+
+test("ENOSPC shutdown drains standby release", async (t) => {
+    const gate = deferred();
+    const started = deferred();
+    const { manager, internal } = createFixture(t, {
+        onRelease: async () => { started.resolve(); await gate.promise; },
+    });
+    internal.watcherModeStarted = true;
+    t.mock.method(chokidar, "watch", () => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); });
+    const touching = manager.touchWatchedCodebase(root);
+    const called = await Promise.race([started.promise.then(() => true), touching.then(() => false)]);
+    gate.resolve();
+    await touching;
+    assert.equal(called, true);
+    assert.equal(internal.watcherModeStarted, false);
+});
 
 function gateMatcher(
     t: TestContext,

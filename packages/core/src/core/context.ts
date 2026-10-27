@@ -1762,6 +1762,28 @@ export class Context {
         );
     }
 
+    /**
+     * Preloads the current Publication's navigation state for the next
+     * `reindexByChange` of this root. Returns false when nothing was loaded;
+     * the sync then reads the sidecars itself.
+     */
+    public async prewarmSyncNavigationState(codebasePath: string, preparationSignal?: AbortSignal): Promise<boolean> {
+        const lease = this.acquireCurrentPublicationRead(codebasePath);
+        if (!lease) return false;
+        try {
+            const navigation = this.getPublicationNavigationAddress(lease);
+            if (!navigation) return false;
+            return await this.indexGenerationWorkflow.prewarmNavigationDeltaState(
+                this.canonicalizeCodebasePath(codebasePath),
+                navigation.publicationId,
+                navigation.navigationRoot,
+                preparationSignal,
+            );
+        } finally {
+            lease.release();
+        }
+    }
+
     public async reindexByChange(
         codebasePath: string,
         progressCallback?: (progress: IndexingProgress) => void,

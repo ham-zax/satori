@@ -661,3 +661,88 @@ The original /home/hamza cache and its /home/ubuntu equivalent are absent on thi
 | SF-Q | review | SF-M | parent | Read saved Cohort B query scores and capped stage records. Separate observed ranking losses, retrieval uncertainty and missing target coverage. Reconcile report labels and denominators only where saved evidence proves a mismatch. Stop without search changes when evidence does not identify the responsible boundary. | WSL evidence now available. Checked all 30 final scores against saved stage records, with unchanged hit@1 10/30, hit@5 20/30 and hit@10 23/30. Seven misses: g15 zero targets; g5/f12/f15 post-provider policy demotions; g6 explicit file_diversity_cap; g4 candidate admission; f1 rank 13 below cutoff. f4 stage/scorer difference follows span-based versus symbol-based matching. Historical tune labels conflict with selected held-out case file. Detailed evidence is in docs/improvements/agent-discovery-benchmark-2026-10-26.md, WSL classification section. No new run, oracle change or search repair. |
 | SF-C | review | SF-Q | parent | Diagnose g15 against the pinned source, publication manifest and parse outcomes. Establish whether go.mod is excluded, unsupported, missing from publication, or inconsistent with the frozen oracle. Repair only a demonstrated Satori defect. Preserve the 30-query denominator. | WSL diagnosis established from original publication: go.mod exists (1600 bytes), matching source.json SHA-256 9b7bd3c7674e6154d5d5fe93dc51c79e4b225302473e64fb94b421555ae69665. Source has 124 paths, navigation has 123, go.mod is the sole difference, and unprocessedPaths is empty. Go descriptor declares go.mod a semantic auxiliary. Actual isObservableFileObservationByPolicy returns true while isIndexableFileObservationByPolicy rejects it before filename checks, under default and all-text. Direct actual-function check passes with zero probe reads and README neighbor admitted. Measured commit has the same guard. SF-D catalog/text probe did not test final admission. Existing docs/improvements/manifest-file-search.md explicitly defers the contract redesign. Diagnosis is complete, capability remains deferred. No product patch, oracle change, index mutation or benchmark. Details in agent-discovery benchmark document. |
 | SF-D | review | - | parent inline | Hamza authorizes work that needs no benchmark on 26 October 2026. Check source-level go.mod admission and text chunking. Correct the false warning that zero-target queries leave scored metrics. Preserve scoring, denominators, oracles and original artifacts. Use bounded direct checks without dependencies or a benchmark. | Corrected only the target-resolution warning and its comment. Actual default/all-text filename sets admit go.mod, minimal excludes it, and a synthetic go.mod produces one complete text chunk without symbols. Direct Node source probe passes with --experimental-transform-types and extension resolution hooks. Initial strip-only probe cannot handle an existing TypeScript parameter property, so the corrected probe uses Node's transform mode. Actual computeCohortAggregates retains a zero-target miss: count 2, hit1 0.5, MRR 0.5. Actual resolveRepoTargetChunkIds with a database fixture keeps g15 and emits the corrected denominator warning. Syntax and diff checks pass. No new test files, dependencies, benchmark runs or score changes. After dependency restoration, the existing native-index zero-target regression passes: node --test --test-name-pattern="a judge target that matches zero rows" evals/real-repo-quality/harness-logger.test.mjs. Historical coverage cause remains unknown. Only Hamza marks done. |
+
+## Sync latency run, 27 October 2026
+
+Hamza asks to verify, document and implement the warm sync worker, then lower edit-sync time for
+every language, not only Go. Design: `docs/improvements/change-proportional-sync.md`, section
+"Design review of item 1". Workers: Claive Codex `gpt-6.1-terra`. Effort is `xhigh` for complex
+work, `high` for relevant mechanical work, and `medium` for low-risk work. Parent owns design and
+acceptance. Agents move tasks to review. Only Hamza marks done. Run budget: 3 dispatches (two
+workers, one final independent review). Baseline: trufflehog (3,295 Go files) one-file edit sync
+median 12.3 s at 5d3b7736.
+
+| id | status | depends | owner | acceptance | evidence |
+| SL-1 | review | - | parent inline | Standby sync worker: at most one per host, started on watcher ready, first watcher change and after each sync. It preloads navigation state before start, binds the start's operation id, exits after one sync. Release on unwatch and shutdown. The mcp and core typechecks pass. Existing supervisor tests pass. | Core `IndexGenerationWorkflow.prewarmNavigationDeltaState` plus the `Context.prewarmSyncNavigationState` delegate. `mutation-worker-supervisor.ts` start message carries an optional `boundOperationId`. `mutation-sync-worker.ts` bootstraps and preloads before `started` and rebuilds the provider when the bootstrap key changed. `SyncWorkerStandby` lives in `supervised-sync-worker.ts`, with the `SyncManager.syncWorkerWarmup` hooks and the `ProviderRuntime` wiring and shutdown. Core build and mcp tsc are clean. `mutation-worker-supervisor.test.ts` passes 5/5. |
+| SL-2 | review | SL-1 | claive codex terra high (worker 398ba89a6cba, @sync-sl2) | Add focused tests: (a) supervisor start forwards boundOperationId and defaults to operationId; (b) SyncWorkerStandby release/replace/close leave no live process group, and take of a settled standby returns undefined; (c) core prewarm then sync gives the same published navigation output as a cold sync, and a navigation change after prewarm forces the sidecar read. Each new test must fail when its mechanism is broken (mutation check recorded). | Parent rerun: `mutation-worker-supervisor.test.ts` 7/7 (2 new), new `supervised-sync-worker.test.ts` 6/6, new core `navigation-prewarm.test.ts` 4/4. (c) checks prewarm state against the two cold sidecar reads, not a full sync. Worker mutation checks: no bound id in the start message failed `start binds the requested operation id in the worker runtime`; a no-op `release` failed `release stops only the matching root`; no token comparison failed `a token change during sidecar reads retains no prewarm`. Sources restored (parent: source diffs unchanged). Parent fix: the core build typechecks tests, and `navigation-prewarm.test.ts` line 37 failed TS2352. The port cast now goes through `unknown`. Core and mcp builds pass, and the core test passes 4/4 again. |
+| SL-3 | review | SL-1 | parent inline | Measure trufflehog one-file edit sync, before (fresh worker) and after (standby), median of 3 runs each, with peak RSS of the standby, machine load, and the command. | Command: `systemd-run --user --scope -q -p MemoryMax=5G -p MemorySwapMax=0 node scripts/perf/index-probe.mjs ~/repo/trufflehog --save-search 1 --ext .go --runs 3`. Run 1 found the standby used in 2 of 12 syncs. Cause: `manage_index sync` is provider-free and runs on the session's local `SyncManager` (`shared-runtime.ts`), which had no standby. Fix: `SyncManagerOptions.syncWorkerStandby`, set from `ProviderRuntime.externalSyncWorkerStandby`; the manual path passes `syncManager.syncWorkerStandby`. Checks: mcp tsc clean, `shared-runtime.test.ts` 11/11, `manage-maintenance-handlers.test.ts` 6/6. Run 3: standby used in 11 of 11 syncs. Real edit sync round trip median of 6: fresh 11.7 s (run 2, load 10.1→6.6), standby 10.9 s (run 3, load 2.2→4.8). Restore syncs: 4.7 s → 2.5 s. Limit: the probe asks for each sync right after the last, so the new standby is still loading (bootstrap + preload ~3.1 s run inside the sync). A standby that is ready removes that time. Before side is the same build with fresh workers, not HEAD. The build includes another session's uncommitted `publication-store.ts` edits. Standby RSS (Python run, fixed sampler, main worker process only): peak 376 MB, last sample per standby 156–376 MB. Full results and open issues: `docs/improvements/change-proportional-sync.md`, 2026-10-27 05:45 IST. |
+| SL-4 | review | SL-3 | parent inline | Profile a one-file edit sync in a TypeScript repo and a Python repo, and rank the costs that remain for every language. | 2026-10-27 05:45 IST. TypeScript (`satori_v2` clone, 317 files, load 3.6→7.9): standby 11/11, real edit median ~6.3 s, `navigation.resolution language=typescript files=321` 1,302 ms is the top phase. Python (`tradingview_ratio` clone, load 5.6→6.4) is not valid: standby used 1/10 (open issue 1, P1), and the edited file never appears in search, `editedResultCount` 0 in 21/21 (open issue 3, P2). Ranking from Go and TypeScript: (1) whole-language navigation analysis, (2) standby not ready on back-to-back syncs, (3) sidecar stage, relationship delta, activation, payload count. Historical result; see the Python rerun below. Details and priorities: `docs/improvements/change-proportional-sync.md`, "Open issues". |
+| SL-5 | in-progress | SL-4 | parent design; claive codex terra xhigh | Implement the top-ranked cost reduction that applies to every language, with an equivalence test against the old path and before/after medians. | Worker fb24dcf2ab30, Codex gpt-6.1-terra xhigh, reused for all slices. Implemented bounded exact-byte parse reuse for all seven native grammars and optional standby preparation with cancellation/drain. Parent verified fresh-engine equivalence, 37 lifecycle/preload/publication tests, artifact verification, and pnpm run check. Go edit wall median 8,906→6,826 ms (23.4%); semantic phase 3,841→1,797 ms. TypeScript already resolves affected files; wall median 3,301→3,458 ms under higher load, with no gain claimed. All final search trials hit and standby use is 10/10 per repo. Idle main-process sampled peaks: Go 743 MB, TS 435 MB. The rejected TS client-sharing experiment was removed. Limits: one native grammar per prepared root, cold fallback, whole-project native resolution retained; universal latency reduction is not established. Independent review confirms acceptance is partial. Commands, load, RSS and raw values: docs/improvements/change-proportional-sync.md, SL-5 measured result. |
+| SL-R | review | SL-2, SL-5 | claive reviewer | One independent review of the final diff. | Worker cdb14e1fc744, Codex gpt-6.1-terra xhigh, read-only. Final graph review against HEAD 1e435f17. Dispatch 3/3. Review found an undrained discarded standby, a bootstrap key sampled from different inputs, and missing standby release when watcher mode stops. Worker fb24dcf2ab30 repaired the three findings in one round. Parent reran four MCP test files: 30 passed, including regressions that first failed against the old code. MCP typecheck and runtime build passed. A child-only read lease cannot protect preload from host GC; that race may cause cold fallback. Review established SL-5 acceptance remains partial. No second independent review. |
+
+SL-R continuation: the reviewer initially used a remote harness that required approval.
+The user-supplied environment identifies this repository as local WSL. The same reviewer
+continues against the local workspace. The parent independently reproduced the released
+standby shutdown gap: `close` returned while the released process group was still live.
+
+SL-4 follow-up, 2026-10-27 06:25 IST: the original Python edit was tracked by Git but
+excluded by the repository's ignore rules. The probe now selects tracked paths from the
+current Publication's navigation registry. The Python rerun found all six edits in search
+and used the standby in 10/10 syncs. Three explicit sync wall times: 2,728, 2,567, 2,640 ms
+(median 2,640 ms). Python medians for six edit publications: navigation delta 854 ms,
+checkpoint 621 ms, sidecar stage 462 ms, relationship delta 351 ms, activation 165 ms.
+These spans overlap. Load 2.36→3.35; index process-tree peak 2,419 MB. Command and limits:
+`docs/improvements/change-proportional-sync.md`, "Python rerun and current issues".
+The Python trace does not prove whole-language analysis dominates its navigation cost.
+The earlier 1/10 standby result did not recur; its exact cause is still unproven.
+
+SL-3 later comparison: the Go probe with a 6 s gap measured HEAD median 13,426 ms
+and modified build median 9,408 ms over three runs each. Conditions and limitations are
+in the same document.
+
+SL-5 investigation correction, 2026-10-27: the earlier SL-4 interpretation of TypeScript
+`navigation.resolution files=321` as whole-language analysis was inaccurate. That field
+counts the input registry. The same saved trace reports `typescript.claims files=1` for
+each of six edit publications. TypeScript already has digest-checked dependency state and
+affected-file analysis. Go still parses the affected language as a whole. Worker
+fb24dcf2ab30 checked the provider interfaces and lifecycle; its evidence alone does not
+prove a safe Go incremental design or a performance gain. Its follow-up profiles the
+TypeScript resolution span on the existing clone before a repair is selected.
+
+SL-5 implementation slice 1: reuse one native TypeScript config-loader client within
+one `discoverPlans` call. The loader owns and closes that client in `finally`; each config
+load keeps its existing independent read count, byte limits, decoded text, and compiler
+parse calls. No compiler-rule copy or cross-request result cache. Differential tests
+compare shared-client results with fresh clients and change config contents and directory
+membership between calls. Worker fb24dcf2ab30 measures the unprofiled baseline, implements
+this slice, and runs the owning tests. The parent checks the diff and acceptance.
+Slice 1 result: the parent reran 24 focused tests and the core build. Explicit sync
+medians were 3,301 ms before (3,404/3,289/3,301) and 3,251 ms after
+(3,319/3,196/3,251). Load was 0.42→2.43 before and 0.70→2.32 after; peak index
+process-tree RSS was 2,575/2,553 MB. All six edits reached search on both sides.
+The 50 ms change does not establish a material performance gain. The parent removed the
+three-file experiment and rebuilt the original sources. No second client-sharing repair.
+
+SL-5 slice 2 follows the bounded native parse-reuse design in
+`docs/improvements/incremental-semantic-analysis.md`: exact byte/grammar witnesses,
+bounded process memory, full current-project resolution, optional standby preparation,
+fresh-engine differential tests and a witness mutation check. The same worker measures
+the Go baseline and implements the native engine boundary before workflow integration.
+
+Slice 2 result: Go baseline walls 8,854/9,473/8,906 ms, median 8,906 ms;
+peak index process-tree RSS 2,357 MB; load 2.19→1.90; 6/6 search hits and
+10/10 standby syncs. Native preparation/cache implementation passed the worker's
+47 focused tests. Removing the byte witness failed the equal-length syntax-change
+regression, then the worker restored and rebuilt the correct engine. Parent reran
+semantic artifact verification and all five fresh-engine differential tests, which pass.
+Tree-sitter's existing abort-on-allocation-failure behavior stays unchanged. The initial
+packet's stronger recoverable-OOM requirement was invalid and the parent corrected it.
+Slice 3 integrates optional preparation, cancels and drains it when a sync starts,
+and checks full publication equivalence. SL-5 now has parent verification and measured evidence in its row; independent review remains SL-R.
+
+Progress checkpoint, 2026-10-27: parent final review found two source-level concerns in
+the earlier standby implementation. `SyncWorkerStandby.discard` clears its only handle
+before cancellation completes, so `close` may omit a released/replaced worker.
+`createWorkerProvider` constructs from one bootstrap result but records a second result
+as its witness, which can hide a configuration change during construction. Parent is
+checking these before the single independent review. No new task or dispatch is added.

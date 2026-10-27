@@ -413,6 +413,7 @@ export async function assertSyncMatchesFullIndex(
     initial: Files,
     edits: ReadonlyArray<readonly [string, Edit]>,
     cold: boolean,
+    prewarm = false,
 ): Promise<void> {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-equivalence-sync-${name}-`));
     const root = path.join(tempRoot, 'repo');
@@ -446,11 +447,20 @@ export async function assertSyncMatchesFullIndex(
                 if (cold) {
                     await open((context) => context.indexCodebase(root));
                     for (const [description, edit] of edits) {
-                        edit(root);
-                        await assertMatchesFullIndex(description, await open(async (context, database) => {
-                            await context.reindexByChange(root);
-                            return snapshotPublication(context, database, root);
-                        }));
+                        if (prewarm) {
+                            await assertMatchesFullIndex(description, await open(async (context, database) => {
+                                assert.equal(await context.prewarmSyncNavigationState(root), true);
+                                edit(root);
+                                await context.reindexByChange(root);
+                                return snapshotPublication(context, database, root);
+                            }));
+                        } else {
+                            edit(root);
+                            await assertMatchesFullIndex(description, await open(async (context, database) => {
+                                await context.reindexByChange(root);
+                                return snapshotPublication(context, database, root);
+                            }));
+                        }
                     }
                     return;
                 }

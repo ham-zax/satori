@@ -70,7 +70,9 @@ process.on("SIGTERM", () => {
 `;
 
 type ParentMessage =
-    | { type: "mutation_worker_start"; operationId: string }
+    // boundOperationId: the RootMutationExecution this worker runs. A
+    // pre-started worker learns it only at start; it defaults to operationId.
+    | { type: "mutation_worker_start"; operationId: string; boundOperationId?: string }
     | { type: "mutation_worker_cancel"; operationId: string; reason?: string };
 
 type WorkerMessage =
@@ -123,7 +125,7 @@ export type SupervisedMutationWorker = Readonly<{
     executor: RootMutationExecutor;
     ready: Promise<void>;
     completion: Promise<void>;
-    start(): void;
+    start(boundOperationId?: string): void;
     requestCancellation(reason?: string): boolean;
 }>;
 
@@ -553,12 +555,19 @@ export function spawnSupervisedMutationWorker(
         executor,
         ready,
         completion,
-        start: () => {
+        start: (boundOperationId?: string) => {
             if (!readyResolved) throw new Error("Mutation worker containment must be ready before start().");
             if (started) throw new Error("Mutation worker has already been started.");
             if (cancelRequested) throw new MutationWorkerCancelledError(options.operationId, cancelReason);
+            if (boundOperationId !== undefined && !boundOperationId.trim()) {
+                throw new Error("Mutation worker boundOperationId must be non-empty.");
+            }
             started = true;
-            safeSend({ type: "mutation_worker_start", operationId: options.operationId });
+            safeSend({
+                type: "mutation_worker_start",
+                operationId: options.operationId,
+                ...(boundOperationId !== undefined ? { boundOperationId } : {}),
+            });
             armNoProgressTimer();
         },
         requestCancellation,
@@ -569,6 +578,8 @@ export type MutationWorkerRuntime = Readonly<{
     operationId: string;
     signal: AbortSignal;
     started: Promise<void>;
+    /** The RootMutationExecution id to bind; valid once `started` resolves. */
+    boundOperationId(): string;
     heartbeat(): void;
     progress(input?: { phase?: MutationOperationPhase; progress?: number; memoryBudget?: IndexingMemoryStatus }): void;
     complete(result?: Readonly<Record<string, unknown>>): void;
@@ -611,6 +622,7 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
     let terminal = false;
     let selfClosing = false;
     let startedSettled = false;
+    let boundOperationId = operationId;
     let resolveStarted!: () => void;
     let rejectStarted!: (error: unknown) => void;
     const started = new Promise<void>((resolve, reject) => {
@@ -650,6 +662,9 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
         if (record.type === "mutation_worker_start") {
             if (!startedSettled) {
                 startedSettled = true;
+                if (typeof record.boundOperationId === "string" && record.boundOperationId.trim()) {
+                    boundOperationId = record.boundOperationId;
+                }
                 resolveStarted();
             }
             return;
@@ -677,6 +692,7 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
         operationId,
         signal: controller.signal,
         started,
+        boundOperationId: () => boundOperationId,
         heartbeat: () => {
             if (!terminal) workerSend({ type: "mutation_worker_heartbeat", operationId });
         },

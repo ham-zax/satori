@@ -348,13 +348,16 @@ export class IndexGenerationWorkflow {
 
     constructor(private readonly ports: IndexGenerationWorkflowPorts) {}
 
-    private retainNavigationDeltaState(state: CachedNavigationDeltaState | undefined): void {
+    private retainNavigationDeltaState(
+        state: CachedNavigationDeltaState | undefined,
+        releaseWhenIdle = true,
+    ): void {
         this.navigationDeltaState = state;
         if (this.navigationDeltaStateReleaseTimer) {
             clearTimeout(this.navigationDeltaStateReleaseTimer);
             this.navigationDeltaStateReleaseTimer = undefined;
         }
-        if (!state) return;
+        if (!state || !releaseWhenIdle) return;
         this.navigationDeltaStateReleaseTimer = setTimeout(() => {
             if (this.navigationDeltaState === state) this.retainNavigationDeltaState(undefined);
         }, NAVIGATION_DELTA_STATE_IDLE_MS);
@@ -1917,6 +1920,33 @@ export class IndexGenerationWorkflow {
         return results.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     }
 
+    private readSemanticSources(codebasePath: string, files: readonly SymbolRegistryManifestFile[]): SemanticSourceFile[] {
+        const sourceFiles: SemanticSourceFile[] = [];
+        for (const f of files) {
+            const fullPath = path.resolve(codebasePath, f.path);
+            let sourceBytes: Buffer;
+            try {
+                // The delta rebuild reads every file of an affected language.
+                const fd = openRegularFileInsideRootSync(fullPath, codebasePath);
+                try {
+                    sourceBytes = fs.readFileSync(fd);
+                } finally {
+                    fs.closeSync(fd);
+                }
+            } catch {
+                throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
+            }
+            // Manifest hashes cover raw bytes, including non-UTF-8 input.
+            const sourceHash = crypto.createHash('sha256').update(sourceBytes).digest('hex');
+            const source = sourceBytes.toString('utf8');
+            if (f.hash && f.hash !== sourceHash) {
+                throw new Error(`Semantic source hash mismatch for ${f.path}: expected ${f.hash}, got ${sourceHash}`);
+            }
+            sourceFiles.push({ path: f.path, source, sourceHash });
+        }
+        return sourceFiles;
+    }
+
     private async rebuildNavigationArtifactsForSyncDelta(
         codebasePath: string,
         existingRegistry: SymbolRegistry,
@@ -2040,33 +2070,9 @@ export class IndexGenerationWorkflow {
                 }
 
                 for (const lang of affectedSemanticLanguages) {
-                    const sourceFiles: SemanticSourceFile[] = [];
                     const langFiles = mergedManifestFiles.filter((f) => f.language === lang);
                     const readStartedAt = performance.now();
-                    for (const f of langFiles) {
-                        const fullPath = path.resolve(codebasePath, f.path);
-                        let sourceBytes: Buffer;
-                        try {
-                            // Synchronous root-bound read: the delta rebuild reads every
-                            // file of an affected language, and the promise form costs
-                            // several thread-pool round trips per file.
-                            const fd = openRegularFileInsideRootSync(fullPath, codebasePath);
-                            try {
-                                sourceBytes = fs.readFileSync(fd);
-                            } finally {
-                                fs.closeSync(fd);
-                            }
-                        } catch {
-                            throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
-                        }
-                        // Manifest hashes cover raw bytes: hash before decoding so non-UTF-8 sources match.
-                        const sourceHash = crypto.createHash('sha256').update(sourceBytes).digest('hex');
-                        const source = sourceBytes.toString('utf8');
-                        if (f.hash && f.hash !== sourceHash) {
-                            throw new Error(`Semantic source hash mismatch for ${f.path}: expected ${f.hash}, got ${sourceHash}`);
-                        }
-                        sourceFiles.push({ path: f.path, source, sourceHash });
-                    }
+                    const sourceFiles = this.readSemanticSources(codebasePath, langFiles);
                     perfTrace('navigation.semantic.read', performance.now() - readStartedAt, { language: lang, files: langFiles.length });
                     const auxiliaryFiles = await perfSpan('navigation.semantic.auxiliaries', () => this.collectSemanticAuxiliariesForLanguage(
                         codebasePath,
@@ -2266,6 +2272,68 @@ export class IndexGenerationWorkflow {
         const policy = await this.ports.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, true, true);
         perfTrace('index.policy.resolve_observed', performance.now() - policyStartedAt, { profile: policy.profile });
         return policy;
+    }
+
+    /**
+     * Loads a Publication's registry and relationships into the warm delta
+     * state before a sync needs them (the pre-started sync worker). The state
+     * is retained only when the navigation observation token is unchanged
+     * across the reads; `resolveReusableNavigationDeltaState` checks it again
+     * at use, so a stale preload falls back to the sidecar reads. The
+     * preload has no idle release: its process exists only to run one sync.
+     */
+    async prewarmNavigationDeltaState(
+        canonicalRoot: string,
+        publicationId: string,
+        navigationRoot: string,
+        preparationSignal?: AbortSignal,
+    ): Promise<boolean> {
+        const tokenBefore = this.ports.resolveNavigationObservationToken(canonicalRoot, publicationId);
+        if (!tokenBefore) return false;
+        const registryRead = await readSymbolRegistrySidecar({
+            normalizedRootPath: canonicalRoot,
+            publicationId,
+            navigationRoot,
+        });
+        if (registryRead.status !== 'ok') return false;
+        const relationshipRead = await readRelationshipSidecar({
+            normalizedRootPath: canonicalRoot,
+            publicationId,
+            navigationRoot,
+        });
+        if (relationshipRead.status !== 'ok') return false;
+        const analyzer = this.ports.semanticAnalyzer;
+        if (analyzer?.prepareSourceTrees && !preparationSignal?.aborted) {
+            const files = registryRead.registry.manifest.files;
+            const languages = new Set(files.map(file => file.language).filter(language => analyzer.supportsLanguage(language)));
+            if (languages.size === 1) {
+                const language = [...languages][0];
+                try {
+                    const sourceFiles = this.readSemanticSources(canonicalRoot, files.filter(file => file.language === language));
+                    await analyzer.prepareSourceTrees({ language, sourceFiles, auxiliaryFiles: [] }, preparationSignal);
+                } catch (error) {
+                    if (!preparationSignal?.aborted) {
+                        console.warn(`[Context] Semantic source preparation failed for '${language}': ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+            }
+        }
+        if (this.ports.resolveNavigationObservationToken(canonicalRoot, publicationId) !== tokenBefore) {
+            return false;
+        }
+        this.retainNavigationDeltaState({
+            canonicalRoot,
+            publicationId,
+            navigationRoot,
+            symbolRegistryManifestHash: registryRead.manifestHash,
+            relationshipManifestHash: relationshipRead.manifestHash,
+            navigationObservationToken: tokenBefore,
+            registry: registryRead.registry,
+            records: relationshipRead.records,
+            analysisByFile: relationshipRead.analysisByFile,
+            providerCoverage: relationshipRead.manifest.providerCoverage,
+        }, false);
+        return true;
     }
 
     resolveReusableNavigationDeltaState(

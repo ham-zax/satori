@@ -107,6 +107,16 @@ export class WasmSemanticSession {
         }
     }
 
+    async prepare(): Promise<void> {
+        this.assertNotDestroyed();
+        const rc = await this.native._satori_semantic_prepare(this.handle);
+        if (rc !== 0) {
+            const errPtr = this.native._satori_semantic_last_error(this.handle);
+            const errMsg = this.native.UTF8ToString(errPtr) || `prepare failed with code ${rc}`;
+            throw new Error(errMsg);
+        }
+    }
+
     async resolve(): Promise<RawSemanticResult[]> {
         this.assertNotDestroyed();
         const rc = await this.native._satori_semantic_resolve(this.handle);

@@ -98,6 +98,7 @@ export const EXPORTED_FUNCTIONS = [
     '_satori_semantic_create',
     '_satori_semantic_add_auxiliary',
     '_satori_semantic_add_source',
+    '_satori_semantic_prepare',
     '_satori_semantic_resolve',
     '_satori_semantic_destroy',
     '_satori_semantic_free',

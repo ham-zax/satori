@@ -165,3 +165,56 @@ process.on('message', (message) => {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('start binds the requested operation id in the worker runtime', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-bound-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const runtimePath = fileURLToPath(new URL('./mutation-worker-supervisor.ts', import.meta.url));
+    fs.writeFileSync(workerPath, `
+const { pathToFileURL } = require('node:url');
+import(pathToFileURL(${JSON.stringify(runtimePath)}).href).then(({ createMutationWorkerRuntime }) => {
+    const runtime = createMutationWorkerRuntime();
+    runtime.started.then(() => runtime.complete({ bound: runtime.boundOperationId() }));
+});
+`);
+    try {
+        for (const bound of ['bound-op', undefined]) {
+            let result: Readonly<Record<string, unknown>> | undefined;
+            const worker = spawnSupervisedMutationWorker({
+                operationId: 'spawn-op', workerPath, onCompleted: (value) => { result = value; },
+            });
+            await worker.ready;
+            assert.throws(() => worker.start('  '), /boundOperationId/);
+            worker.start(bound);
+            await withDeadline(worker.completion, 5_000);
+            assert.deepEqual(result, { bound: bound ?? 'spawn-op' });
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('start omits the bound operation id when none is supplied', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-message-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    fs.writeFileSync(workerPath, `
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', message => {
+    if (message.type === 'mutation_worker_start') {
+        process.send({ type: 'mutation_worker_completed', operationId: message.operationId, result: { message } });
+        process.disconnect();
+    }
+});
+`);
+    try {
+        let result: Readonly<Record<string, unknown>> | undefined;
+        const worker = spawnSupervisedMutationWorker({ operationId: 'spawn-op', workerPath,
+            onCompleted: value => { result = value; } });
+        await worker.ready;
+        worker.start();
+        await withDeadline(worker.completion, 5_000);
+        assert.deepEqual(result, { message: { type: 'mutation_worker_start', operationId: 'spawn-op' } });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

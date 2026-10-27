@@ -44,7 +44,7 @@ import {
 } from "../core/session-workspace-policy.js";
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 import { LateOnReranker } from "./lateon-reranker.js";
-import { startSupervisedSyncWorker } from "./supervised-sync-worker.js";
+import { startSupervisedSyncWorker, SyncWorkerStandby } from "./supervised-sync-worker.js";
 import { VoyageProjectionReranker } from "./voyage-reranker.js";
 import type { LateOnRuntimeProfileId } from "./lateon-reranker-protocol.js";
 
@@ -283,6 +283,13 @@ export class ProviderRuntime {
     private readonly readFileMaxBytes: number;
     private readonly watchSyncEnabled: boolean;
     private readonly startSyncLifecycle: boolean;
+    // Pre-started sync worker for the most recently active root (host only).
+    private readonly syncWorkerStandby = new SyncWorkerStandby();
+
+    /** The host's sync worker standby, for sync paths outside this runtime's SyncManager. */
+    public get externalSyncWorkerStandby(): Pick<SyncWorkerStandby, "take"> {
+        return this.syncWorkerStandby;
+    }
     private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
     private readonly mutationRuntime: RootMutationRuntime;
     private readonly indexingResourcePlanner?: ContextConfig['indexingResourcePlanner'];
@@ -472,8 +479,10 @@ export class ProviderRuntime {
                                 codebasePath,
                                 execution,
                                 mutationRuntime: this.mutationRuntime,
+                                standby: this.syncWorkerStandby,
                             })
                         ).completion,
+                        syncWorkerWarmup: this.syncWorkerStandby,
                     }
                     : {}),
             });
@@ -752,6 +761,7 @@ export class ProviderRuntime {
             toolContext.toolHandlers.releaseSearchContinuationOwnership();
             await toolContext.syncManager.stopAndDrainLifecycle();
         }));
+        await this.syncWorkerStandby.close();
         await Promise.all([
             Promise.all(this.activeContexts.map(async (toolContext) => {
                 await toolContext.context.getVectorStore().close?.();

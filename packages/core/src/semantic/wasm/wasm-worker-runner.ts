@@ -13,6 +13,7 @@ const analyzer = new WasmSemanticProjectAnalyzer();
 export type WasmWorkerRequest = {
     id: number;
     input: SemanticProjectInput;
+    prepareOnly?: true;
 };
 
 export type WasmWorkerResponse =
@@ -36,6 +37,12 @@ export type WasmWorkerResponse =
 if (parentPort) {
     parentPort.on('message', async (message: WasmWorkerRequest) => {
         try {
+            if (message.prepareOnly) {
+                await analyzer.prepareSourceTrees(message.input);
+                parentPort!.postMessage({ id: message.id, success: true,
+                    evidence: { language: message.input.language, occurrencesEntries: [] } } satisfies WasmWorkerResponse);
+                return;
+            }
             const evidence = await analyzer.analyze(message.input);
             const occurrencesEntries: Array<[string, SemanticResolvedOccurrence[]]> = [];
             for (const [file, occurrences] of evidence.occurrencesByFile.entries()) {

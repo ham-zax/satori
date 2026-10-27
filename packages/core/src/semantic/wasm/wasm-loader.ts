@@ -17,6 +17,7 @@ export interface NativeSemanticEngine {
     _satori_semantic_create(langPtr: number, langLen: number, outHandlePtr: number): number;
     _satori_semantic_add_source(handle: number, pathPtr: number, pathLen: number, srcPtr: number, srcLen: number): number;
     _satori_semantic_add_auxiliary(handle: number, rolePtr: number, roleLen: number, pathPtr: number, pathLen: number, srcPtr: number, srcLen: number): number;
+    _satori_semantic_prepare(handle: number): Promise<number> | number;
     _satori_semantic_resolve(handle: number): Promise<number> | number;
     _satori_semantic_result_count(handle: number): number;
     _satori_semantic_results(handle: number): number;

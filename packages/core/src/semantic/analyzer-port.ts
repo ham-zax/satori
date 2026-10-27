@@ -10,6 +10,7 @@ export interface SemanticProjectAnalyzer {
      * skip reading the sources. Undefined means "unsure": call analyze().
      */
     provableLimitFailure?(language: string, sourceFileBytes: readonly number[]): string | undefined;
+    prepareSourceTrees?(input: SemanticProjectInput, signal?: AbortSignal): Promise<void>;
     analyze(input: SemanticProjectInput): Promise<SemanticProjectEvidence>;
     dispose?(): Promise<void>;
 }

@@ -27,6 +27,7 @@ import {
 import {
     SourceObservationState,
 } from "./source-observation-state.js";
+import type { SyncWorkerStandby } from "../server/supervised-sync-worker.js";
 
 /** Completes one externally executed sync against the watcher state captured before it started. */
 export interface ExternalSyncFlight {
@@ -51,6 +52,17 @@ interface SyncManagerOptions {
      * Omitted, the sync runs in-process.
      */
     runSyncInWorker?: (codebasePath: string, execution: RootMutationExecution) => Promise<SyncWorkerResult>;
+    /**
+     * Pre-starts the next sync worker for a root, so its bootstrap and
+     * navigation load happen before the sync is requested. Advisory: the
+     * sync works the same without it.
+     */
+    syncWorkerWarmup?: Pick<SyncWorkerStandby, "prepare" | "release" | "take">;
+    /**
+     * Standby for a manager that does not warm workers itself (the session's
+     * provider-free manager); defaults to `syncWorkerWarmup`.
+     */
+    syncWorkerStandby?: Pick<SyncWorkerStandby, "take">;
 }
 
 /** Outcome a sync worker reports for the sync it ran. */
@@ -426,6 +438,7 @@ export class SyncManager {
     private watcherModeStarted = false;
     private watchEnabled: boolean;
     private watchedCodebases: Set<string> = new Set();
+    private readonly unwatchingCodebases = new Map<string, number>();
     private watchers: Map<string, FSWatcher> = new Map();
     // A root has one registration owner until its async setup has settled.
     private pendingWatcherRegistrations: Map<string, WatcherRegistrationFlight> = new Map();
@@ -447,6 +460,9 @@ export class SyncManager {
     private readonly mutationRuntime: RootMutationRuntime;
     private readonly onLifecycleActivityChanged?: () => void;
     private readonly runSyncInWorker?: SyncManagerOptions['runSyncInWorker'];
+    private readonly syncWorkerWarmup?: SyncManagerOptions['syncWorkerWarmup'];
+    /** The pre-started sync worker, for sync paths that start a worker outside this manager. */
+    public readonly syncWorkerStandby?: Pick<SyncWorkerStandby, "take">;
     private readonly preparedReadObservationSource?: SyncManagerOptions['preparedReadObservationSource'];
     private readonly externalSyncFlightSource?: SyncManagerOptions['externalSyncFlightSource'];
 
@@ -458,6 +474,8 @@ export class SyncManager {
         this.mutationRuntime = options.mutationRuntime;
         this.onLifecycleActivityChanged = options.onLifecycleActivityChanged;
         this.runSyncInWorker = options.runSyncInWorker;
+        this.syncWorkerWarmup = options.syncWorkerWarmup;
+        this.syncWorkerStandby = options.syncWorkerStandby ?? options.syncWorkerWarmup;
         this.preparedReadObservationSource = options.preparedReadObservationSource;
         this.externalSyncFlightSource = options.externalSyncFlightSource;
         this.sourceObservationState = new SourceObservationState({
@@ -1467,6 +1485,8 @@ export class SyncManager {
                 this.lastSyncTimes.set(root, this.now());
                 await this.recordCommittedSync(root, true, flightEpoch);
                 this.bumpFreshnessEpoch(root);
+                // The external sync took the standby: warm the next one, as syncInWorker does.
+                if (this.watchedCodebases.has(root)) this.syncWorkerWarmup?.prepare(root);
                 await delegated?.complete();
             },
         };
@@ -1867,6 +1887,7 @@ export class SyncManager {
         }
 
         this.lastSyncTimes.set(codebasePath, this.now());
+        if (this.watchedCodebases.has(codebasePath)) this.syncWorkerWarmup?.prepare(codebasePath);
         const stats: SyncStats = {
             added: result.stats?.added ?? 0,
             removed: result.stats?.removed ?? 0,
@@ -2218,23 +2239,31 @@ export class SyncManager {
 
     public async unwatchCodebase(codebasePath: string): Promise<void> {
         codebasePath = this.canonicalWatcherRoot(codebasePath);
-        this.watchedCodebases.delete(codebasePath);
-        this.backgroundSyncRetryAfter.delete(codebasePath);
-        if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
-            this.scheduleBackgroundSync(this.pendingWatcherSyncDelay() ?? BACKGROUND_SYNC_INTERVAL_MS);
+        this.unwatchingCodebases.set(codebasePath, (this.unwatchingCodebases.get(codebasePath) ?? 0) + 1);
+        try {
+            this.watchedCodebases.delete(codebasePath);
+            this.backgroundSyncRetryAfter.delete(codebasePath);
+            if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
+                this.scheduleBackgroundSync(this.pendingWatcherSyncDelay() ?? BACKGROUND_SYNC_INTERVAL_MS);
+            }
+            await this.unregisterCodebaseWatcher(codebasePath);
+            await this.syncWorkerWarmup?.release(codebasePath);
+            this.lastSyncTimes.delete(codebasePath);
+            this.ignoreRulesVersions.delete(codebasePath);
+            this.freshnessEpochs.delete(codebasePath);
+            this.watcherObservations.delete(codebasePath);
+            this.sourceObservationState.clearCodebase(codebasePath);
+            this.watcherCandidatePolicies.delete(codebasePath);
+            this.watcherGenerations.delete(codebasePath);
+            // activeIgnoreReconciles is owned by runIgnoreReconcile, which removes its
+            // entry when the flight settles; lifecycle drain must still see it here.
+            this.watcherLifecycleStates.delete(codebasePath);
+            this.watcherErrorCodes.delete(codebasePath);
+        } finally {
+            const remaining = this.unwatchingCodebases.get(codebasePath)! - 1;
+            if (remaining === 0) this.unwatchingCodebases.delete(codebasePath);
+            else this.unwatchingCodebases.set(codebasePath, remaining);
         }
-        await this.unregisterCodebaseWatcher(codebasePath);
-        this.lastSyncTimes.delete(codebasePath);
-        this.ignoreRulesVersions.delete(codebasePath);
-        this.freshnessEpochs.delete(codebasePath);
-        this.watcherObservations.delete(codebasePath);
-        this.sourceObservationState.clearCodebase(codebasePath);
-        this.watcherCandidatePolicies.delete(codebasePath);
-        this.watcherGenerations.delete(codebasePath);
-        // activeIgnoreReconciles is owned by runIgnoreReconcile, which removes its
-        // entry when the flight settles; lifecycle drain must still see it here.
-        this.watcherLifecycleStates.delete(codebasePath);
-        this.watcherErrorCodes.delete(codebasePath);
     }
 
     private isCurrentWatcherRegistration(
@@ -2329,6 +2358,7 @@ export class SyncManager {
             if (this.recordWatcherEvent(codebasePath, observationReason) === null) {
                 return;
             }
+            this.syncWorkerWarmup?.prepare(codebasePath);
         };
 
         this.watcherErrorCodes.delete(codebasePath);
@@ -2339,6 +2369,7 @@ export class SyncManager {
             .on('ready', () => {
                 if (this.watchers.get(codebasePath) === watcher) {
                     this.setWatcherCoverage(codebasePath, 'ready');
+                    this.syncWorkerWarmup?.prepare(codebasePath);
                 }
             })
             .on('add', (watchPath) => onPathChange(watchPath, 'source_changed'))
@@ -2472,6 +2503,13 @@ export class SyncManager {
 
     public async stopWatcherMode(): Promise<void> {
         this.watcherModeStarted = false;
+        const standbyRoots = new Set([
+            ...this.watchedCodebases,
+            ...this.unwatchingCodebases.keys(),
+            ...this.watchers.keys(),
+            ...this.pendingWatcherRegistrations.keys(),
+            ...this.watcherCloseFlights.keys(),
+        ]);
         if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
             this.backgroundPendingFirstEventAt = null;
             this.scheduleBackgroundSync(BACKGROUND_SYNC_INTERVAL_MS);
@@ -2505,6 +2543,7 @@ export class SyncManager {
             ...closing,
             ...this.watcherCloseFlights.values(),
         ]);
+        await Promise.all([...standbyRoots].map((codebasePath) => this.syncWorkerWarmup?.release(codebasePath)));
         this.watcherLifecycleStates.clear();
     }
 }

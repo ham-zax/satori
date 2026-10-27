@@ -69,6 +69,24 @@ function fakeNative(options: {
     return { native: native as NativeSemanticEngine, allocations, freed, calls, payloads, destroyed };
 }
 
+test('WasmSemanticSession prepare checks native errors and session lifetime', async () => {
+    const fake = fakeNative({ message: 'prepare failed' });
+    let result = 0;
+    let calls = 0;
+    fake.native._satori_semantic_prepare = (handle) => {
+        assert.equal(handle, 42);
+        calls++;
+        return result;
+    };
+    const session = new WasmSemanticSession(fake.native, 42);
+    await session.prepare();
+    result = 17;
+    await assert.rejects(session.prepare(), { message: 'prepare failed' });
+    session.destroy();
+    await assert.rejects(session.prepare(), { message: 'Semantic session 42 is already destroyed' });
+    assert.equal(calls, 2);
+});
+
 for (const operation of ['addSource', 'addAuxiliary'] as const) {
     const inputs = operation === 'addSource' ? ['src/é.go', 'package π'] : ['manifest', 'src/é.go', 'package π'];
     const invoke = (session: WasmSemanticSession) => operation === 'addSource'

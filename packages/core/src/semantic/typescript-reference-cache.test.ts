@@ -168,6 +168,7 @@ test('reference cache treats a malformed saved document as empty', () => {
         const headers = [
             'not json at all',
             '{"format":2,"witness":"x","entries":[',
+            JSON.stringify({ ...JSON.parse(fs.readFileSync(saved.file, 'utf8')), format: REFERENCE_DECLARATION_FORMAT - 1 }),
             JSON.stringify({ format: REFERENCE_DECLARATION_FORMAT + 1, witness: document.witness, entries: [] }),
             JSON.stringify({ format: 1, witness: document.witness, entries: [] }),
             JSON.stringify({ format: REFERENCE_DECLARATION_FORMAT, witness: 'foreign-root', entries: [] }),
@@ -462,6 +463,48 @@ test('reference cache charges a JSON program input to the source budget', () => 
         );
         cache.set(config, 'metadata', state, metadata);
         assert.deepEqual(cache.get(config, 'metadata'), state, 'package metadata keeps the transport budget');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('observations preserve probe, realpath and listing answers from before capture', () => {
+    const root = tempRoot();
+    try {
+        const missing = path.join(root, 'new.ts');
+        const link = path.join(root, 'link');
+        write(root, 'old.ts', 'export {};');
+        fs.symlinkSync(path.join(root, 'old.ts'), link);
+        const recorder = new TypeScriptFsObservationRecorder();
+        recorder.recordPath(missing);
+        recorder.recordRealpath(link);
+        recorder.recordListing(root);
+        write(root, 'new.ts', 'export {};');
+        fs.unlinkSync(link);
+        fs.symlinkSync(missing, link);
+        const observation = recorder.capture();
+        assert.ok(observation);
+        assert.deepEqual(observation.probes, [[missing, 'missing']]);
+        assert.deepEqual(observation.realpaths, [[link, path.join(root, 'old.ts')]]);
+        assert.deepEqual(observation.listings, [[root, ['link', 'old.ts']]]);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('conflicting reads and probes cannot produce a reusable observation', () => {
+    const root = tempRoot();
+    try {
+        const file = path.join(root, 'input.ts');
+        const reads = new TypeScriptFsObservationRecorder();
+        reads.recordRead(file, 'export const value = 1;');
+        reads.recordRead(file, 'export const value = 2;');
+        assert.equal(reads.capture(), undefined, 'different bytes in one computation cannot prove a stable input');
+        const probes = new TypeScriptFsObservationRecorder();
+        probes.recordPath(file);
+        write(root, 'input.ts', 'export {};');
+        probes.recordPath(file);
+        assert.equal(probes.capture(), undefined, 'conflicting path answers cannot prove a stable input');
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

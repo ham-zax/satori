@@ -10,6 +10,7 @@ import * as ts from './typescript-api';
 import { TypeScriptProgramSession } from './typescript-program-session';
 import { TypeScriptSourceBudgetTracker, loadTypeScriptConfiguredProject } from './typescript-configured-project';
 import { TypeScriptReferenceDeclarationCache } from './typescript-reference-cache';
+import { TypeScriptFsObservationRecorder, verifyTypeScriptFsObservation } from './typescript-fs-observation';
 import { referenceAuthorityReady, TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
 import { buildSymbolRegistry, SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols';
 import { analyzeTypeScriptProgram } from './typescript-compiler-provider';
@@ -39,6 +40,36 @@ function registry(root: string, files: string[]) {
         })),
     }, symbols: [] });
 }
+
+test('recording filesystem answers preserves native source discovery and declaration output', t => {
+    const root = fixture(t);
+    const main = write(root, 'main.ts', 'export { value } from "./linked";\nexport { folder } from "./folder";\nexport { absent } from "./missing";\n');
+    const target = write(root, 'target.ts', 'export const value = 1;\n');
+    write(root, 'folder/index.ts', 'export const folder = 2;\n');
+    fs.symlinkSync(target, path.join(root, 'linked.ts'));
+    const config = write(root, 'tsconfig.json', JSON.stringify({
+        compilerOptions: { module: 'commonjs', noLib: true, types: [], declaration: true, outDir: 'dist' },
+        files: ['main.ts'],
+    }));
+    const options = loadTypeScriptConfiguredProject(config).options;
+    const budget = { maxFileBytes: 4096, maxProjectBytes: 64 * 1024 };
+    const observation = new TypeScriptFsObservationRecorder();
+    const compute = (recorder?: TypeScriptFsObservationRecorder) => {
+        const session = new TypeScriptProgramSession(root, [main], options, new TypeScriptSourceBudgetTracker(budget), undefined, recorder);
+        try {
+            const program = session.getProgram();
+            const outputs = [...program.getDeclarationEmit([main]).outputFiles].map(([file, output]) => [file, output.text]);
+            assert.equal(session.getResourceLimitFailure(), undefined);
+            return { sources: [...program.getSourceFileNames()].sort(), outputs };
+        } finally {
+            session.dispose();
+        }
+    };
+    assert.deepEqual(compute(observation), compute(), 'recorded answers must preserve native resolution and emitted declarations');
+    const captured = observation.capture();
+    assert.ok(captured, 'ordinary paths remain eligible for reuse');
+    assert.ok(verifyTypeScriptFsObservation(captured, budget));
+});
 
 test('warm snapshots charge only active JSON and TypeScript sources, matching cold snapshots', t => {
     const root = fixture(t);

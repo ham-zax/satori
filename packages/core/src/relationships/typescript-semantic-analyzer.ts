@@ -5,7 +5,7 @@ import path from 'node:path';
 import * as ts from '../semantic/typescript-api';
 import { TypeScriptProgramSession } from '../semantic/typescript-program-session';
 import { TypeScriptReferenceDeclarationCache, REFERENCE_DECLARATION_FORMAT, DEFAULT_REFERENCE_CACHE_ENTRIES, DEFAULT_REFERENCE_CACHE_BYTES, type TypeScriptReferenceDeclarationState } from '../semantic/typescript-reference-cache';
-import { TypeScriptFsObservationRecorder } from '../semantic/typescript-fs-observation';
+import { TypeScriptFsObservationRecorder, verifyTypeScriptFsObservation } from '../semantic/typescript-fs-observation';
 
 import {
     TYPESCRIPT_COMPILER_PROVIDER_ID,
@@ -354,7 +354,12 @@ function referenceDeclarationState(
         resourceFailure = session.getResourceLimitFailure();
         if (resourceFailure) return { outputs: [], references, unproven: true, resourceFailure };
         const state = { outputs, references, unproven: false };
-        cache?.set(project.configPath, fingerprint, state, observation.capture());
+        const captured = observation.capture();
+        // Inputs may change while the compiler runs. Never retain a successful
+        // computation unless its recorded answers still match the filesystem.
+        if (captured && verifyTypeScriptFsObservation(captured, resourceBudget)) {
+            cache?.set(project.configPath, fingerprint, state, captured);
+        }
         return state;
     } finally { session.dispose(); }
 }

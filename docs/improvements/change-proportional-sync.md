@@ -420,6 +420,26 @@ session now records which budget admitted each read, and the verifier replays
 both charges. The format moved to 2, so documents from the first version are
 ignored.
 
+Capture-race repair, 28 October 2026. Path probes and realpaths now record the
+answers returned to the compiler, rather than checking those paths after
+compilation. Conflicting reads or repeated filesystem answers invalidate the
+computation. Before retaining a proof, the analyzer checks its recorded inputs
+against current files. Native stat and directory-listing callbacks skip caching
+because their complete answers are not recorded. Ordinary callbacks preserve
+the native path when observation is disabled.
+
+The cache format is now 3. Earlier proofs can contain observations from the
+capture race, so the loader ignores them without deleting saved files.
+Deterministic tests cover a dependency created before capture and conflicting
+observations. The local timings below precede this repair. End-to-end edit-sync
+measurement remains open.
+
+The cross-project sync tests now separate serial and worker modes into four
+files. Each mode retains all six edits and the full publication comparison.
+The reporter still enforces its 90-second budget per file.
+Repair checks pass: 38 focused tests, all four sync-equivalence files under the
+normal reporter budget, and `pnpm run check`.
+
 Local discovery seam, `getSourceControlFiles` on a composite fixture (library
 plus consumer), five samples per case, analyzer disposed between samples, HEAD
 `368bbc27` with 14 dirty entries. Two runs after the review repair:

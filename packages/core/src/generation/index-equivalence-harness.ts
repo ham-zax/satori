@@ -68,6 +68,9 @@ const SETTINGS: readonly ToggleSetting[] = [
     { env: { SATORI_ANALYSIS_WORKERS: '2' } },
 ];
 
+/** Independent sync modes can run in separate files under the per-file budget. */
+export const SYNC_EQUIVALENCE_SETTINGS = { baseline: BASELINE, workers: SETTINGS[SETTINGS.length - 1] };
+
 async function withSetting<T>(setting: ToggleSetting, run: () => Promise<T>): Promise<T> {
     if (!setting.serialInProcess) return withEnv(setting.env, run);
     const pipeline = IndexingPipeline.prototype;
@@ -414,11 +417,12 @@ export async function assertSyncMatchesFullIndex(
     edits: ReadonlyArray<readonly [string, Edit]>,
     cold: boolean,
     prewarm = false,
+    settings: readonly ToggleSetting[] = Object.values(SYNC_EQUIVALENCE_SETTINGS),
 ): Promise<void> {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-equivalence-sync-${name}-`));
     const root = path.join(tempRoot, 'repo');
     try {
-        for (const setting of [BASELINE, SETTINGS[SETTINGS.length - 1]]) {
+        for (const setting of settings) {
             writeTree(root, initial);
             const databasePath = fs.mkdtempSync(path.join(tempRoot, 'vectors-'));
             const open = <T>(run: (context: Context, database: LanceDbVectorDatabase) => Promise<T>) => (

@@ -81,31 +81,58 @@ function updateReadDigest(hash: Hash, fileName: string, contentDigest: string): 
 }
 
 /**
- * Collects the filesystem answers of one computation. The compiler still
- * performs every call itself: this only records what it asked for.
+ * Collects filesystem answers when callbacks return them. Capture never
+ * replaces those answers with filesystem state from after the computation.
  */
 export class TypeScriptFsObservationRecorder {
-    private readonly probes = new Set<string>();
-    private readonly realpaths = new Set<string>();
+    private readonly probes = new Map<string, TypeScriptFsObservationKind>();
+    private readonly realpaths = new Map<string, string>();
     private readonly readDigests = new Map<string, string>();
     private readonly sourceReads = new Set<string>();
-    private readonly listings = new Set<string>();
+    private readonly listings = new Map<string, readonly string[]>();
+    private inconsistent = false;
 
-    recordPath(fileName: string): void { this.probes.add(fileName); }
-    recordRealpath(fileName: string): void { this.realpaths.add(fileName); }
+    /** Returns the same path kind that the callback must use for its answer. */
+    recordPath(fileName: string): TypeScriptFsObservationKind {
+        const kind = pathKind(fileName);
+        const previous = this.probes.get(fileName);
+        if (previous !== undefined && previous !== kind) this.invalidate();
+        this.probes.set(fileName, kind);
+        return kind;
+    }
+
+    recordRealpath(fileName: string): string {
+        const target = realpathTarget(fileName);
+        const previous = this.realpaths.get(fileName);
+        if (!target || previous !== undefined && previous !== target) this.invalidate();
+        this.realpaths.set(fileName, target);
+        return target;
+    }
+
+    /** Native answers that cannot be observed must never create a reusable proof. */
+    invalidate(): void { this.inconsistent = true; }
 
     /** Records the exact bytes the compiler consumed for one read. */
     recordRead(fileName: string, content: string | Buffer): void {
-        this.readDigests.set(fileName, createHash('sha256').update(content).digest('hex'));
+        const digest = createHash('sha256').update(content).digest('hex');
+        const previous = this.readDigests.get(fileName);
+        if (previous !== undefined && previous !== digest) this.invalidate();
+        this.readDigests.set(fileName, digest);
     }
 
     /** Marks a read that the source budget admitted, as opposed to metadata. */
     recordSourceRead(fileName: string): void { this.sourceReads.add(fileName); }
 
-    recordListing(directoryName: string): void { this.listings.add(directoryName); }
+    recordListing(directoryName: string): void {
+        const names = directoryNames(directoryName);
+        const previous = this.listings.get(directoryName);
+        if (previous && (previous.length !== names.length || previous.some((name, index) => name !== names[index]))) this.invalidate();
+        this.listings.set(directoryName, names);
+    }
 
-    /** Returns `undefined` when the computation touched more paths than a witness may keep. */
+    /** Refuses inconsistent computations and observations beyond the witness bounds. */
     capture(): TypeScriptFsObservation | undefined {
+        if (this.inconsistent) return undefined;
         if (this.probes.size + this.realpaths.size + this.readDigests.size > MAX_TYPESCRIPT_FS_OBSERVATION_PATHS) return undefined;
         if (this.listings.size > MAX_TYPESCRIPT_FS_OBSERVATION_LISTINGS) return undefined;
         const digest = createHash('sha256');
@@ -114,11 +141,11 @@ export class TypeScriptFsObservationRecorder {
             return [fileName, this.sourceReads.has(fileName) ? 'source' : 'metadata'] as const;
         });
         return {
-            probes: [...this.probes].sort().map(file => [file, pathKind(file)] as const),
-            realpaths: [...this.realpaths].sort().map(file => [file, realpathTarget(file)] as const),
+            probes: [...this.probes].sort(([left], [right]) => left.localeCompare(right)),
+            realpaths: [...this.realpaths].sort(([left], [right]) => left.localeCompare(right)),
             reads,
             readDigest: digest.digest('hex'),
-            listings: [...this.listings].sort().map(directory => [directory, directoryNames(directory)] as const),
+            listings: [...this.listings].sort(([left], [right]) => left.localeCompare(right)),
         };
     }
 }

@@ -11,6 +11,7 @@ import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols/contracts';
 import { buildSymbolRegistry } from '../symbols/registry';
 import { mergeTypeScriptShardEvidence } from './typescript-resolution-shards';
 import { TypeScriptSemanticProjectAnalyzer, type TypeScriptSemanticResourceBudget } from './typescript-semantic-analyzer';
+import { TypeScriptFsObservationRecorder } from '../semantic/typescript-fs-observation';
 
 const COMPILER_OPTIONS = { module: 'commonjs', target: 'ES2022', strict: true, types: [] };
 
@@ -497,6 +498,39 @@ test('a source edit that adds an oversized dependency is not hidden by a saved p
             spawn.mock.restore();
             syncBuiltinESMExports();
         }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('a dependency created before capture cannot poison a reference proof', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-reference-capture-')));
+    const write = writerFor(root);
+    try {
+        writeReferencedFixture(write);
+        emitDeclarations(write);
+        write('lib/src/math.ts', 'import { extra } from "../oversized/extra";\nexport const add = extra;\n');
+        fs.mkdirSync(path.join(root, 'lib/oversized'), { recursive: true });
+        const budget = { maxFileBytes: 1024, maxProjectBytes: 64 * 1024 };
+        const stateDirectory = stateDirectoryUnder(root, 'cache');
+        const original = TypeScriptFsObservationRecorder.prototype.capture;
+        const capture = t.mock.method(TypeScriptFsObservationRecorder.prototype, 'capture', function (this: TypeScriptFsObservationRecorder) {
+            write('lib/oversized/extra.ts', `export const extra = 1;\n${'// filler\n'.repeat(200)}`);
+            return original.call(this);
+        });
+        try {
+            await controlsWith(root, stateDirectory, budget);
+        } finally {
+            capture.mock.restore();
+        }
+        assert.ok(
+            !fs.readdirSync(stateDirectory).some(file => file.endsWith(REFERENCE_CACHE_FILE_SUFFIX)),
+            'inputs changed during computation, so the old success must not be persisted',
+        );
+        const cached = await controlsWith(root, stateDirectory, budget);
+        const fresh = await controlsWith(root, stateDirectoryUnder(root, 'fresh'), budget);
+        assert.deepEqual(cached, fresh, 'a later discovery must rebuild after inputs change during capture');
+        assert.ok(!cached.some(file => file.endsWith('.d.ts')), 'the oversized reference cannot publish declaration controls');
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

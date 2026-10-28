@@ -40,9 +40,9 @@ export class TypeScriptProgramSession {
         private readonly references?: readonly ProjectReference[],
         /**
          * Optional witness hook: records which paths the compiler asked about
-         * so a caller can prove later that the same inputs still hold. It only
-         * collects paths, and every callback still returns `serverFS.useOS`, so
-         * the compiler observes exactly the same filesystem answers as before.
+         * so a caller can prove later that the same inputs still hold. Observed
+         * callbacks return the recorded answer. Native-only answers make the
+         * computation ineligible for caching.
          */
         private readonly observation?: TypeScriptFsObservationRecorder,
     ) {
@@ -56,31 +56,35 @@ export class TypeScriptProgramSession {
             fs: {
                 directoryExists: recorder
                     ? (directoryName) => {
-                        recorder.recordPath(directoryName);
-                        return serverFS.useOS;
+                        const kind = recorder.recordPath(directoryName);
+                        if (kind === 'other') { recorder.invalidate(); return serverFS.useOS; }
+                        return kind === 'directory';
                     }
                     : serverFS.useOS,
                 fileExists: recorder
                     ? (fileName) => {
-                        recorder.recordPath(fileName);
-                        return serverFS.useOS;
+                        const kind = recorder.recordPath(fileName);
+                        if (kind === 'other') { recorder.invalidate(); return serverFS.useOS; }
+                        return kind === 'file';
                     }
                     : serverFS.useOS,
                 getAccessibleEntries: recorder
-                    ? (directoryName) => {
-                        recorder.recordListing(directoryName);
+                    ? () => {
+                        // The native listing distinguishes files, directories
+                        // and symlinks. Names alone cannot witness its answer.
+                        recorder.invalidate();
                         return serverFS.useOS;
                     }
                     : serverFS.useOS,
                 realpath: recorder
                     ? (pathName) => {
-                        recorder.recordRealpath(pathName);
-                        return serverFS.useOS;
+                        return recorder.recordRealpath(pathName) || serverFS.useOS;
                     }
                     : serverFS.useOS,
                 stat: recorder
-                    ? (pathName) => {
-                        recorder.recordPath(pathName);
+                    ? () => {
+                        // Path kind alone cannot witness native stat metadata.
+                        recorder.invalidate();
                         return serverFS.useOS;
                     }
                     : serverFS.useOS,

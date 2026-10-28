@@ -259,7 +259,7 @@ pnpm -C packages/core exec node --liftoff-only --import tsx --import ./src/test-
 The boundary affects sync invalidation. Run the existing publication equivalence cases once after focused checks pass:
 
 ```bash
-pnpm -C packages/core exec node --liftoff-only --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=1 src/generation/index-equivalence-sync-typescript-warm.test.ts src/generation/index-equivalence-sync-typescript-cold.test.ts
+pnpm -C packages/core exec node --liftoff-only --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=1 src/generation/index-equivalence-sync-typescript-warm.test.ts src/generation/index-equivalence-sync-typescript-warm-workers.test.ts src/generation/index-equivalence-sync-typescript-cold.test.ts src/generation/index-equivalence-sync-typescript-cold-workers.test.ts
 pnpm run check
 pnpm --filter @satori-code/core build
 pnpm --filter @satori-code/mcp build

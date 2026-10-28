@@ -17,7 +17,7 @@ export interface TypeScriptReferenceDeclarationState {
 }
 
 /** Version of the saved reference-metadata document. */
-export const REFERENCE_DECLARATION_FORMAT = 2;
+export const REFERENCE_DECLARATION_FORMAT = 3;
 
 /** Default number of retained reference proofs. */
 export const DEFAULT_REFERENCE_CACHE_ENTRIES = 128;

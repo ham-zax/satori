@@ -1,6 +1,6 @@
 {
   "name": "@satori-code/core",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "Indexing, language analysis, Publications, and hybrid retrieval for Satori's local-first code intelligence.",
   "keywords": [
     "code-intelligence",

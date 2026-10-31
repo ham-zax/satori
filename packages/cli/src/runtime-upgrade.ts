@@ -66,6 +66,7 @@ import {
 import { resolveLauncherPath } from "./managed-runtime-paths.js";
 import { parseManagedLauncherDescriptor } from "./managed-launcher-script.mjs";
 import { activateAfterRetiringManagedRuntime } from "./runtime-activation.js";
+import { withVoyageApiKeyFallback } from "./voyage-api-key.js";
 
 export function upgradeRuntimeSelection(
     homeDir: string,
@@ -83,7 +84,8 @@ export function upgradeRuntimeSelection(
     lateOnModelPath?: string;
     effectiveEnv: NodeJS.ProcessEnv;
 } {
-    const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedEnvironment, env);
+    const envWithVoyageApiKey = withVoyageApiKeyFallback(homeDir, env);
+    const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedEnvironment, envWithVoyageApiKey);
     const profile = managedEnvironment.SATORI_RUNTIME_PROFILE;
     if (profile === "offline") {
         const command: Extract<InstallCommandInput, { kind: "install"; runtime: "offline" }> = {
@@ -94,17 +96,17 @@ export function upgradeRuntimeSelection(
             ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
             ...(rerankerModelOverride ? { rerankerModel: rerankerModelOverride } : {}),
         };
-        assertOfflinePotionSelection(managedEnvironment, env);
-        const reranker = resolveOfflineReranker(command, managedEnvironment, env, platform, architecture);
+        assertOfflinePotionSelection(managedEnvironment, envWithVoyageApiKey);
+        const reranker = resolveOfflineReranker(command, managedEnvironment, envWithVoyageApiKey, platform, architecture);
         const rerankerModel = resolveRerankerModel(
             reranker,
             command.rerankerModel,
             managedEnvironment,
-            env,
+            envWithVoyageApiKey,
         );
-        assertDefaultLateOnProfile(reranker, env, rerankerOverride !== undefined);
+        assertDefaultLateOnProfile(reranker, envWithVoyageApiKey, rerankerOverride !== undefined);
         const lateOnModelPath = reranker === "lateon"
-            ? configuredLateOnModelPath(reranker, managedEnvironment, env)
+            ? configuredLateOnModelPath(reranker, managedEnvironment, envWithVoyageApiKey)
             : undefined;
         return {
             runtime: "offline",
@@ -137,8 +139,8 @@ export function upgradeRuntimeSelection(
         ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
         ...(rerankerModelOverride ? { rerankerModel: rerankerModelOverride } : {}),
     };
-    const reranker = resolveConnectedReranker(command, managedEnvironment, env);
-    const rerankerModel = resolveRerankerModel(reranker, command.rerankerModel, managedEnvironment, env);
+    const reranker = resolveConnectedReranker(command, managedEnvironment, envWithVoyageApiKey);
+    const rerankerModel = resolveRerankerModel(reranker, command.rerankerModel, managedEnvironment, envWithVoyageApiKey);
     return {
         runtime: "voyage",
         vectorStore: resolveConnectedVectorStoreForInstallOrThrow(

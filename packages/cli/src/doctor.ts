@@ -30,6 +30,7 @@ import {
     discoverRuntimeOwnerRegistryPaths,
     resolveRuntimeOwnerRegistryPath,
 } from "./runtime-owner-path.js";
+import { withVoyageApiKeyFallback } from "./voyage-api-key.js";
 export { SATORI_CLI_NPX_COMMAND } from "./cli-command.js";
 
 type CheckStatus = "ok" | "warning" | "error";
@@ -660,7 +661,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     // Not installed: no usable launcher and no client entry. The CLI process environment is not
     // the runtime in that state, so runtime-environment checks would only report defaults.
     const notInstalled = managedClientProofs.length === 0 && !managedLauncherIsUsable;
-    const runtimeContexts: DoctorRuntimeContext[] = authoritativeClientProofs.length > 0
+    const baseRuntimeContexts: DoctorRuntimeContext[] = authoritativeClientProofs.length > 0
         ? authoritativeClientProofs.map((proof) => ({
             client: proof.client,
             environment: {
@@ -672,6 +673,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         : managedClientProofs.length === 0 && !notInstalled
             ? [{ client: null, environment: runtimeEnv }]
             : [];
+    const runtimeContexts = baseRuntimeContexts.map((context) => ({
+        ...context,
+        environment: withVoyageApiKeyFallback(homeDir, context.environment),
+    }));
 
     for (const pkg of packageVersions) {
         const shortName = pkg.name.includes("/")

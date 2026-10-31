@@ -34,18 +34,44 @@ function readEnvFile(envPath: string): string {
 }
 
 /** CLI persistence follows core EnvManager's plain KEY=value format without a runtime core dependency. */
-export async function resolveVoyageApiKey(
+export function readVoyageApiKey(
     homeDir: string,
     env: NodeJS.ProcessEnv,
-    interaction: VoyageKeyInteraction,
-): Promise<string | null> {
+): string | undefined {
     const keyEnv = RERANKER_PROVIDERS.voyage.keyEnv;
     const processKey = env[keyEnv]?.trim();
     if (processKey) return processKey;
     const envPath = path.join(homeDir, ".satori", ".env");
     const entry = readEnvFile(envPath).split("\n").find((line) => line.trim().startsWith(`${keyEnv}=`));
     const fileKey = entry?.trim().slice(keyEnv.length + 1).trim();
-    if (fileKey) return fileKey;
+    return fileKey || undefined;
+}
+
+export function withVoyageApiKeyFallback(
+    homeDir: string,
+    env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+    let apiKey: string | undefined;
+    try {
+        apiKey = readVoyageApiKey(homeDir, env);
+    } catch (error) {
+        // Match EnvManager: a file read failure leaves the process environment unchanged.
+        if (!(error instanceof CliError)) throw error;
+    }
+    return apiKey
+        ? { ...env, [RERANKER_PROVIDERS.voyage.keyEnv]: apiKey }
+        : env;
+}
+
+export async function resolveVoyageApiKey(
+    homeDir: string,
+    env: NodeJS.ProcessEnv,
+    interaction: VoyageKeyInteraction,
+): Promise<string | null> {
+    const keyEnv = RERANKER_PROVIDERS.voyage.keyEnv;
+    const existingKey = readVoyageApiKey(homeDir, env);
+    if (existingKey) return existingKey;
+    const envPath = path.join(homeDir, ".satori", ".env");
     if (!(interaction.isInteractive ?? (process.stdin.isTTY && process.stdout.isTTY))) {
         throw new CliError(
             "E_USAGE",

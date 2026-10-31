@@ -25,8 +25,10 @@ const fixedPackageVersions = (): DoctorPackageVersion[] => [
 /** Isolate doctor from the operator machine's managed runtime-owner registries. */
 const noRuntimeOwnersPath = path.join(os.tmpdir(), "satori-doctor-no-owners-registry.json");
 const noDiagnosticsPath = path.join(os.tmpdir(), "satori-doctor-no-diagnostics.jsonl");
+const noEnvHome = path.join(os.tmpdir(), "satori-doctor-no-env-home");
 
 function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
+    const { env: overrideEnv, ...rest } = overrides;
     return {
         execFileSyncImpl: successfulExecFileSync,
         resolvePackageVersions: fixedPackageVersions,
@@ -42,7 +44,8 @@ function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
             usesManagedLauncher: false,
             runtimeEnvironment: Object.freeze({}),
         }],
-        ...overrides,
+        ...rest,
+        env: { HOME: noEnvHome, ...overrideEnv },
     };
 }
 
@@ -118,6 +121,37 @@ test("runDoctor reports missing default VoyageAI credentials with LanceDB select
         "Codex: Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.",
         "Restart your MCP client after changing Satori environment variables.",
     ]);
+});
+
+test("runDoctor reports a missing key when the private env file cannot be read", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-unreadable-env-"));
+    try {
+        fs.mkdirSync(path.join(tempDir, ".satori", ".env"), { recursive: true });
+        const result = await runDoctor(baseDoctorOptions({ env: { HOME: tempDir } }));
+        assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "error");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor reads a Voyage key from the private env file", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-voyage-env-file-"));
+    try {
+        const envPath = path.join(tempDir, ".satori", ".env");
+        fs.mkdirSync(path.dirname(envPath), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(envPath, "VOYAGEAI_API_KEY=file-only-voyage-key\n", { mode: 0o600 });
+
+        const result = await runDoctor(baseDoctorOptions({
+            nodeVersion: "v22.22.0",
+            env: { HOME: tempDir, VOYAGEAI_API_KEY: "" },
+        }));
+
+        assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");
+        assert.equal(result.nextSteps.some((step) => step.includes("VOYAGEAI_API_KEY")), false);
+        assert.doesNotMatch(JSON.stringify(result), /file-only-voyage-key/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test("runDoctor validates each configured client runtime instead of a shell-default runtime", async () => {

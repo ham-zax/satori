@@ -36,6 +36,7 @@ import { plannedCbmExtendedDirectory } from "./cbm-extractor-store.js";
 import { planInstallRuntimeEnvironment } from "./install-preflight.js";
 import { loadAcquisitionAuthority } from "./lateon-model-store.js";
 import { formatInstallText } from "./install-format.js";
+import { upgradeRuntimeSelection } from "./runtime-upgrade.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const POTION_ASSETS_ROOT = path.resolve(PACKAGE_ROOT, "../mcp/assets/potion/linux-x64");
@@ -924,6 +925,58 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
         assert.equal(readFile(codexConfigPath), originalConfig);
         assert.notEqual(readFile(launcherPath(homeDir)), originalLauncher);
         assert.match(readFile(launcherPath(homeDir)), /new-runtime\.mjs/);
+    });
+});
+
+test("offline upgrade selection ignores an unreadable private env file", async () => {
+    await withTempHome(async (homeDir) => {
+        fs.mkdirSync(path.join(homeDir, ".satori", ".env"), { recursive: true });
+        const selection = upgradeRuntimeSelection(homeDir, {
+            SATORI_RUNTIME_PROFILE: "offline",
+            SATORI_RERANKER_PROVIDER: "none",
+        }, {}, "linux", "x64");
+        assert.equal(selection.reranker, "none");
+    });
+});
+
+test("managed runtime upgrade reads a Voyage key from the private env file", async () => {
+    await withTempHome(async (homeDir) => {
+        const managedEnvironment = {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            EMBEDDING_PROVIDER: "VoyageAI",
+            SATORI_RERANKER_PROVIDER: "voyage",
+            VOYAGEAI_RERANKER_MODEL: "rerank-3-lite",
+        };
+        await installUpgradeSourceRuntime(homeDir, managedEnvironment);
+        const envPath = path.join(homeDir, ".satori", ".env");
+        fs.mkdirSync(path.dirname(envPath), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(envPath, "VOYAGEAI_API_KEY=file-only-voyage-key\n", { mode: 0o600 });
+
+        let preflightKey: string | undefined;
+        await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+            homeDir,
+            env: { VECTOR_STORE_PROVIDER: "LanceDB" },
+            platform: "linux",
+            architecture: "x64",
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/target-runtime.mjs",
+                UPGRADE_TARGET.mcpPackageSpecifier,
+                UPGRADE_TARGET.mcpVersion,
+                UPGRADE_TARGET.coreVersion,
+            ) as never,
+            preflightRunner: async (input) => {
+                preflightKey = input.env.VOYAGEAI_API_KEY;
+                assert.equal(input.reranker, "voyage");
+                return { runtimeEnvironment: managedEnvironment };
+            },
+            preflightDependencies: {
+                probeCandidateRuntime: async () => {},
+            },
+        });
+
+        assert.equal(preflightKey, "file-only-voyage-key");
+        assert.doesNotMatch(readFile(launcherPath(homeDir)), /file-only-voyage-key/);
     });
 });
 

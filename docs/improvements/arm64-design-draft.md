@@ -516,7 +516,7 @@ The ARM packed CLI command fails its unchanged960MiB size gate at1,170,578,518by
 Measured native dependency metadata identifies LanceDB ARM413,059,581bytes versus x64211,640,370bytes as the dominant size difference.
 A retained diagnostic closure at `/home/ubuntu/arm64-qualification.fysrxa/closure-probe-mzeQ1e` measures1,170,578,356bytes and independently passes real ARM Potion, projection, default-LateOn/none and two-client sharing checks. That is not a full size-gated smoke pass.
 That diagnostic command exits0 and scoped host termination completes. The size cap remains unchanged.
-An unapplied proposal at `/tmp/satori-arm64-budget-proposal-sw5l1h00.diff` would keep x64960MiB and use ARM1152MiB. On 2026-11-10 the user approved it; the packed CLI size gate now allows ARM64 up to 1152MiB while x64 stays at 960MiB.
+An unapplied proposal at `/tmp/satori-arm64-budget-proposal-sw5l1h00.diff` would keep x64960MiB and use ARM1152MiB. The user approved the dead-weight prune instead of the cap increase; the packed CLI size gate stays at 960MiB for both architectures.
 Final review text reports no critical/important defect and two minor items: stale D32 label on the changed CLI README line, and unconditional success wording for skipped host-gated smoke checks.
 A subsequent interruption notification does not authorize restarting the reviewer or continuing work.
 On explicit resume, finish only local review corrections, appropriate focused checks, scope check and final commit/handoff. The user owns further ARM acceptance runs.

@@ -51,6 +51,7 @@ import {
     type ManagedRuntimeClosure,
     writeManagedRuntimeClosureManifest,
 } from "./managed-runtime-closure.js";
+import { pruneManagedRuntimeDeadWeight } from "./managed-runtime-prune.js";
 
 export interface ManagedRuntimeCandidate {
     readonly command: ManagedRuntimeCommand;
@@ -221,6 +222,12 @@ export function installManagedRuntimeCandidate(
             2,
         );
     }
+    // Prune before the closure manifest is recorded so preflight and candidate
+    // probing exercise the exact tree the user launches.
+    pruneManagedRuntimeDeadWeight(runtimeRoot, {
+        platform: closure.platform,
+        architecture: closure.architecture,
+    });
     try {
         writeManagedRuntimeClosureManifest(runtimeRoot, closure);
     } catch (error) {

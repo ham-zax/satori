@@ -13,6 +13,7 @@ import {
     resolveOxcParserNativePackage,
     resolveTypeScriptNativePackage,
 } from "../src/managed-runtime-closure.js";
+import { pruneManagedRuntimeDeadWeight } from "../src/managed-runtime-prune.js";
 import { resolvePotionAssetsRoot } from "../src/managed-runtime-paths.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
@@ -28,8 +29,7 @@ const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // and measured by the gate below. The temporary 960 MiB budget covers the
 // measured 919 MiB closure after the TypeScript compiler addition; the
 // deferred size investigation is in docs/RELEASING.md.
-// ARM64 has a larger pinned LanceDB native package. Keep the x64 cap unchanged.
-const MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES = (process.arch === "arm64" ? 1152 : 960) * 1024 * 1024;
+const MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
 
 /**
  * The packed runtime gates run on the qualified Linux targets only: Linux x64
@@ -167,6 +167,10 @@ async function installAndVerifyPackedReleaseClosure(
         env,
         stdio: ["ignore", "pipe", "pipe"],
     });
+
+    // Prune immediately after install so size measurement and every LateOn
+    // probe exercise the exact tree users launch.
+    pruneManagedRuntimeDeadWeight(installRoot);
 
     const cliVersion = requireStableVersion(sourceCli.version, "Source CLI version");
     const mcpVersion = requireStableVersion(sourceMcp.version, "Source MCP version");

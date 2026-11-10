@@ -8,7 +8,8 @@ import { isolatedSmokeEnv } from "./smoke-env.js";
 
 const SUPPORTED_PACKED_LINUX_HOST = process.platform === "linux"
     && (process.arch === "x64" || process.arch === "arm64");
-const SIZE_BUDGET_BYTES = 960 * 1024 * 1024;
+// Explicit policy values, checked on both native architectures.
+const SIZE_BUDGET_BYTES = process.arch === "arm64" ? 1_207_959_552 : 1_006_632_960;
 
 interface ReleaseSmokeModule {
     runPackedOfflineJourney(options: Record<string, unknown>): Promise<void>;

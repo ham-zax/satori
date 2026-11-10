@@ -28,7 +28,8 @@ const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // and measured by the gate below. The temporary 960 MiB budget covers the
 // measured 919 MiB closure after the TypeScript compiler addition; the
 // deferred size investigation is in docs/RELEASING.md.
-const MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
+// ARM64 has a larger pinned LanceDB native package. Keep the x64 cap unchanged.
+const MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES = (process.arch === "arm64" ? 1152 : 960) * 1024 * 1024;
 
 /**
  * The packed runtime gates run on the qualified Linux targets only: Linux x64

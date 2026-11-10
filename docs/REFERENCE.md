@@ -6,7 +6,7 @@ The complete product and operations reference. For the short introduction, see t
 
 Satori is a **local-first code-intelligence layer** for coding agents. Ask where behavior lives in plain English, even when you do not know the filename or symbol yet. Satori combines semantic meaning with BM25 and exact lexical evidence, maps results back to owning symbols, and lets the agent continue into file structure, conservative relationship evidence, exact source spans, and freshness-aware navigation through MCP.
 
-On the qualified Linux x64 / WSL2 path, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. The installer configures Codex, Claude Code, and OpenCode, plus Antigravity (`agy`) on request.
+On qualified Linux x64/WSL2 and Linux ARM64 with glibc, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. The installer configures Codex, Claude Code, and OpenCode, plus Antigravity (`agy`) on request.
 
 ```text
 Repository
@@ -110,7 +110,7 @@ Satori tracks repository source checkpoints, prepares replacement Publications a
 
 ### Local-first runtime
 
-The default Linux x64 / WSL2 path runs Potion embeddings, BM25, LateOn reranking, and LanceDB locally. Connected Voyage and Milvus/Zilliz remain optional advanced configurations.
+The default Linux x64/WSL2 and Linux ARM64 with glibc paths run Potion embeddings, BM25, LateOn reranking, and LanceDB locally. Connected Voyage and Milvus/Zilliz remain optional advanced configurations.
 
 ### Shared managed runtime
 
@@ -141,7 +141,7 @@ Interactive diagram: [`docs/architecture/satori-architecture.html`](./architectu
 
 ## Install
 
-Requirements: Node.js 22.22+, Linux x64 (native Linux or WSL2), and at least
+Requirements: Node.js 22.22+, Linux x64/WSL2 or Linux ARM64 with glibc, and at least
 2 GiB of available runtime capacity for the qualified native deployment
 envelope. The capacity figure is an allowance, not measured steady
 consumption.
@@ -204,7 +204,7 @@ Index /absolute/path/to/repo with Satori, then find where auth refresh is handle
 
 That is the complete local path. Satori installs a stable launcher under `~/.satori/`; your agent does not download the server again on every startup.
 
-On Linux x64 and WSL2, the default offline Potion + LanceDB runtime uses LateOn
+On Linux x64/WSL2 and Linux ARM64 with glibc, the default offline Potion + LanceDB runtime uses LateOn
 D128 as its query-time reranker and is shared
 behind that launcher. Multiple compatible Codex, Claude Code, OpenCode, or
 subagent sessions attach as independent MCP sessions to one private local host,
@@ -358,7 +358,7 @@ Satori found a same-name definition in the defining file for 80–100% of lookup
 
 | Runtime | Retrieval | Storage | Requirement |
 |---|---|---|---|
-| Offline | Potion Code 16M v2 + BM25 | LanceDB | Linux x64; no model API key |
+| Offline | Potion Code 16M v2 + BM25 | LanceDB | Linux x64/WSL2 or Linux ARM64 with glibc; no model API key |
 | Connected | Voyage Code 3 + BM25 | LanceDB | `VOYAGEAI_API_KEY` |
 | Connected Milvus | Voyage Code 3 + BM25 | Milvus or Zilliz Cloud | `VOYAGEAI_API_KEY`, `MILVUS_ADDRESS` (plus `MILVUS_TOKEN` for Zilliz) |
 
@@ -542,7 +542,7 @@ keep working as `use lateon` and `use none`.
 
 | Choice | Pick it when | Cost |
 |---|---|---|
-| `lateon` | Code must stay on the machine, or you have no API key. | Free. Runs on the local CPU, so it is the slowest per search. Linux x64/WSL2, offline runtime only. |
+| `lateon` | Code must stay on the machine, or you have no API key. | Free. Runs on the local CPU, so it is the slowest per search. Linux x64/WSL2 and Linux ARM64 with glibc, offline runtime only. |
 | `voyage` | You want the best ranking and the fastest reranked search, and sending code excerpts to Voyage is acceptable. | 200 million free tokens per model on each Voyage account. The canonical projection sends about 60% more bytes, and a measured search bills about 43,000 tokens, so the free tier covers about 4,600 searches. Needs the network and `VOYAGEAI_API_KEY`. |
 | `none` | You want the fastest search and can accept retrieval order. | Free. No reranking. |
 

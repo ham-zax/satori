@@ -37,6 +37,24 @@ function offlineEnv(root: string): NodeJS.ProcessEnv {
     };
 }
 
+test("shared offline eligibility supports Linux x64 and arm64", () => {
+    const env = offlineEnv("/tmp/satori-shared-eligibility");
+    for (const architecture of ["x64", "arm64"] as const) {
+        assert.equal(isSharedOfflineRuntimeEligible(env, "linux", architecture), true);
+        for (const override of [
+            { SATORI_SHARED_RUNTIME_DISABLE: "1" },
+            { SATORI_RUNTIME_PROFILE: "connected" },
+            { EMBEDDING_PROVIDER: "VoyageAI" },
+            { VECTOR_STORE_PROVIDER: "Milvus" },
+        ]) {
+            assert.equal(isSharedOfflineRuntimeEligible({ ...env, ...override }, "linux", architecture), false);
+        }
+    }
+    assert.equal(isSharedOfflineRuntimeEligible(env, "linux", "arm"), false);
+    assert.equal(isSharedOfflineRuntimeEligible(env, "win32", "arm64"), false);
+    assert.equal(isSharedOfflineRuntimeEligible(env, "darwin", "arm64"), false);
+});
+
 test("shared runtime identity is exact, non-secret, and bounded to eligible Linux configurations", (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-identity-"));
     fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });

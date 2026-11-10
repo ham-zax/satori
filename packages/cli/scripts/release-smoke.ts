@@ -6,12 +6,14 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
     resolveLanceDbNativePackage,
     resolveLateOnNativePackages,
     resolveOxcParserNativePackage,
     resolveTypeScriptNativePackage,
 } from "../src/managed-runtime-closure.js";
+import { resolvePotionAssetsRoot } from "../src/managed-runtime-paths.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
     readLateOnAcquisitionAuthority,
@@ -26,7 +28,15 @@ const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // and measured by the gate below. The temporary 960 MiB budget covers the
 // measured 919 MiB closure after the TypeScript compiler addition; the
 // deferred size investigation is in docs/RELEASING.md.
-const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
+const MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
+
+/**
+ * The packed runtime gates run on the qualified Linux targets only: Linux x64
+ * and Linux ARM64 with glibc. Other hosts skip them rather than claim a pass.
+ */
+function isSupportedPackedLinuxHost(): boolean {
+    return process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64");
+}
 
 interface PackageManifest {
     name?: unknown;
@@ -127,7 +137,7 @@ async function installAndVerifyPackedReleaseClosure(
     const sourceCore = readManifest(path.join(sourceRoots.core, "package.json"));
     const runtimeClosure = {
         vectorStore: "LanceDB" as const,
-        lateOn: process.platform === "linux" && process.arch === "x64",
+        lateOn: isSupportedPackedLinuxHost(),
     };
     const lanceDbNativePackage = resolveLanceDbNativePackage(runtimeClosure);
     const lateOnNativePackages = resolveLateOnNativePackages(runtimeClosure);
@@ -351,16 +361,16 @@ function directorySize(filePath: string): number {
         .reduce((total, size) => total + size, 0);
 }
 
-function assertManagedRuntimeSizeBudget(installRoot: string): void {
-    if (process.platform !== "linux" || process.arch !== "x64") {
+export function assertManagedRuntimeSizeBudget(installRoot: string): void {
+    if (!isSupportedPackedLinuxHost()) {
         return;
     }
     const installedBytes = directorySize(installRoot);
-    console.log(`[release:smoke] Packed managed runtime is ${installedBytes} bytes; budget is ${MAX_LINUX_X64_MANAGED_RUNTIME_BYTES} bytes.`);
-    if (installedBytes > MAX_LINUX_X64_MANAGED_RUNTIME_BYTES) {
+    console.log(`[release:smoke] Packed managed runtime is ${installedBytes} bytes; budget is ${MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES} bytes.`);
+    if (installedBytes > MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES) {
         throw new Error(
-            `Packed Linux x64 managed runtime is ${installedBytes} bytes; `
-            + `budget is ${MAX_LINUX_X64_MANAGED_RUNTIME_BYTES} bytes.`,
+            `Packed Linux ${process.arch} managed runtime is ${installedBytes} bytes; `
+            + `budget is ${MAX_SUPPORTED_LINUX_MANAGED_RUNTIME_BYTES} bytes.`,
         );
     }
 }
@@ -413,8 +423,8 @@ function assertPackedLateOnAcquisitionAuthority(packedMcpRoot: string, packedCli
     }
 }
 
-function assertPackedLateOnNativeRuntime(packedMcpRoot: string): void {
-    if (process.platform !== "linux" || process.arch !== "x64") {
+export function assertPackedLateOnNativeRuntime(packedMcpRoot: string): void {
+    if (!isSupportedPackedLinuxHost()) {
         return;
     }
     const requireFromMcp = createRequire(path.join(packedMcpRoot, "package.json"));
@@ -424,7 +434,7 @@ function assertPackedLateOnNativeRuntime(packedMcpRoot: string): void {
         requireFromTransformers("sharp");
     } catch (error) {
         throw new Error(
-            `Packed LateOn runtime cannot load Sharp's Linux x64 native closure: ${error instanceof Error ? error.message : String(error)}`,
+            `Packed LateOn runtime cannot load Sharp's Linux ${process.arch} native closure: ${error instanceof Error ? error.message : String(error)}`,
         );
     }
 }
@@ -504,12 +514,12 @@ const WORKSPACE_POTION_MODEL_PATH = fileURLToPath(
     new URL("../../mcp/assets/potion/linux-x64/model/", import.meta.url),
 );
 
-function packedPotionSmokeEnv(
+export function packedPotionSmokeEnv(
     baseEnv: NodeJS.ProcessEnv,
     packedMcpRoot: string,
     smokeHomeDir: string,
 ): NodeJS.ProcessEnv {
-    const assetsRoot = path.join(packedMcpRoot, "assets", "potion", "linux-x64");
+    const assetsRoot = resolvePotionAssetsRoot(packedMcpRoot);
     const helperPath = path.join(assetsRoot, "satori-potion");
     const modelPath = WORKSPACE_POTION_MODEL_PATH;
     for (const requiredPath of [
@@ -539,13 +549,17 @@ function packedPotionSmokeEnv(
     };
 }
 
-async function assertPackedPotionExecutionCapability(installRoot: string, packedMcpRoot: string): Promise<void> {
-    if (process.platform !== "linux" || process.arch !== "x64") {
+export async function assertPackedPotionExecutionCapability(installRoot: string, packedMcpRoot: string): Promise<void> {
+    if (!isSupportedPackedLinuxHost()) {
         return;
     }
-    const assetsRoot = path.join(packedMcpRoot, "assets", "potion", "linux-x64");
-    const helperPath = path.join(assetsRoot, "satori-potion");
-    const modelPath = WORKSPACE_POTION_MODEL_PATH;
+    // The validated helper/model paths come from the packed artifact gate, so a
+    // missing or bundled helper fails here instead of skipping the capability
+    // check. No native binary runs before this validation.
+    const smokeEnv = packedPotionSmokeEnv({}, packedMcpRoot, installRoot);
+    const helperPath = smokeEnv.POTION_HELPER_PATH as string;
+    const modelPath = smokeEnv.POTION_MODEL_PATH as string;
+    const assetsRoot = path.dirname(helperPath);
 
     const coreEntry = path.join(installRoot, "node_modules", "@satori-code", "core", "dist", "index.js");
     if (!fs.existsSync(coreEntry)) {
@@ -604,6 +618,490 @@ async function assertPackedPotionExecutionCapability(installRoot: string, packed
     }
 }
 
+/*
+ * The packed Core must load its own shipped addon and publish exactly what the
+ * TypeScript oracle publishes for the same input. An empty env keeps ambient
+ * SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS overrides out of the check.
+ */
+export async function assertPackedNativeProjectionRuntime(installRoot: string): Promise<void> {
+    if (!isSupportedPackedLinuxHost()) {
+        return;
+    }
+    const coreRoot = path.join(installRoot, "node_modules", "@satori-code", "core");
+    const nativeModulePath = path.join(coreRoot, "dist", "core", "native-search-projections.js");
+    const projectionsModulePath = path.join(coreRoot, "dist", "core", "search-projections.js");
+    for (const requiredPath of [nativeModulePath, projectionsModulePath]) {
+        if (!fs.existsSync(requiredPath)) {
+            throw new Error(`Packed Core projection module is missing: ${requiredPath}.`);
+        }
+    }
+    const nativeModule = await import(pathToFileURL(nativeModulePath).href) as {
+        resolveNativeProjectionAddonPath(env: NodeJS.ProcessEnv): string | undefined;
+        loadAddon(addonPath?: string): {
+            buildProjectionBatch(inputs: unknown[]): Promise<Array<unknown>>;
+        } | undefined;
+        flatten(input: unknown): unknown;
+    };
+    const projectionsModule = await import(pathToFileURL(projectionsModulePath).href) as {
+        buildSearchProjections(input: unknown): unknown;
+    };
+
+    const addonPath = nativeModule.resolveNativeProjectionAddonPath({});
+    const expectedAddonPath = path.join(
+        coreRoot,
+        "assets",
+        "native-projections",
+        `linux-${process.arch}`,
+        "projection.node",
+    );
+    if (!addonPath || path.resolve(addonPath) !== path.resolve(expectedAddonPath)) {
+        throw new Error(
+            `Packed Core did not select its shipped linux-${process.arch} projection addon; `
+            + `received ${JSON.stringify(addonPath ?? null)}.`,
+        );
+    }
+    const addon = nativeModule.loadAddon(addonPath);
+    if (!addon) {
+        throw new Error(`Packed Core could not load its shipped projection addon at ${addonPath}.`);
+    }
+
+    const fixture = {
+        chunk: {
+            content: "export function parseHeader(value) { return value.trim(); }",
+            metadata: { startLine: 1, endLine: 1, language: "typescript" },
+        },
+        relativePath: "src/probe.ts",
+    };
+    const nativeResults = await addon.buildProjectionBatch([nativeModule.flatten(fixture)]);
+    const nativeProjection = nativeResults[0];
+    if (nativeProjection === null || nativeProjection === undefined) {
+        throw new Error("Packed native projection addon returned no projection for the probe fixture.");
+    }
+    const expectedProjection = projectionsModule.buildSearchProjections(fixture);
+    if (!isDeepStrictEqual(nativeProjection, expectedProjection)) {
+        throw new Error(
+            "Packed native projection output differs from the packed TypeScript projections "
+            + "for the same probe fixture.",
+        );
+    }
+}
+
+const OFFLINE_JOURNEY_INDEX_TIMEOUT_MS = 120_000;
+const OFFLINE_JOURNEY_POLL_INTERVAL_MS = 100;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
+}
+
+function readToolJson(result: { isError?: boolean; content?: unknown }): Record<string, unknown> {
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content
+        .map((part) => asRecord(part))
+        .find((part) => part?.type === "text")?.text;
+    if (typeof text !== "string") {
+        throw new Error("Satori tool response did not contain text.");
+    }
+    if (result.isError === true) {
+        throw new Error(`Satori tool failed: ${text}`);
+    }
+    return JSON.parse(text) as Record<string, unknown>;
+}
+
+function readIndexOperation(response: Record<string, unknown>): { id: string; phase: string } | undefined {
+    const operation = asRecord(response.operation);
+    if (!operation || typeof operation.id !== "string" || typeof operation.phase !== "string") {
+        return undefined;
+    }
+    return { id: operation.id, phase: operation.phase };
+}
+
+function readIndexPublication(response: Record<string, unknown>): { publicationId: string } | undefined {
+    const publication = asRecord(response.publication);
+    if (
+        !publication
+        || typeof publication.publicationId !== "string"
+        || publication.publicationId.length === 0
+    ) {
+        return undefined;
+    }
+    return { publicationId: publication.publicationId };
+}
+
+function writeOfflineJourneyFixture(fixtureRepo: string): void {
+    fs.mkdirSync(path.join(fixtureRepo, "src"), { recursive: true });
+    fs.writeFileSync(
+        path.join(fixtureRepo, "package.json"),
+        `${JSON.stringify({ name: "satori-offline-journey-fixture", private: true, type: "module" }, null, 2)}\n`,
+    );
+    fs.writeFileSync(path.join(fixtureRepo, "src", "http.ts"), [
+        "/**",
+        " * Parse incoming HTTP request headers.",
+        " */",
+        "export function parseIncomingRequestHeaders(rawHeaders: readonly string[]): Map<string, string> {",
+        "    const headers = new Map<string, string>();",
+        "    for (const line of rawHeaders) {",
+        "        const separator = line.indexOf(\":\");",
+        "        if (separator <= 0) continue;",
+        "        const name = line.slice(0, separator).trim().toLowerCase();",
+        "        const value = line.slice(separator + 1).trim();",
+        "        if (name.length > 0) headers.set(name, value);",
+        "    }",
+        "    return headers;",
+        "}",
+        "",
+        "export function readRequestHeader(rawHeaders: readonly string[], name: string): string | undefined {",
+        "    return parseIncomingRequestHeaders(rawHeaders).get(name.toLowerCase());",
+        "}",
+        "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(fixtureRepo, "src", "session.ts"), [
+        "const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9._-]{16,}$/;",
+        "",
+        "export function validateSessionToken(token: string, now: number, expiresAt: number): boolean {",
+        "    if (!SESSION_TOKEN_PATTERN.test(token)) return false;",
+        "    return now < expiresAt;",
+        "}",
+        "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(fixtureRepo, "src", "totals.ts"), [
+        "export interface InvoiceLine {",
+        "    readonly quantity: number;",
+        "    readonly unitPriceCents: number;",
+        "}",
+        "",
+        "export function calculateInvoiceTotal(lines: readonly InvoiceLine[]): number {",
+        "    return lines.reduce((total, line) => total + line.quantity * line.unitPriceCents, 0);",
+        "}",
+        "",
+    ].join("\n"));
+}
+
+async function assertOfflineJourneySearch(
+    session: { callTool(name: string, args: Record<string, unknown>): Promise<{ isError?: boolean; content?: unknown }> },
+    fixtureRepo: string,
+    expectedProvider: "lateon" | "none",
+): Promise<{ publicationId: string }> {
+    const start = readToolJson(await session.callTool("manage_index", { action: "create", path: fixtureRepo }));
+    const started = readIndexOperation(start);
+    const deadline = Date.now() + OFFLINE_JOURNEY_INDEX_TIMEOUT_MS;
+    let publication: { publicationId: string } | undefined;
+    while (Date.now() < deadline) {
+        const status = readToolJson(await session.callTool("manage_index", { action: "status", path: fixtureRepo }));
+        const operation = readIndexOperation(status);
+        if (operation?.phase === "failed" || operation?.phase === "blocked") {
+            throw new Error(`Packed offline journey indexing ${operation.phase}: ${JSON.stringify(status)}`);
+        }
+        if (operation?.phase === "completed" && (!started || operation.id === started.id)) {
+            publication = readIndexPublication(status);
+            if (!publication) {
+                throw new Error("Packed offline journey indexing completed without a Publication identity.");
+            }
+            break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, OFFLINE_JOURNEY_POLL_INTERVAL_MS));
+    }
+    if (!publication) {
+        if (started) {
+            // Release the live operation before the caller closes the session.
+            await session.callTool("manage_index", {
+                action: "cancel",
+                operationId: started.id,
+                path: fixtureRepo,
+            }).catch(() => undefined);
+        }
+        throw new Error(
+            `Timed out after ${OFFLINE_JOURNEY_INDEX_TIMEOUT_MS}ms waiting for the packed offline journey Publication.`,
+        );
+    }
+
+    const search = readToolJson(await session.callTool("search_codebase", {
+        path: fixtureRepo,
+        query: "Where does the code parse incoming HTTP request headers?",
+        scope: "runtime",
+        resultMode: "grouped",
+        groupBy: "symbol",
+        limit: 10,
+        disclosureLimit: 10,
+        debugMode: "full",
+    }));
+    if (search.status !== "ok") {
+        throw new Error(`Packed offline journey search returned status ${JSON.stringify(search.status)}.`);
+    }
+    const results = Array.isArray(search.results) ? search.results : [];
+    if (results.length === 0) {
+        throw new Error("Packed offline journey search returned no results.");
+    }
+    const files = results.map((result) => asRecord(asRecord(result)?.target)?.file);
+    if (!files.includes("src/http.ts")) {
+        throw new Error(
+            `Packed offline journey search did not return src/http.ts; received ${JSON.stringify(files)}.`,
+        );
+    }
+    const rerank = asRecord(asRecord(asRecord(search.hints)?.debugSearch)?.rerank);
+    const applied = rerank?.applied;
+    const expectedApplied = expectedProvider === "lateon";
+    if (applied !== expectedApplied) {
+        throw new Error(
+            `Packed offline journey reranker applied=${JSON.stringify(applied ?? null)}; `
+            + `expected ${String(expectedApplied)} for ${expectedProvider}.`,
+        );
+    }
+    return publication;
+}
+
+export async function runPackedOfflineJourney(options: {
+    modeHome: string;
+    fixtureRepo: string;
+    baseEnv: NodeJS.ProcessEnv;
+    packageSpecifier: string;
+    runtimeCommand: { command: string; args: string[] };
+    potionAssetsRoot: string;
+    reranker: "none" | undefined;
+    expectedProvider: "lateon" | "none";
+    packedInstall: typeof import("../src/install.js");
+    packedInstallApplication: typeof import("../src/install-application.js");
+    packedClient: typeof import("../src/client.js");
+    packedTerminate: typeof import("../src/terminate.js");
+    packedSharedIdentity: typeof import("../../mcp/src/server/shared-runtime-identity.js");
+    packedSharedLifecycle: typeof import("../../mcp/src/server/shared-runtime-lifecycle.js");
+    onCleanupUncertain?: (reason: string) => void;
+}): Promise<void> {
+    const { modeHome, fixtureRepo } = options;
+    fs.mkdirSync(modeHome, { recursive: true });
+    const journeyEnv: NodeJS.ProcessEnv = {
+        ...isolatedSmokeEnv(modeHome, options.baseEnv),
+        SATORI_STATE_ROOT: path.join(modeHome, "satori-state"),
+        SATORI_SESSION_ROOTS_JSON: JSON.stringify([fixtureRepo]),
+        MCP_ENABLE_WATCHER: "false",
+    };
+    const command = options.reranker === undefined
+        ? { kind: "install" as const, client: "codex" as const, dryRun: false as const, runtime: "offline" as const }
+        : {
+            kind: "install" as const,
+            client: "codex" as const,
+            dryRun: false as const,
+            runtime: "offline" as const,
+            reranker: options.reranker,
+        };
+
+    const failures: unknown[] = [];
+    let session: Awaited<ReturnType<typeof options.packedClient.connectCliMcpSession>> | null = null;
+    let peerSession: Awaited<ReturnType<typeof options.packedClient.connectCliMcpSession>> | null = null;
+    try {
+        const installed = await options.packedInstall.executeInstallCommand(command, {
+            homeDir: modeHome,
+            repoDir: fixtureRepo,
+            env: journeyEnv,
+            packageSpecifier: options.packageSpecifier,
+            runtimeCommand: options.runtimeCommand,
+            potionAssetsRoot: options.potionAssetsRoot,
+            potionModelPath: WORKSPACE_POTION_MODEL_PATH,
+            // The packed runtime lives outside this temporary home, so the
+            // installer's in-home auto-binding does not apply. Bind the same
+            // production verifier the local-runtime installer uses
+            // (scripts/install-local-mcp-runtime.mjs) to the packed closure.
+            preflightDependencies: options.packedInstallApplication.exactRuntimePreflightDependencies(
+                options.runtimeCommand,
+            ),
+        });
+        const provider = installed.runtimeEnvironment?.SATORI_RERANKER_PROVIDER;
+        if (provider !== options.expectedProvider) {
+            throw new Error(
+                `Packed offline install selected reranker ${JSON.stringify(provider ?? null)}; `
+                + `expected ${options.expectedProvider}.`,
+            );
+        }
+        const effectiveEnv = { ...journeyEnv, ...installed.runtimeEnvironment };
+        if (!options.packedSharedIdentity.isSharedOfflineRuntimeEligible(effectiveEnv)) {
+            throw new Error(`Packed offline ${options.expectedProvider} runtime is not eligible for its shared host.`);
+        }
+        const identity = options.packedSharedIdentity.buildSharedRuntimeIdentity(
+            options.runtimeCommand.args[0]!, effectiveEnv,
+        );
+        const sharedPaths = options.packedSharedIdentity.resolveSharedRuntimePaths(identity, effectiveEnv);
+        const readSharedHost = () => {
+            const metadata = options.packedSharedLifecycle.readHostMetadata(sharedPaths.metadataPath);
+            if (!metadata || metadata.sharedRuntimeIdentityHash !== identity.hash
+                || !options.packedSharedLifecycle.isLinuxProcessIdentityLive({
+                    pid: metadata.hostPid, bootId: metadata.bootId, startTime: metadata.processStartTime,
+                })) {
+                throw new Error("Packed managed clients must attach to their live shared host.");
+            }
+            return metadata;
+        };
+        const launcherPath = path.join(modeHome, ".satori", "bin", "satori-mcp.js");
+        if (!fs.existsSync(launcherPath)) {
+            throw new Error(`Packed offline install did not write the managed launcher at ${launcherPath}.`);
+        }
+        const connection = {
+            command: process.execPath,
+            args: [launcherPath],
+            cwd: fixtureRepo,
+            env: journeyEnv,
+            startupTimeoutMs: 30_000,
+            callTimeoutMs: 60_000,
+            writeStderr: (text: string) => process.stderr.write(text),
+        };
+        session = await options.packedClient.connectCliMcpSession(connection);
+        const firstHost = readSharedHost();
+        peerSession = await options.packedClient.connectCliMcpSession(connection);
+        const peerHost = readSharedHost();
+        if (peerHost.hostPid !== firstHost.hostPid || peerHost.bootId !== firstHost.bootId
+            || peerHost.processStartTime !== firstHost.processStartTime
+            || session.launcherPid === firstHost.hostPid || peerSession.launcherPid === firstHost.hostPid) {
+            throw new Error("Packed managed clients did not retain one shared host process.");
+        }
+        const publication = await assertOfflineJourneySearch(session, fixtureRepo, options.expectedProvider);
+        const peerStatus = readToolJson(await peerSession.callTool("manage_index", { action: "status", path: fixtureRepo }));
+        if (readIndexPublication(peerStatus)?.publicationId !== publication.publicationId) {
+            throw new Error("Packed managed clients did not observe the same Publication.");
+        }
+        console.log(
+            `[release:smoke] Packed offline ${options.expectedProvider} journey indexed and searched the fixture repository with two clients sharing host ${firstHost.hostPid}.`,
+        );
+    } catch (error) {
+        failures.push(error);
+    } finally {
+        for (const opened of [peerSession, session]) {
+            try {
+                await opened?.close();
+            } catch (error) {
+                failures.push(error);
+            }
+        }
+        try {
+            const termination = await options.packedTerminate.terminateSatoriServers({
+                homeDir: modeHome,
+                env: journeyEnv,
+            });
+            if (termination.status === "partial" || termination.unverifiedRecordCount > 0) {
+                const reason = `Packed offline journey termination reported ${termination.status} `
+                    + `with ${termination.unverifiedRecordCount} unverified runtime records `
+                    + `for ${modeHome} (state ${journeyEnv.SATORI_STATE_ROOT}).`;
+                options.onCleanupUncertain?.(reason);
+                failures.push(new Error(reason));
+            }
+        } catch (error) {
+            options.onCleanupUncertain?.(
+                `Packed offline journey termination failed for ${modeHome} `
+                + `(state ${journeyEnv.SATORI_STATE_ROOT}): ${error instanceof Error ? error.message : String(error)}`,
+            );
+            failures.push(error);
+        }
+    }
+    if (failures.length === 1) {
+        throw failures[0];
+    }
+    if (failures.length > 1) {
+        throw new Error(failures
+            .map((failure) => failure instanceof Error ? failure.message : String(failure))
+            .join(" | "));
+    }
+}
+
+/*
+ * Two real packed offline journeys: the default LateOn runtime and the explicit
+ * `--reranker none` runtime. Each journey installs into its own temporary home
+ * with the packed installer and connects through the installed managed launcher.
+ * No provider, preflight, or fetch stub replaces real validation.
+ */
+export async function assertPackedManagedOfflineJourneys(input: {
+    packedCliRoot: string;
+    packedMcpRoot: string;
+    installRoot: string;
+    smokeHomeDir: string;
+    baseEnv: NodeJS.ProcessEnv;
+    onCleanupUncertain?: (reason: string) => void;
+}): Promise<void> {
+    if (!isSupportedPackedLinuxHost()) {
+        return;
+    }
+    if (!isPathWithin(input.installRoot, input.packedMcpRoot)) {
+        throw new Error("Packed MCP runtime must live inside the installed release closure.");
+    }
+    const packedMcp = readManifest(path.join(input.packedMcpRoot, "package.json"));
+    if (typeof packedMcp.name !== "string" || packedMcp.name.length === 0) {
+        throw new Error("Packed MCP manifest must declare its package name.");
+    }
+    const packageSpecifier = `${packedMcp.name}@${requireStableVersion(packedMcp.version, "Packed MCP version")}`;
+
+    const installEntry = path.join(input.packedCliRoot, "dist", "install.js");
+    const installApplicationEntry = path.join(input.packedCliRoot, "dist", "install-application.js");
+    const clientEntry = path.join(input.packedCliRoot, "dist", "client.js");
+    const terminateEntry = path.join(input.packedCliRoot, "dist", "terminate.js");
+    const sharedIdentityEntry = path.join(input.packedMcpRoot, "dist", "server", "shared-runtime-identity.js");
+    const sharedLifecycleEntry = path.join(input.packedMcpRoot, "dist", "server", "shared-runtime-lifecycle.js");
+    for (const requiredPath of [installEntry, installApplicationEntry, clientEntry, terminateEntry, sharedIdentityEntry, sharedLifecycleEntry]) {
+        if (!fs.existsSync(requiredPath)) {
+            throw new Error(`Packed CLI module is missing: ${requiredPath}.`);
+        }
+    }
+    // Import the installed closure before any journey starts, so a missing
+    // module fails before temporary state exists.
+    const packedInstall = await import(pathToFileURL(installEntry).href) as typeof import("../src/install.js");
+    const packedInstallApplication = await import(
+        pathToFileURL(installApplicationEntry).href
+    ) as typeof import("../src/install-application.js");
+    const packedClient = await import(pathToFileURL(clientEntry).href) as typeof import("../src/client.js");
+    const packedTerminate = await import(pathToFileURL(terminateEntry).href) as typeof import("../src/terminate.js");
+    const packedSharedIdentity = await import(pathToFileURL(sharedIdentityEntry).href) as typeof import("../../mcp/src/server/shared-runtime-identity.js");
+    const packedSharedLifecycle = await import(pathToFileURL(sharedLifecycleEntry).href) as typeof import("../../mcp/src/server/shared-runtime-lifecycle.js");
+
+    const fixtureRepo = path.join(input.smokeHomeDir, "offline-journey-repository");
+    writeOfflineJourneyFixture(fixtureRepo);
+    const runtimeCommand = {
+        command: process.execPath,
+        args: [path.join(input.packedMcpRoot, "dist", "index.js")],
+    };
+    const potionAssetsRoot = resolvePotionAssetsRoot(input.packedMcpRoot);
+
+    for (const mode of [
+        { id: "offline-lateon", reranker: undefined, expectedProvider: "lateon" as const },
+        { id: "offline-none", reranker: "none" as const, expectedProvider: "none" as const },
+    ]) {
+        await runPackedOfflineJourney({
+            modeHome: path.join(input.smokeHomeDir, mode.id),
+            fixtureRepo,
+            baseEnv: input.baseEnv,
+            packageSpecifier,
+            runtimeCommand,
+            potionAssetsRoot,
+            reranker: mode.reranker,
+            expectedProvider: mode.expectedProvider,
+            packedInstall,
+            packedInstallApplication,
+            packedClient,
+            packedTerminate,
+            packedSharedIdentity,
+            packedSharedLifecycle,
+            onCleanupUncertain: input.onCleanupUncertain,
+        });
+    }
+}
+
+export function cleanupPackedSmokeDirectories(input: {
+    smokePackDir: string;
+    smokeExecDir: string;
+    smokeHomeDir: string;
+    bootstrapRoot: string;
+    preservationReason?: string;
+}): void {
+    fs.rmSync(input.smokePackDir, { recursive: true, force: true });
+    if (input.preservationReason) {
+        console.error(
+            `[release:smoke] ${input.preservationReason} `
+            + `Preserved runtime ${input.smokeExecDir} and home ${input.smokeHomeDir}.`,
+        );
+        fs.rmSync(input.bootstrapRoot, { recursive: true, force: true });
+        return;
+    }
+    fs.rmSync(input.smokeExecDir, { recursive: true, force: true });
+    fs.rmSync(input.smokeHomeDir, { recursive: true, force: true });
+    fs.rmSync(input.bootstrapRoot, { recursive: true, force: true });
+}
+
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
@@ -615,6 +1113,7 @@ async function main(): Promise<void> {
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-exec-"));
     const smokeHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-home-"));
     const bootstrapRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-bootstrap-smoke-"));
+    let smokeStatePreservationReason: string | undefined;
 
     try {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
@@ -646,19 +1145,28 @@ async function main(): Promise<void> {
         assertPackedCliLateOnAcquisition(packed.packedCliRoot);
         assertPackedCliHelp(runCliSmoke(["--format", "json", "--help"], packed.cliEntry, smokeExecDir, baseEnv));
         await assertPackedPotionExecutionCapability(smokeExecDir, packed.packedMcpRoot);
+        await assertPackedNativeProjectionRuntime(smokeExecDir);
         const doctorEnv = packedPotionSmokeEnv(baseEnv, packed.packedMcpRoot, smokeHomeDir);
         assertPackedDoctorReportsNotInstalled(packed.cliEntry, smokeExecDir, doctorEnv);
-        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, and D128 acquisition authority passed.");
+        await assertPackedManagedOfflineJourneys({
+            packedCliRoot: packed.packedCliRoot,
+            packedMcpRoot: packed.packedMcpRoot,
+            installRoot: smokeExecDir,
+            smokeHomeDir,
+            baseEnv,
+            onCleanupUncertain: (reason) => { smokeStatePreservationReason = reason; },
+        });
+        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, D128 acquisition authority, packed native projections, and default/explicit-none offline journeys passed.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";
         console.error(`[release:smoke] ${message}${detail ? ` ${detail}` : ""}`);
         process.exitCode = 1;
     } finally {
-        fs.rmSync(smokePackDir, { recursive: true, force: true });
-        fs.rmSync(smokeExecDir, { recursive: true, force: true });
-        fs.rmSync(smokeHomeDir, { recursive: true, force: true });
-        fs.rmSync(bootstrapRoot, { recursive: true, force: true });
+        cleanupPackedSmokeDirectories({
+            smokePackDir, smokeExecDir, smokeHomeDir, bootstrapRoot,
+            preservationReason: smokeStatePreservationReason,
+        });
     }
 }
 

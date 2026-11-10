@@ -23,7 +23,7 @@
   <a href="https://github.com/ham-zax/satori/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ham-zax/satori/ci.yml?branch=master&style=flat-square&label=CI" alt="CI status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-c9c1b2?style=flat-square" alt="AGPL-3.0 license" /></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522.22-c9c1b2?style=flat-square" alt="Node.js 22.22 or newer" />
-  <img src="https://img.shields.io/badge/Linux%20x64%20%7C%20WSL2-c9c1b2?style=flat-square" alt="Linux x64 and WSL2" />
+  <img src="https://img.shields.io/badge/Linux%20x64%20%7C%20ARM64%20%7C%20WSL2-c9c1b2?style=flat-square" alt="Linux x64, Linux ARM64, and WSL2" />
 </p>
 
 <p align="center">
@@ -34,9 +34,9 @@
 
 ## Start
 
-> **Beta.** Satori supports Linux only for now (x64, including WSL2 on Windows). macOS and native Windows are not supported yet.
+> **Beta.** Satori supports Linux only for now (x64 and ARM64 with glibc, including WSL2 on Windows). macOS and native Windows are not supported yet.
 
-Needs Node.js 22.22+ on Linux x64 or WSL2.
+Needs Node.js 22.22+ on Linux x64, Linux ARM64 with glibc, or WSL2.
 
 ```bash
 npx -y @satori-code/cli@latest install
@@ -64,7 +64,7 @@ If you are a coding agent setting up or using Satori, follow these steps.
 
 **Install**
 
-1. Check the platform: `node -v` must be 22.22 or newer, on Linux x64 or WSL2. Native Windows and macOS are not supported; on Windows, run inside WSL2.
+1. Check the platform: `node -v` must be 22.22 or newer, on Linux x64, Linux ARM64 with glibc, or WSL2. Native Windows and macOS are not supported; on Windows, run inside WSL2.
 2. Run `npx -y @satori-code/cli@latest install`, then `npx -y @satori-code/cli@latest doctor`.
 3. If install reports no supported client, rerun it with `--client codex`, `claude`, `opencode`, `agy`, or `all`.
 4. Tell the user to restart you. The Satori MCP tools load only at agent startup.

@@ -237,7 +237,18 @@ const WORKSPACE_POTION_MODEL_PATH = fileURLToPath(
     new URL("../assets/potion/linux-x64/model/", import.meta.url),
 );
 
-export function resolveInstalledPotionPaths(runtimeRoot: string): {
+/**
+ * The packed Potion gates run on the qualified Linux targets only: Linux x64
+ * and Linux ARM64 with glibc. Other hosts skip them rather than claim a pass.
+ */
+function isSupportedPackedLinuxHost(): boolean {
+    return process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64");
+}
+
+export function resolveInstalledPotionPaths(
+    runtimeRoot: string,
+    architecture: string = process.arch,
+): {
     helperPath: string;
     modelPath: string;
 } {
@@ -248,7 +259,7 @@ export function resolveInstalledPotionPaths(runtimeRoot: string): {
         "mcp",
         "assets",
         "potion",
-        "linux-x64",
+        architecture === "arm64" ? "linux-arm64" : "linux-x64",
     );
     return {
         helperPath: path.join(potionAssetsRoot, "satori-potion"),
@@ -353,7 +364,7 @@ async function main(): Promise<void> {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const tarballPath = packPackage(packageRoot, smokePackDir);
         const packedRuntime = installPackedRuntimeClosure(coreTarballPath, tarballPath, smokeExecDir);
-        if (process.platform === "linux" && process.arch === "x64") {
+        if (isSupportedPackedLinuxHost()) {
             await runPackedPotionSmoke(packedRuntime.runtimeRoot);
         }
         runPackedCoreParserSmoke(packedRuntime.runtimeRoot);

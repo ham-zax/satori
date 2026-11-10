@@ -615,7 +615,7 @@ test('Potion worker isolation contains a native process failure', async (t) => {
 });
 
 test('Potion runtime file validation fails closed when assets are missing', {
-    skip: process.platform !== 'linux' || process.arch !== 'x64',
+    skip: process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64'),
 }, async () => {
     await assert.rejects(
         PotionEmbedding.create({
@@ -629,7 +629,7 @@ test('Potion runtime file validation fails closed when assets are missing', {
 });
 
 test('Potion runtime file validation rejects symlink assets', {
-    skip: process.platform !== 'linux' || process.arch !== 'x64',
+    skip: process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64'),
 }, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'potion-validation-'));
     try {
@@ -720,19 +720,24 @@ const testModuleDirectory = typeof __dirname !== 'undefined' ? __dirname : path.
 
 const defaultRealHelperPath = path.resolve(
     testModuleDirectory,
-    '../../../mcp/assets/potion/linux-x64/satori-potion',
+    `../../../mcp/assets/potion/linux-${process.arch}/satori-potion`,
 );
+// The model bytes are architecture-neutral, so every Linux host shares the x64 model directory.
 const defaultRealModelPath = path.resolve(
     testModuleDirectory,
     '../../../mcp/assets/potion/linux-x64/model',
 );
 const realHelperPath = process.env.SATORI_POTION_TEST_HELPER || (
-    process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(defaultRealHelperPath)
+    process.platform === 'linux'
+        && (process.arch === 'x64' || process.arch === 'arm64')
+        && fs.existsSync(defaultRealHelperPath)
         ? defaultRealHelperPath
         : undefined
 );
 const realModelPath = process.env.SATORI_POTION_TEST_MODEL || (
-    process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(defaultRealModelPath)
+    process.platform === 'linux'
+        && (process.arch === 'x64' || process.arch === 'arm64')
+        && fs.existsSync(defaultRealModelPath)
         ? defaultRealModelPath
         : undefined
 );

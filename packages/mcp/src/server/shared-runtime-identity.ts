@@ -127,7 +127,7 @@ export function isSharedOfflineRuntimeEligible(
         && env.EMBEDDING_PROVIDER === "Potion"
         && env.VECTOR_STORE_PROVIDER === "LanceDB"
         && platform === "linux"
-        && architecture === "x64";
+        && (architecture === "x64" || architecture === "arm64");
 }
 
 function resolveLateOnRequestContractDigest(env: NodeJS.ProcessEnv): string {

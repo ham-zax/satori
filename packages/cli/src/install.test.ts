@@ -588,6 +588,71 @@ test("Linux arm64 glibc offline install selects the packaged ARM helper with --r
     });
 });
 
+/**
+ * An explicit `potionAssetsRoot` owns helper selection even when the installer
+ * installs the candidate runtime and therefore learns a bundled asset root.
+ */
+test("candidate install preserves an explicit potion asset root", async () => {
+    await withTempHome(async (homeDir) => {
+        const explicitAssetsRoot = path.join(homeDir, "explicit-potion-assets");
+        fs.mkdirSync(explicitAssetsRoot, { recursive: true });
+        for (const file of ARM64_POTION_ASSET_FILES) {
+            fs.copyFileSync(path.join(ARM64_POTION_ASSETS_ROOT, file), path.join(explicitAssetsRoot, file));
+        }
+        fs.chmodSync(path.join(explicitAssetsRoot, "satori-potion"), 0o755);
+
+        let installedPackageRoot: string | undefined;
+        let candidateProbes = 0;
+        let preflightAssetsRoot: string | undefined;
+        const result = await executeInstallCommandProduction({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+            reranker: "none",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@satori-code/mcp@0.0.0-arm64-test",
+            platform: "linux",
+            architecture: "arm64",
+            libc: "gnu",
+            potionAssetsRoot: explicitAssetsRoot,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
+            modelRetryDelaysMs: [],
+            execFileSyncImpl: ((_command: string, args: string[]) => {
+                installedPackageRoot = writeArm64RuntimePackage(
+                    args[args.indexOf("--prefix") + 1]!,
+                    { mcp: "0.0.0-arm64-test", core: "0.0.0-core-test" },
+                );
+                return "";
+            }) as never,
+            preflightRunner: async (input) => {
+                preflightAssetsRoot = input.potionAssetsRoot;
+                return { runtimeEnvironment: planInstallRuntimeEnvironment(input) };
+            },
+            preflightDependencies: {
+                probeCandidateRuntime: async () => {
+                    candidateProbes += 1;
+                },
+            },
+        });
+
+        assert.ok(installedPackageRoot, "the candidate runtime must be installed");
+        assert.equal(candidateProbes, 1);
+        assert.equal(preflightAssetsRoot, explicitAssetsRoot);
+        assert.equal(
+            result.runtimeEnvironment?.POTION_HELPER_PATH,
+            path.join(explicitAssetsRoot, "satori-potion"),
+        );
+        assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "none");
+        assert.equal(
+            parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv.POTION_HELPER_PATH,
+            path.join(explicitAssetsRoot, "satori-potion"),
+        );
+    });
+});
+
 test("Linux arm64 glibc dry-run preflight selects the packaged ARM helper without installing", async () => {
     await withTempHome(async (homeDir) => {
         let installCalls = 0;

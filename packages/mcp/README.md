@@ -17,7 +17,7 @@ npx -y @satori-code/cli@latest doctor
 opt-in, and `--client all` configures every supported client. A persistent `satori` command is optional:
 `npm install -g @satori-code/cli@latest`.
 
-The qualified default offline path supports Linux x64, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
+The qualified default offline path supports Linux x64 and Linux ARM64 with glibc, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
 
 When installed through the CLI, compatible offline Potion + LanceDB clients
 share one private local host, provider/LanceDB state, and one Potion worker. Each
@@ -193,7 +193,7 @@ its results are advisory and do not establish complete impact coverage.
 - Under `debugMode=full`, candidate survival records per-document rerank input
   provenance — UTF-8 bytes, SHA-256, candidate role, and projection identities —
   never source text.
-- Managed offline Potion + LanceDB clients on Linux x64/WSL2 share one private
+- Managed offline Potion + LanceDB clients on Linux x64/WSL2 and Linux ARM64 with glibc share one private
   local host. Connected providers and Milvus keep the direct per-client lifecycle.
 - LateOn projection-v4 D32 is the semantic reranking contract whenever LateOn
   is selected. Managed offline installs bind

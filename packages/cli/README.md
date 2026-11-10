@@ -6,7 +6,7 @@ The CLI installs one managed MCP runtime, writes a stable launcher under `~/.sat
 
 ## Quick Start
 
-Offline on Linux x64 or Windows through WSL2, no global install required:
+Offline on Linux x64, Linux ARM64 with glibc, or Windows through WSL2, no global install required:
 
 ```bash
 npx -y @satori-code/cli@latest install
@@ -38,7 +38,7 @@ custom server named `satori` stops installation before runtime downloads.
 The package installs the `satori` command. Run `satori` without arguments for
 human-readable help.
 
-For the default offline Potion + LanceDB runtime on Linux x64/WSL2, LateOn D32
+For the default offline Potion + LanceDB runtime on Linux x64/WSL2 and Linux ARM64 with glibc, LateOn D32
 reranks the bounded query-time candidate set. The installer downloads its pinned Apache-2.0 model closure once
 into `~/.satori/models/`, verifies every artifact, and reuses it across MCP
 upgrades. `--reranker none` is the explicit opt-out: it keeps the selected

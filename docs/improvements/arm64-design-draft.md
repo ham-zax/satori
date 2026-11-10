@@ -441,3 +441,83 @@ Require termination to report `terminated` or `not_running`, not `partial`, befo
 Keep the existing not-installed doctor smoke in its own untouched temporary home.
 Add focused negative checks for missing host helper and native dependencies, plus unchanged size-budget enforcement on supported Linux hosts.
 Full packed CLI/MCP smoke runs on x64 and ARM remain mandatory after implementation.
+
+### Three confirmed follow-up findings
+
+The user authorizes a separate worker for three bounded corrections while Phase 4 continues.
+Use Pi `opencode2api/deepseek-v4.1-flash-free` with thinking `max`, per the updated provider instruction.
+Own only the two Potion real-helper test files, the candidate-install override line and its regression test, and the improvement-index status row.
+The real-helper tests must select the native x64 or ARM64 helper and keep the shared x64 model directory. Both helper and model eligibility gates change.
+The candidate installer must preserve an explicit `potionAssetsRoot`, including when no `runtimeCommand` is supplied. The overwrite predates the ARM change.
+The status row must say Phases 1–3 are integrated and packed acceptance remains pending.
+These paths do not overlap the running Phase 4 worker's files. Defer test/build execution to avoid concurrent heavy jobs.
+The coordinator will run focused tests, including native ARM real-helper and pool parity tests, after the packed smoke worker finishes.
+
+### Phase 4 handoff and parent review
+
+Worker output: `/home/hamza/.t3/worktrees/satori/t3-adb7df67-0c1dffcb8f4311c1`, ten allowed files. Parent integration remains pending.
+Worker reports both real x64 packed smokes pass, including default LateOn and explicit-none index/search journeys and packed native projections.
+Reported installed runtime size is 970,901,721 bytes, below the unchanged 1,006,632,960-byte budget.
+Worker reports smoke unit tests, package builds, `pnpm run check`, and MCP docs check pass. The coordinator still checks the handoff independently.
+The packed-graph release check fails because core/MCP 0.11.0 already exist in the registry with different bytes. A future release requires version changes.
+The coordinator accepts the out-of-home runtime binding to packed `exactRuntimePreflightDependencies`, matching the existing local installer.
+Dynamic import in the smoke test avoids importing a file outside the CLI TypeScript rootDir and changes no production contract.
+A fresh temporary npm cache avoids the worker's stale-cache ETARGET error without changing code or the operator cache.
+Parent inspection finds that failed/unverified termination currently reaches unconditional main cleanup of runtime/home directories.
+That path contradicts the required preservation of diagnostics/state when cleanup cannot prove termination. Spec review must assess this concrete failure path.
+Native product-check source transfer completes successfully under `/home/ubuntu/arm64-qualification.fysrxa/product-check`.
+It contains commit3934bc32 before the Phase4 working patch. Existing server checkout and user runtime remain untouched.
+Next: apply the candidate patch to that temporary source, run native builds and packed smokes, and finish independent review.
+
+The Phase4 patch now transfers to the temporary ARM product source. Frozen dependency installation and core/MCP/CLI builds start serially.
+A managed shell session owns that job. Resume its returned session before starting any additional heavy work on ARM.
+
+### Parent corrections after Phase 4 spec review
+
+The coordinator accepts the cleanup and landing-support findings. The advisory resolver change conflicts with the accepted legacy path-helper contract and is rejected.
+No current unsupported target bypasses the adjacent host gate. Keep that gate as the admission owner.
+The cleanup regression first fails because the owner record disappears after a simulated partial termination.
+The coordinator adds per-invocation preservation reporting to the existing journey/main owner and a narrow cleanup function for the filesystem invariant.
+No module-global flag or new persistent state is added. Partial, unverified, and thrown termination failures preserve runtime/home evidence.
+Seven CLI smoke unit tests pass, including all three deterministic cleanup-failure cases. CLI typecheck passes.
+The coordinator synchronizes both missed landing-page phrases and all six current support statements in `docs/REFERENCE.md`. Historical measurements remain intact.
+
+The five review-fix files integrate byte-for-byte. The new candidate-override regression passes and fails when the override operand is removed. Source is restored.
+Real native ARM execution confirms all three helper conformance cases and pool parity run. Two older file-validation cases initially still skip on ARM.
+Those two validation guards now admit ARM as well, preserving their existing assertions. The native job reruns the complete focused component set.
+
+The shared-host question exposes a real remaining parity gap: `isSharedOfflineRuntimeEligible` admits x64 only.
+Its owning predicate now admits Linux ARM64. No identity, lease, lifecycle, or libc policy changes.
+A new eligibility matrix fails before that one-line repair and passes afterward, preserving disabled/connected/non-Potion/non-LanceDB/unsupported-host rejection.
+The packed offline journeys now connect two managed clients, check one live host identity, and require both to observe the same Publication. Both sessions close before termination.
+The ARM CI job now includes pool parity and runs the focused core files serially. YAML parses, existing jobs compare equal, and all new shell snippets pass shellcheck.
+
+Integrated builds and `pnpm run check` pass. Existing lint warnings remain outside the changed lines.
+Native final builds, CLI smoke-unit tests, and shared-identity/lifecycle tests pass on ARM. Packed default/none sharing proof starts next with a fresh task-owned npm cache.
+Local combined shared-host/transport checks and installer/smoke tests run before final review.
+
+### Final live checks and review
+
+Parent focused checks pass: CLI installer107 plus smoke-unit7, total114. MCP shared identity/host/transport43 pass.
+Native final source builds and component checks pass. Native packed CLI then MCP checks run in managed shell session62323.
+The updated x64 packed CLI check runs in session87668, log `/tmp/satori-arm64-packed.QSwklZ.log`, task cache `/tmp/satori-arm64-npm.Jike4K`.
+Do not restart these active commands. Resume their managed sessions.
+The source under review is now the parent working tree against commit3934bc32, including Phase4 corrections, the five review fixes, and shared-host parity.
+Remaining acceptance: observe both real packed runs, run the ARM skip-gate mutation check after the native packed job exits, finish independent quality review, and commit the verified final patch.
+Release graph remains blocked on version reuse. Publishing and release version changes remain outside the authorized implementation scope.
+
+### Paused by user
+
+The user asks to pause and intends to perform ARM acceptance testing after the local handoff. Do not resume testing from automated notifications.
+All parent-launched build/test commands finish. No new ARM checks start.
+Updated x64 packed CLI smoke passes, including both two-client shared-host journeys.
+Native ARM component checks pass49/49, CLI smoke-unit7/7, shared identity/lifecycle8/8.
+The ARM packed CLI command fails its unchanged960MiB size gate at1,170,578,518bytes, so the chained MCP smoke does not run.
+Measured native dependency metadata identifies LanceDB ARM413,059,581bytes versus x64211,640,370bytes as the dominant size difference.
+A retained diagnostic closure at `/home/ubuntu/arm64-qualification.fysrxa/closure-probe-mzeQ1e` measures1,170,578,356bytes and independently passes real ARM Potion, projection, default-LateOn/none and two-client sharing checks. That is not a full size-gated smoke pass.
+That diagnostic command exits0 and scoped host termination completes. The size cap remains unchanged.
+An unapplied proposal at `/tmp/satori-arm64-budget-proposal-sw5l1h00.diff` would keep x64960MiB and use ARM1152MiB. It has no approval and must not be applied silently.
+Final review text reports no critical/important defect and two minor items: stale D32 label on the changed CLI README line, and unconditional success wording for skipped host-gated smoke checks.
+A subsequent interruption notification does not authorize restarting the reviewer or continuing work.
+On explicit resume, finish only local review corrections, appropriate focused checks, scope check and final commit/handoff. The user owns further ARM acceptance runs.
+Task-created caches/source copies and diagnostic logs remain for cleanup during that local handoff.

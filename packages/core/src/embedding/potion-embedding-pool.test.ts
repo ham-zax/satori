@@ -109,12 +109,17 @@ test('Potion pool closes a helper that finishes starting after close', async () 
     void results;
 });
 
-const defaultRealHelperPath = path.resolve(__dirname, '../../../mcp/assets/potion/linux-x64/satori-potion');
+const defaultRealHelperPath = path.resolve(__dirname, `../../../mcp/assets/potion/linux-${process.arch}/satori-potion`);
+// The model bytes are architecture-neutral, so every Linux host shares the x64 model directory.
 const defaultRealModelPath = path.resolve(__dirname, '../../../mcp/assets/potion/linux-x64/model');
 const realHelperPath = process.env.SATORI_POTION_TEST_HELPER
-    || (process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(defaultRealHelperPath) ? defaultRealHelperPath : undefined);
+    || (process.platform === 'linux'
+        && (process.arch === 'x64' || process.arch === 'arm64')
+        && fs.existsSync(defaultRealHelperPath) ? defaultRealHelperPath : undefined);
 const realModelPath = process.env.SATORI_POTION_TEST_MODEL
-    || (process.platform === 'linux' && process.arch === 'x64' && fs.existsSync(defaultRealModelPath) ? defaultRealModelPath : undefined);
+    || (process.platform === 'linux'
+        && (process.arch === 'x64' || process.arch === 'arm64')
+        && fs.existsSync(defaultRealModelPath) ? defaultRealModelPath : undefined);
 
 test('pinned helper pool returns the same vectors as one helper', {
     skip: !realHelperPath || !realModelPath,

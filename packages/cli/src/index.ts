@@ -327,7 +327,7 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64)",
+            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64 and Linux ARM64 with glibc)",
             "version (-v, --version)",
             "upgrade",
             "terminate",

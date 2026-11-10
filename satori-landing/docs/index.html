@@ -650,7 +650,7 @@
         </p>
         <div class="docs-hero-note">
           <span>Default managed path</span>
-          <strong>Potion + BM25 + LateOn + LanceDB · Beta · Linux x64 / WSL2 only for now · no model API key after install</strong>
+          <strong>Potion + BM25 + LateOn + LanceDB · Beta · Linux x64/WSL2 and Linux ARM64 with glibc · no model API key after install</strong>
         </div>
         <nav class="quick-links docs-path-links" aria-label="Docs learning path">
           <a href="#start">Start here</a>
@@ -1000,7 +1000,7 @@ profile = "minimal"</code></pre>
             <pre><code>npx -y @satori-code/cli@latest install --runtime offline</code></pre>
             <p>
               Uses local Potion embeddings with BM25 and LanceDB. Qualified Linux
-              x64/WSL2 installs default to LateOn reranking; add
+              x64/WSL2 and Linux ARM64 with glibc installs default to LateOn reranking; add
               <code>--reranker none</code> to disable neural reranking, or see
               <a href="#reranker">Choose a Reranker</a> for Voyage. Once installed,
               the qualified offline runtime requires no model API key and is designed
@@ -1053,7 +1053,7 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
             <pre><code>satori reranker use lateon</code></pre>
             <p>
               Local CPU reranking. Free, no API key, and no network requests.
-              Offline runtime on Linux x64/WSL2 only. <code>offline</code> is
+              Offline runtime on Linux x64/WSL2 and Linux ARM64 with glibc only. <code>offline</code> is
               another spelling of <code>lateon</code>.
             </p>
           </div>

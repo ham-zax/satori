@@ -244,10 +244,11 @@ export async function executeInstallCommand(
                         },
                     );
                     installedRuntimeCommand = managedRuntimeCandidate.command;
-                    potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot, {
-                        platform: options.platform,
-                        architecture: options.architecture,
-                    });
+                    potionAssetsRoot = options.potionAssetsRoot
+                        ?? resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot, {
+                            platform: options.platform,
+                            architecture: options.architecture,
+                        });
                 }
                 const potionModelPath = command.runtime === "offline"
                     ? options.potionModelPath ?? await resolveVerifiedPotionModel(

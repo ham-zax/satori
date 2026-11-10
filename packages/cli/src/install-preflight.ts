@@ -13,6 +13,7 @@ import {
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
 import { RERANKER_PROVIDERS } from "./reranker-providers.js";
+import { detectLinuxLibc } from "./managed-runtime-closure.js";
 import { assertSafeModelArtifactPath, resolveModelDirectory, type ModelSpec } from "./model-store.js";
 import {
     createCandidateStderrCollector,
@@ -26,7 +27,10 @@ import type { InstallReranker } from "./reranker-providers.js";
 
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
+// Trusted manifest digests, one per supported host target. Selection uses the
+// resolved host target only; never a field from the candidate manifest.
 const POTION_MANIFEST_SHA256 = "07a369a32bb7e182781405aa9c1d2a7935ae2fe2425771bd202a7457d58a2d2c";
+const POTION_ARM64_MANIFEST_SHA256 = "cce859477d65084b22823a0828db3de907a5dcebcb954b8a123ec605cbaa1cbd";
 
 export interface InstallPreflightInput {
     runtime: InstallRuntime;
@@ -46,7 +50,11 @@ export interface InstallPreflightInput {
     cbmExtendedPath?: string;
     platform?: NodeJS.Platform;
     architecture?: string;
+    libc?: "gnu" | "musl";
 }
+
+/** The host target that selects packaged Potion artifacts. */
+type PotionInstallTarget = Pick<InstallPreflightInput, "platform" | "architecture" | "libc">;
 
 export interface InstallPreflightResult {
     runtimeEnvironment: Readonly<Record<string, string>>;
@@ -55,7 +63,7 @@ export interface InstallPreflightResult {
 export interface InstallPreflightDependencies {
     fetchImpl?: typeof fetch;
     probeLanceDb?: (databasePath: string) => Promise<void>;
-    verifyPotionRuntime?: (assetsRoot: string, modelPath: string) => Promise<void>;
+    verifyPotionRuntime?: (assetsRoot: string, modelPath: string, target?: PotionInstallTarget) => Promise<void>;
     probeCandidateRuntime?: (input: ManagedRuntimeCandidateProbeInput) => Promise<void>;
 }
 
@@ -121,8 +129,19 @@ function sha256File(filePath: string): string {
     return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-/** Reads the runtime's Potion manifest and proves it is the pinned authority. */
-function readPinnedPotionManifest(assetsRoot: string): PotionArtifactManifest {
+/** The pinned manifest digest for the resolved host target. */
+function pinnedPotionManifestSha256(architecture: string): string {
+    return architecture === "arm64" ? POTION_ARM64_MANIFEST_SHA256 : POTION_MANIFEST_SHA256;
+}
+
+/** Reads the runtime's Potion manifest and proves it is the pinned authority for the host. */
+function readPinnedPotionManifest(
+    assetsRoot: string,
+    target: PotionInstallTarget = {},
+): PotionArtifactManifest {
+    assertSupportedPotionPlatform(target);
+    const platform = target.platform ?? process.platform;
+    const architecture = target.architecture ?? process.arch;
     if (!path.isAbsolute(assetsRoot)) {
         throw new Error("Potion asset root must be absolute.");
     }
@@ -130,7 +149,7 @@ function readPinnedPotionManifest(assetsRoot: string): PotionArtifactManifest {
     let manifest: PotionArtifactManifest;
     try {
         const manifestBytes = fs.readFileSync(manifestPath);
-        if (crypto.createHash("sha256").update(manifestBytes).digest("hex") !== POTION_MANIFEST_SHA256) {
+        if (crypto.createHash("sha256").update(manifestBytes).digest("hex") !== pinnedPotionManifestSha256(architecture)) {
             throw new Error("checksum mismatch");
         }
         manifest = JSON.parse(manifestBytes.toString("utf8")) as PotionArtifactManifest;
@@ -139,8 +158,8 @@ function readPinnedPotionManifest(assetsRoot: string): PotionArtifactManifest {
     }
     if (
         manifest.schemaVersion !== 1
-        || manifest.platform !== "linux"
-        || manifest.architecture !== "x64"
+        || manifest.platform !== platform
+        || manifest.architecture !== architecture
         || manifest.model?.identity !== POTION_MODEL_ID
         || !Array.isArray(manifest.files)
     ) {
@@ -164,8 +183,8 @@ function readPinnedPotionManifest(assetsRoot: string): PotionArtifactManifest {
 }
 
 /** The Hugging Face model closure pinned by the runtime's Potion manifest. */
-export function readPotionModelSpec(assetsRoot: string): ModelSpec {
-    const manifest = readPinnedPotionManifest(assetsRoot);
+export function readPotionModelSpec(assetsRoot: string, target: PotionInstallTarget = {}): ModelSpec {
+    const manifest = readPinnedPotionManifest(assetsRoot, target);
     return Object.freeze({
         id: "potion",
         label: "Potion embedding model",
@@ -197,8 +216,9 @@ export async function verifyBundledPotionRuntime(
     assetsRoot: string,
     modelPath: string,
     loadCore: () => Promise<PotionRuntimeCoreModule>,
+    target: PotionInstallTarget = {},
 ): Promise<void> {
-    const manifest = readPinnedPotionManifest(assetsRoot);
+    const manifest = readPinnedPotionManifest(assetsRoot, target);
     for (const artifact of manifest.files) {
         if (artifact.path.startsWith(POTION_MODEL_ARTIFACT_PREFIX)) continue;
         const artifactPath = path.join(assetsRoot, artifact.path);
@@ -244,12 +264,16 @@ export async function verifyBundledPotionRuntime(
     await embedding.close();
 }
 
-export function assertSupportedPotionPlatform(input: Pick<InstallPreflightInput, "platform" | "architecture">): void {
+export function assertSupportedPotionPlatform(input: PotionInstallTarget): void {
     const platform = input.platform ?? process.platform;
     const architecture = input.architecture ?? process.arch;
-    if (platform !== "linux" || architecture !== "x64") {
+    const libc = input.libc ?? detectLinuxLibc();
+    const supported = platform === "linux"
+        && (architecture === "x64" || (architecture === "arm64" && libc === "gnu"));
+    if (!supported) {
+        const runtime = platform === "linux" ? `/${libc}` : "";
         throw new Error(
-            `Potion offline installation supports Linux x64; received ${platform} ${architecture}.`,
+            `Potion offline installation supports Linux x64 and Linux arm64 glibc; received ${platform} ${architecture}${runtime}.`,
         );
     }
 }
@@ -746,7 +770,7 @@ export async function runInstallPreflight(
     if (!dependencies.verifyPotionRuntime) {
         throw new Error("Potion preflight requires the staged Satori runtime verifier.");
     }
-    await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath);
+    await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath, input);
     await verifyVoyageReranker(input, dependencies);
     return { runtimeEnvironment: proposedEnvironment };
 }

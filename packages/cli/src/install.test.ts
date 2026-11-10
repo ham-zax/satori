@@ -33,13 +33,19 @@ import {
     writeLateOnModelDirectory,
 } from "./test-fixtures/lateon-fixture.js";
 import { plannedCbmExtendedDirectory } from "./cbm-extractor-store.js";
-import { planInstallRuntimeEnvironment } from "./install-preflight.js";
+import {
+    planInstallRuntimeEnvironment,
+    verifyBundledPotionRuntime,
+    type PotionRuntimeCoreModule,
+} from "./install-preflight.js";
 import { loadAcquisitionAuthority } from "./lateon-model-store.js";
 import { formatInstallText } from "./install-format.js";
 import { upgradeRuntimeSelection } from "./runtime-upgrade.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const POTION_ASSETS_ROOT = path.resolve(PACKAGE_ROOT, "../mcp/assets/potion/linux-x64");
+const ARM64_POTION_ASSETS_ROOT = path.resolve(PACKAGE_ROOT, "../mcp/assets/potion/linux-arm64");
+const ARM64_POTION_ASSET_FILES = ["manifest.json", "satori-potion", "MODEL_CARD.md", "MODEL2VEC_RS_LICENSE"] as const;
 const POSTFLIGHT_MCP_RUNTIME_FIXTURE = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "test-fixtures",
@@ -484,6 +490,245 @@ test("managed Potion upgrade uses the staged Core preflight verifier", async () 
     await withTempHome(async (homeDir) => {
         const environment = await runOfflineUpgradeWithProductionPreflight(homeDir);
         assert.equal(environment.EMBEDDING_PROVIDER, "Potion");
+    });
+});
+
+/**
+ * Writes the runtime shape a real npm install produces for a Linux arm64 host,
+ * including the packaged ARM64 Potion assets the installer must select.
+ */
+function writeArm64RuntimePackage(
+    runtimeRoot: string,
+    versions: { mcp: string; core: string },
+): string {
+    const mcpRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
+    const coreRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "core");
+    fs.mkdirSync(path.join(mcpRoot, "dist"), { recursive: true });
+    fs.mkdirSync(coreRoot, { recursive: true });
+    fs.writeFileSync(path.join(mcpRoot, "package.json"), JSON.stringify({
+        name: "@satori-code/mcp",
+        version: versions.mcp,
+        bin: { satori: "dist/index.js" },
+    }), "utf8");
+    fs.writeFileSync(path.join(mcpRoot, "dist", "index.js"), "", "utf8");
+    fs.writeFileSync(path.join(coreRoot, "package.json"), JSON.stringify({
+        name: "@satori-code/core",
+        version: versions.core,
+        exports: {
+            ".": "./index.mjs",
+            "./package.json": "./package.json",
+        },
+    }), "utf8");
+    fs.writeFileSync(path.join(coreRoot, "index.mjs"), [
+        "export async function restoreVerifiedOwnerExecutableBit() {}",
+        "export const PotionEmbedding = { async create() { return { async close() {} }; } };",
+        "",
+    ].join("\n"), "utf8");
+    const assetsRoot = path.join(mcpRoot, "assets", "potion", "linux-arm64");
+    fs.mkdirSync(assetsRoot, { recursive: true });
+    for (const file of ARM64_POTION_ASSET_FILES) {
+        fs.copyFileSync(path.join(ARM64_POTION_ASSETS_ROOT, file), path.join(assetsRoot, file));
+    }
+    fs.chmodSync(path.join(assetsRoot, "satori-potion"), 0o755);
+    return mcpRoot;
+}
+
+const simulatedArmPotionCore = async (): Promise<PotionRuntimeCoreModule> => ({
+    restoreVerifiedOwnerExecutableBit: async () => undefined,
+    PotionEmbedding: {
+        async create() {
+            return { async close() {} };
+        },
+    },
+});
+
+test("Linux arm64 glibc offline install selects the packaged ARM helper with --reranker none", async () => {
+    await withTempHome(async (homeDir) => {
+        let installedPackageRoot: string | undefined;
+        await executeInstallCommandProduction({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+            reranker: "none",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@satori-code/mcp@0.0.0-arm64-test",
+            platform: "linux",
+            architecture: "arm64",
+            libc: "gnu",
+            potionModelPath: path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            modelRetryDelaysMs: [],
+            execFileSyncImpl: ((_command: string, args: string[]) => {
+                installedPackageRoot = writeArm64RuntimePackage(
+                    args[args.indexOf("--prefix") + 1]!,
+                    { mcp: "0.0.0-arm64-test", core: "0.0.0-core-test" },
+                );
+                return "";
+            }) as never,
+            preflightDependencies: {
+                probeLanceDb: async () => undefined,
+                probeCandidateRuntime: async () => undefined,
+            },
+        });
+
+        assert.ok(installedPackageRoot);
+        const managedEnv = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
+        assert.equal(
+            managedEnv.POTION_HELPER_PATH,
+            path.join(installedPackageRoot, "assets", "potion", "linux-arm64", "satori-potion"),
+        );
+        assert.equal(
+            managedEnv.EMBEDDING_MODEL,
+            "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+        );
+        assert.equal(managedEnv.SATORI_RERANKER_PROVIDER, "none");
+        assert.equal(managedEnv.SATORI_LATEON_MODEL_PATH, undefined);
+    });
+});
+
+test("Linux arm64 glibc dry-run preflight selects the packaged ARM helper without installing", async () => {
+    await withTempHome(async (homeDir) => {
+        let installCalls = 0;
+        const result = await executeInstallCommandProduction({
+            kind: "install",
+            client: "codex",
+            dryRun: true,
+            runtime: "offline",
+            reranker: "none",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@satori-code/mcp@0.0.0-arm64-test",
+            platform: "linux",
+            architecture: "arm64",
+            libc: "gnu",
+            execFileSyncImpl: (() => {
+                installCalls += 1;
+                return "";
+            }) as never,
+        });
+
+        assert.equal(installCalls, 0);
+        assert.equal(result.dryRun, true);
+        assert.equal(
+            result.runtimeEnvironment?.POTION_HELPER_PATH,
+            path.join(
+                homeDir,
+                ".satori",
+                "mcp-runtime",
+                "@satori-code-mcp@0.0.0-arm64-test",
+                "node_modules",
+                "@satori-code",
+                "mcp",
+                "assets",
+                "potion",
+                "linux-arm64",
+                "satori-potion",
+            ),
+        );
+        assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "none");
+        assert.equal(fs.existsSync(launcherPath(homeDir)), false);
+    });
+});
+
+test("managed runtime upgrade selects the packaged ARM helper on Linux arm64 glibc", async () => {
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "offline",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            EMBEDDING_PROVIDER: "Potion",
+            SATORI_RERANKER_PROVIDER: "none",
+        });
+
+        let upgradedPackageRoot: string | undefined;
+        const result = await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+            homeDir,
+            env: {},
+            platform: "linux",
+            architecture: "arm64",
+            libc: "gnu",
+            potionModelPath: path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            modelRetryDelaysMs: [],
+            execFileSyncImpl: ((_command: string, args: string[]) => {
+                upgradedPackageRoot = writeArm64RuntimePackage(
+                    args[args.indexOf("--prefix") + 1]!,
+                    { mcp: UPGRADE_TARGET.mcpVersion, core: UPGRADE_TARGET.coreVersion },
+                );
+                return "";
+            }) as never,
+            preflightDependencies: {
+                probeLanceDb: async () => undefined,
+                probeCandidateRuntime: async () => undefined,
+            },
+        });
+
+        assert.equal(result.status, "upgraded");
+        assert.ok(upgradedPackageRoot);
+        const managedEnv = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
+        assert.equal(
+            managedEnv.POTION_HELPER_PATH,
+            path.join(upgradedPackageRoot, "assets", "potion", "linux-arm64", "satori-potion"),
+        );
+        assert.equal(managedEnv.SATORI_RERANKER_PROVIDER, "none");
+    });
+});
+
+test("Linux arm64 musl rejects before managed package installation", async () => {
+    await withTempHome(async (homeDir) => {
+        let installCalls = 0;
+        await assert.rejects(executeInstallCommandProduction({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+            reranker: "none",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@satori-code/mcp@0.0.0-arm64-test",
+            platform: "linux",
+            architecture: "arm64",
+            libc: "musl",
+            execFileSyncImpl: (() => {
+                installCalls += 1;
+                return "";
+            }) as never,
+        }), /supports Linux x64 and Linux arm64 glibc; received linux arm64\/musl/);
+        assert.equal(installCalls, 0);
+        assert.equal(fs.existsSync(launcherPath(homeDir)), false);
+    });
+});
+
+test("an ARM64 asset root on a simulated x64 host is rejected before activation", async () => {
+    await withTempHome(async (homeDir) => {
+        await assert.rejects(executeInstallCommandProduction({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+            reranker: "none",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@satori-code/mcp@0.0.0-arm64-test",
+            platform: "linux",
+            architecture: "x64",
+            runtimeCommand: fakeRuntimeCommand(homeDir),
+            potionAssetsRoot: ARM64_POTION_ASSETS_ROOT,
+            potionModelPath: path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            preflightDependencies: {
+                probeLanceDb: async () => undefined,
+                verifyPotionRuntime: (assetsRoot, modelPath, target) => verifyBundledPotionRuntime(
+                    assetsRoot,
+                    modelPath,
+                    simulatedArmPotionCore,
+                    target,
+                ),
+            },
+        }), /missing, invalid, or untrusted/);
+        assert.equal(fs.existsSync(launcherPath(homeDir)), false);
     });
 });
 

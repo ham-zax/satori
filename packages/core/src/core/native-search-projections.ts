@@ -31,10 +31,9 @@ export interface Options {
     counts?: Counts;
 }
 const requireAddon = createRequire(__filename);
-const BUNDLED_ADDON_ROOT = resolve(__dirname, '../../assets/native-projections/linux-x64');
 const verifiedBundledAddons = new Map<string, string | undefined>();
 
-/** The bundled linux-x64 addon, only when its bytes match the shipped manifest. */
+/** The bundled addon for one asset root, only when its bytes match the shipped manifest. */
 function verifiedBundledAddonPath(assetRoot: string): string | undefined {
     if (verifiedBundledAddons.has(assetRoot)) return verifiedBundledAddons.get(assetRoot);
     let addonPath: string | undefined;
@@ -55,19 +54,21 @@ function verifiedBundledAddonPath(assetRoot: string): string | undefined {
 
 /**
  * SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS overrides the addon path, and an empty
- * value turns native projections off. Without it, linux-x64 uses the bundled
- * addon. Every other case keeps the TypeScript projections, which give the same output.
+ * value turns native projections off. Without it, linux-x64 and linux-arm64 use
+ * the bundled addon for their own architecture. Every other case keeps the
+ * TypeScript projections, which give the same output.
+ * The optional assetRoot replaces only the automatic per-architecture root.
  */
 export function resolveNativeProjectionAddonPath(
     env: NodeJS.ProcessEnv = process.env,
     platform: NodeJS.Platform = process.platform,
     arch: string = process.arch,
-    assetRoot: string = BUNDLED_ADDON_ROOT,
+    assetRoot?: string,
 ): string | undefined {
     const configured = env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS;
     if (configured !== undefined) return configured || undefined;
-    if (platform !== 'linux' || arch !== 'x64') return undefined;
-    return verifiedBundledAddonPath(assetRoot);
+    if (platform !== 'linux' || (arch !== 'x64' && arch !== 'arm64')) return undefined;
+    return verifiedBundledAddonPath(assetRoot ?? resolve(__dirname, '../../assets/native-projections', `linux-${arch}`));
 }
 
 /** Core loads only an absolute .node path; a failed load keeps the TypeScript projections. */

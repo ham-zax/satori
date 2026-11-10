@@ -277,6 +277,7 @@ export async function activateManagedRuntimeSelection(input: {
         assertSupportedPotionPlatform({
             platform: options.platform,
             architecture: options.architecture,
+            libc: options.libc,
         });
     }
 
@@ -296,7 +297,10 @@ export async function activateManagedRuntimeSelection(input: {
             candidate = installedCandidate;
             options.onUpgradeProgress?.("verifying");
             const potionAssetsRoot = options.potionAssetsRoot
-                ?? resolvePotionAssetsRoot(installedCandidate.packageRoot);
+                ?? resolvePotionAssetsRoot(installedCandidate.packageRoot, {
+                    platform: options.platform,
+                    architecture: options.architecture,
+                });
             const potionModelPath = selection.runtime === "offline"
                 ? options.potionModelPath ?? await resolveVerifiedPotionModel(
                     homeDir,
@@ -306,6 +310,11 @@ export async function activateManagedRuntimeSelection(input: {
                     options.installRetryCommand,
                     selection.effectiveEnv,
                     options.modelRetryDelaysMs,
+                    {
+                        platform: options.platform,
+                        architecture: options.architecture,
+                        libc: options.libc,
+                    },
                 )
                 : undefined;
             const lateOnModel = selection.runtime === "offline" && selection.reranker === "lateon"
@@ -351,6 +360,7 @@ export async function activateManagedRuntimeSelection(input: {
                 cbmExtendedPath,
                 platform: options.platform,
                 architecture: options.architecture,
+                libc: options.libc,
             }, preflightDependencies);
             await (preflightDependencies.probeCandidateRuntime ?? probeManagedRuntimeCandidate)({
                 runtimeCommand: installedCandidate.command,

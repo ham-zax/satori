@@ -55,6 +55,10 @@
         "linux-x64-musl": [
           "@img/sharp-linuxmusl-x64@0.35.5",
           "@img/sharp-libvips-linuxmusl-x64@1.3.4"
+        ],
+        "linux-arm64-gnu": [
+          "@img/sharp-linux-arm64@0.35.5",
+          "@img/sharp-libvips-linux-arm64@1.3.4"
         ]
       }
     }

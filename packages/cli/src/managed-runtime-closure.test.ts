@@ -154,6 +154,46 @@ test("resolves the exact host-native Sharp closure required by LateOn", () => {
     }), []);
 });
 
+test("resolves the exact Linux arm64 GNU Sharp closure required by LateOn", () => {
+    assert.deepEqual(
+        resolveLateOnNativePackages({
+            vectorStore: "LanceDB",
+            lateOn: true,
+            platform: "linux",
+            architecture: "arm64",
+            libc: "gnu",
+        }),
+        [
+            "@img/sharp-linux-arm64@0.35.5",
+            "@img/sharp-libvips-linux-arm64@1.3.4",
+        ],
+    );
+    assert.deepEqual(resolveLateOnNativePackages({
+        vectorStore: "LanceDB",
+        lateOn: false,
+        platform: "linux",
+        architecture: "arm64",
+        libc: "gnu",
+    }), []);
+});
+
+test("rejects a Linux arm64 musl host without a published LateOn Sharp closure", () => {
+    assert.throws(
+        () => resolveLateOnNativePackages({
+            vectorStore: "LanceDB",
+            lateOn: true,
+            platform: "linux",
+            architecture: "arm64",
+            libc: "musl",
+        }),
+        (error: unknown) => (
+            error instanceof CliError
+            && error.token === "E_USAGE"
+            && /unsupported on linux\/arm64\/musl/.test(error.message)
+        ),
+    );
+});
+
 test("rejects a platform without a published oxc-parser native binding", () => {
     assert.throws(
         () => resolveOxcParserNativePackage({
@@ -289,6 +329,34 @@ test("closure identity pins the oxc-parser native binding", () => {
             JSON.stringify({ ...manifest, typeScriptNativePackage: undefined }),
         );
         assert.equal(managedRuntimeClosureMatches(runtimeRoot, closure), false);
+    } finally {
+        fs.rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+});
+
+test("closure identity pins the Linux arm64 GNU Sharp closure for LateOn", () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-runtime-closure-arm64-"));
+    try {
+        const closure = {
+            vectorStore: "LanceDB" as const,
+            lateOn: true,
+            platform: "linux" as const,
+            architecture: "arm64",
+            libc: "gnu" as const,
+        };
+        writeManagedRuntimeClosureManifest(runtimeRoot, closure);
+        const manifest = JSON.parse(fs.readFileSync(path.join(runtimeRoot, ".satori-runtime-closure.json"), "utf8"));
+        assert.equal(manifest.oxcParserNativePackage, `@oxc-parser/binding-linux-arm64-gnu@${oxcParserVersion}`);
+        assert.equal(manifest.typeScriptNativePackage, `@typescript/typescript-linux-arm64@${typeScriptVersion}`);
+        assert.deepEqual(manifest.lateOnNativePackages, [
+            "@img/sharp-linux-arm64@0.35.5",
+            "@img/sharp-libvips-linux-arm64@1.3.4",
+        ]);
+        assert.equal(managedRuntimeClosureMatches(runtimeRoot, closure), true);
+        assert.equal(managedRuntimeClosureMatches(runtimeRoot, {
+            ...closure,
+            libc: "musl",
+        }), false);
     } finally {
         fs.rmSync(runtimeRoot, { recursive: true, force: true });
     }

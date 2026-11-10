@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { buildSearchProjections, type SearchProjectionInput } from './search-projections';
 import {
     buildProjectionBatch,
@@ -233,24 +233,37 @@ test('local cancellation preserves null and cancels every native flag without ab
     assert.throws(() => builder.finish(input(), null), reason => reason === null);
 });
 
-const BUNDLED_ADDON_ROOT = resolve(__dirname, '../../assets/native-projections/linux-x64');
+const PROJECTION_ASSETS_ROOT = resolve(__dirname, '../../assets/native-projections');
+const bundledAddonRoot = (arch: string): string => join(PROJECTION_ASSETS_ROOT, `linux-${arch}`);
+const SHIPPED_TARGETS = [
+    { arch: 'x64', target: 'x86_64-unknown-linux-gnu' },
+    { arch: 'arm64', target: 'aarch64-unknown-linux-gnu' },
+] as const;
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 
-test('the shipped manifest matches every bundled native projection file', () => {
-    const manifest = JSON.parse(readFileSync(join(BUNDLED_ADDON_ROOT, 'manifest.json'), 'utf8')) as {
-        schemaVersion: number; target: string; files: { path: string; bytes: number; sha256: string }[];
-    };
-    assert.equal(manifest.schemaVersion, 1);
-    assert.equal(manifest.target, 'x86_64-unknown-linux-gnu');
-    assert.deepEqual(manifest.files.map(file => file.path), ['projection.node', 'THIRD_PARTY_NOTICES.md']);
-    for (const file of manifest.files) {
-        const bytes = readFileSync(join(BUNDLED_ADDON_ROOT, file.path));
-        assert.equal(bytes.length, file.bytes, file.path);
-        assert.equal(sha256(bytes), file.sha256, file.path);
+test('the shipped manifests match every bundled native projection file', () => {
+    for (const { arch, target } of SHIPPED_TARGETS) {
+        const root = bundledAddonRoot(arch);
+        const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')) as {
+            schemaVersion: number; platform: string; architecture: string; target: string;
+            files: { path: string; bytes: number; sha256: string }[];
+        };
+        assert.equal(manifest.schemaVersion, 1, arch);
+        assert.equal(manifest.platform, 'linux', arch);
+        assert.equal(manifest.architecture, arch, arch);
+        assert.equal(manifest.target, target, arch);
+        assert.deepEqual(manifest.files.map(file => file.path), ['projection.node', 'THIRD_PARTY_NOTICES.md'], arch);
+        for (const file of manifest.files) {
+            // Trust stays manifest-relative: each entry resolves inside its own asset root.
+            assert.equal(isAbsolute(file.path), false, `${arch} ${file.path}`);
+            const bytes = readFileSync(join(root, file.path));
+            assert.equal(bytes.length, file.bytes, `${arch} ${file.path}`);
+            assert.equal(sha256(bytes), file.sha256, `${arch} ${file.path}`);
+        }
     }
 });
 
-test('linux-x64 defaults to the verified bundled addon and every other case keeps its rule', t => {
+test('each supported linux target verifies its own bundled root and every other case keeps its rule', t => {
     const root = mkdtempSync(join(tmpdir(), 'satori-native-addon-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const assetRoot = (name: string, bytes: string, manifestSha: string): string => {
@@ -263,23 +276,40 @@ test('linux-x64 defaults to the verified bundled addon and every other case keep
     const tampered = assetRoot('tampered', 'changed bytes', sha256('addon bytes'));
     const missing = join(root, 'missing');
 
-    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', valid), join(valid, 'projection.node'));
-    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', tampered), undefined);
-    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', missing), undefined);
-    assert.equal(resolveNativeProjectionAddonPath({}, 'darwin', 'x64', valid), undefined);
-    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'arm64', valid), undefined);
-    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '' }, 'linux', 'x64', valid), undefined);
-    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '/explicit/addon.node' }, 'darwin', 'arm64', valid), '/explicit/addon.node');
-    if (process.platform === 'linux' && process.arch === 'x64') {
-        assert.equal(resolveNativeProjectionAddonPath({}), join(BUNDLED_ADDON_ROOT, 'projection.node'));
+    for (const arch of ['x64', 'arm64']) {
+        assert.equal(resolveNativeProjectionAddonPath({}, 'linux', arch, valid), join(valid, 'projection.node'), arch);
+        assert.equal(resolveNativeProjectionAddonPath({}, 'linux', arch, tampered), undefined, arch);
+        assert.equal(resolveNativeProjectionAddonPath({}, 'linux', arch, missing), undefined, arch);
+        assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '' }, 'linux', arch, valid), undefined, arch);
     }
+    for (const [platform, arch] of [['darwin', 'x64'], ['darwin', 'arm64'], ['linux', 'ia32'], ['win32', 'arm64']] as const) {
+        assert.equal(resolveNativeProjectionAddonPath({}, platform, arch, valid), undefined, `${platform}-${arch}`);
+    }
+    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '/explicit/addon.node' }, 'darwin', 'arm64', valid), '/explicit/addon.node');
+    // An explicit path bypasses automatic target detection, including on an unsupported target.
+    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '/explicit/addon.node' }, 'linux', 'ia32', valid), '/explicit/addon.node');
+    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '/explicit/addon.node' }, 'win32', 'arm64', missing), '/explicit/addon.node');
 });
 
-test('the bundled addon produces the reference projections', { skip: process.platform !== 'linux' || process.arch !== 'x64' }, async () => {
+test('the default root selects the packaged directory for each supported architecture', () => {
+    // Resolution reads the adjacent manifest only, so no host loads the other CPU's binary.
+    const resolved = SHIPPED_TARGETS.map(({ arch }) => resolveNativeProjectionAddonPath({}, 'linux', arch));
+    assert.deepEqual(resolved, SHIPPED_TARGETS.map(({ arch }) => join(bundledAddonRoot(arch), 'projection.node')));
+    assert.notEqual(resolved[0], resolved[1]);
+    for (const platform of ['darwin', 'win32', 'freebsd'] as const) {
+        for (const arch of ['x64', 'arm64', 'ia32']) {
+            assert.equal(resolveNativeProjectionAddonPath({}, platform, arch), undefined, `${platform}-${arch}`);
+        }
+    }
+    assert.equal(resolveNativeProjectionAddonPath({}), process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')
+        ? join(bundledAddonRoot(process.arch), 'projection.node') : undefined);
+});
+
+test('the bundled addon produces the reference projections', { skip: process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64') }, async () => {
     const addonPath = resolveNativeProjectionAddonPath({});
     assert.ok(addonPath);
     const addon = loadAddon(addonPath);
-    assert.ok(addon, 'the bundled addon must load on linux-x64');
+    assert.ok(addon, `the bundled addon must load on linux-${process.arch}`);
     const fixtures = [
         input(), input('class HTTPServer { handle_request($req) { return parseJSON(req.body); } }'),
         input('fn main() -> Result<(), Error> { let x_y = 1; }', { language: 'rust', symbolKind: 'function', symbolLabel: 'main' }, 'src/main.rs'),

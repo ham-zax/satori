@@ -224,11 +224,11 @@ export async function verifyPinnedPotionArtifacts(config: {
     helperPath: string;
     modelPath: string;
 }): Promise<void> {
-    if (process.platform !== 'linux' || process.arch !== 'x64') {
+    if (process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
         throw providerError({
             code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
             retryable: false,
-            message: 'The Potion helper supports Linux x64 only.',
+            message: 'The Potion helper supports Linux x64 and Linux arm64 only.',
         });
     }
     if (!path.isAbsolute(config.helperPath) || !path.isAbsolute(config.modelPath)) {

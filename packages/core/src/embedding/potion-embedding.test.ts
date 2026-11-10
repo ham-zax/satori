@@ -657,6 +657,21 @@ test('Potion runtime file validation rejects symlink assets', {
     }
 });
 
+test('Potion runtime file validation accepts the qualified Linux ARM64 target', {
+    skip: process.platform !== 'linux' || process.arch !== 'arm64',
+}, async () => {
+    // The ARM64 gate must pass here, so the failure is the missing helper.
+    await assert.rejects(
+        PotionEmbedding.create({
+            helperPath: path.join(os.tmpdir(), 'missing-potion-helper'),
+            modelPath: path.join(os.tmpdir(), 'missing-potion-model'),
+        }),
+        (error: unknown) => error instanceof EmbeddingProviderError
+            && error.code === 'EMBEDDING_PROVIDER_UNAVAILABLE'
+            && error.message.includes('Pinned Potion helper is unavailable.'),
+    );
+});
+
 test('Potion batch packing correctly handles pathological escaping and near-limit inputs', async (t) => {
     const embedding = await createFakeEmbedding(t, { maxBatchItems: 32 });
     const pathological = [

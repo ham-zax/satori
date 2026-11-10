@@ -4,6 +4,7 @@ import {
     MANAGED_BIN_DIR,
     MANAGED_LAUNCHER_FILE,
     MANAGED_RUNTIME_DIR,
+    type InstallCommandOptions,
     type ManagedRuntimeCommand,
 } from "./install-contracts.js";
 
@@ -32,8 +33,19 @@ export function resolveRuntimePackageRootFromRoot(runtimeRoot: string, packageSp
     return path.join(runtimeRoot, "node_modules", ...packageNameFromSpecifier(packageSpecifier).split("/"));
 }
 
-export function resolvePotionAssetsRoot(packageRoot: string): string {
-    return path.join(packageRoot, "assets", "potion", "linux-x64");
+/**
+ * Selects the packaged Potion helper directory for the runtime target.
+ * This is a path helper only: artifact trust and platform acceptance belong to
+ * the installer preflight, which validates the selected manifest.
+ */
+export function resolvePotionAssetsRoot(
+    packageRoot: string,
+    target: Pick<InstallCommandOptions, "platform" | "architecture"> = {},
+): string {
+    const platform = target.platform ?? process.platform;
+    const architecture = target.architecture ?? process.arch;
+    const directory = platform === "linux" && architecture === "arm64" ? "linux-arm64" : "linux-x64";
+    return path.join(packageRoot, "assets", "potion", directory);
 }
 
 export function resolveRuntimeEntryPath(packageRoot: string, packageJson?: { bin?: unknown; main?: unknown }): string {

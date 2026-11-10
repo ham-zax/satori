@@ -178,11 +178,15 @@ export async function executeInstallCommand(
                 assertSupportedPotionPlatform({
                     platform: options.platform,
                     architecture: options.architecture,
+                    libc: options.libc,
                 });
             }
             const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
             let potionAssetsRoot = options.potionAssetsRoot
-                ?? resolvePotionAssetsRoot(resolveRuntimePackageRoot(homeDir, packageSpecifier));
+                ?? resolvePotionAssetsRoot(resolveRuntimePackageRoot(homeDir, packageSpecifier), {
+                    platform: options.platform,
+                    architecture: options.architecture,
+                });
             let lateOnModel: VerifiedLateOnModel | undefined;
             let lateOnModelPath = requestedLateOnModelPath;
             if (command.dryRun) {
@@ -221,6 +225,7 @@ export async function executeInstallCommand(
                     cbmExtendedPath: plannedCbmExtendedDirectory(homeDir),
                     platform: options.platform,
                     architecture: options.architecture,
+                    libc: options.libc,
                 }) };
             } else {
                 if (!installedRuntimeCommand) {
@@ -239,7 +244,10 @@ export async function executeInstallCommand(
                         },
                     );
                     installedRuntimeCommand = managedRuntimeCandidate.command;
-                    potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot);
+                    potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot, {
+                        platform: options.platform,
+                        architecture: options.architecture,
+                    });
                 }
                 const potionModelPath = command.runtime === "offline"
                     ? options.potionModelPath ?? await resolveVerifiedPotionModel(
@@ -250,6 +258,11 @@ export async function executeInstallCommand(
                         options.installRetryCommand,
                         env,
                         options.modelRetryDelaysMs,
+                        {
+                            platform: options.platform,
+                            architecture: options.architecture,
+                            libc: options.libc,
+                        },
                     )
                     : undefined;
                 if (reranker === "lateon") {
@@ -307,6 +320,7 @@ export async function executeInstallCommand(
                             cbmExtendedPath,
                             platform: options.platform,
                             architecture: options.architecture,
+                            libc: options.libc,
                         },
                         preflightDependencies,
                     );

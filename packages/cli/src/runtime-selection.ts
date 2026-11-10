@@ -7,7 +7,11 @@ import type {
 } from "./args.js";
 import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 import { resolveClientTargets } from "./client-targets.js";
-import { readPotionModelSpec, selectedConnectedVectorStore } from "./install-preflight.js";
+import {
+    readPotionModelSpec,
+    selectedConnectedVectorStore,
+    type InstallPreflightInput,
+} from "./install-preflight.js";
 import {
     hasSatoriClientEntry,
     readClientVectorStore,
@@ -54,12 +58,14 @@ export function resolveOfflineReranker(
     platform: NodeJS.Platform | undefined,
     architecture: string | undefined,
 ): InstallReranker {
-    const isQualifiedPlatform = (platform ?? process.platform) === "linux"
-        && (architecture ?? process.arch) === "x64";
+    const targetPlatform = platform ?? process.platform;
+    const targetArchitecture = architecture ?? process.arch;
+    const isQualifiedPlatform = targetPlatform === "linux"
+        && (targetArchitecture === "x64" || targetArchitecture === "arm64");
     const rejectUnsupportedLateOn = (): never => {
         throw new CliError(
             "E_USAGE",
-            `LateOn D128 is supported only on Linux x64/WSL2; received ${platform ?? process.platform} ${architecture ?? process.arch}. Use --reranker none or a supported platform.`,
+            `LateOn D128 is supported only on Linux x64/WSL2 and Linux arm64 glibc; received ${targetPlatform} ${targetArchitecture}. Use --reranker none or a supported platform.`,
             2,
         );
     };
@@ -252,11 +258,12 @@ export async function resolveVerifiedPotionModel(
     retryCommand?: string,
     env?: NodeJS.ProcessEnv,
     retryDelaysMs?: readonly number[],
+    target: Pick<InstallPreflightInput, "platform" | "architecture" | "libc"> = {},
 ): Promise<string> {
     try {
         const { modelDirectory } = await ensureModel({
             homeDir,
-            spec: readPotionModelSpec(potionAssetsRoot),
+            spec: readPotionModelSpec(potionAssetsRoot, target),
             env,
             fetchImpl,
             onProgress,

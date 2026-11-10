@@ -66,6 +66,10 @@
     "assets/potion/linux-x64/manifest.json",
     "assets/potion/linux-x64/MODEL_CARD.md",
     "assets/potion/linux-x64/MODEL2VEC_RS_LICENSE",
+    "assets/potion/linux-arm64/satori-potion",
+    "assets/potion/linux-arm64/manifest.json",
+    "assets/potion/linux-arm64/MODEL_CARD.md",
+    "assets/potion/linux-arm64/MODEL2VEC_RS_LICENSE",
     "README.md",
     "!dist/**/*.test.*"
   ],

@@ -366,10 +366,11 @@ export function exactRuntimePreflightDependencies(
 ): Pick<InstallPreflightDependencies, "probeLanceDb" | "verifyPotionRuntime"> {
     return {
         probeLanceDb: exactRuntimeLanceDbProbe(runtimeCommand),
-        verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(
+        verifyPotionRuntime: (assetsRoot, modelPath, target) => verifyBundledPotionRuntime(
             assetsRoot,
             modelPath,
             () => loadExactRuntimeCore(runtimeCommand),
+            target,
         ),
     };
 }

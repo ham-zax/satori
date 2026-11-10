@@ -7,17 +7,19 @@ import { fileURLToPath } from "node:url";
 import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { executeInstallCommand as executeInstallCommandProduction, type InstallCommandInput } from "./install.js";
 import {
+    assertSupportedPotionPlatform,
     formatCandidatePreflightFailure,
     probeLanceDbRuntime,
     probeManagedRuntimeCandidate,
     planInstallRuntimeEnvironment,
+    readPotionModelSpec,
     runInstallPreflight,
     verifyBundledPotionRuntime,
     type PotionRuntimeCoreModule,
 } from "./install-preflight.js";
 import { CliError } from "./errors.js";
 import { buildLauncherScript, parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
-import { resolveOfflineReranker } from "./runtime-selection.js";
+import { resolveOfflineReranker, resolveVerifiedPotionModel } from "./runtime-selection.js";
 import {
     CANDIDATE_STDERR_LIMIT_BYTES,
     createCandidateStderrCollector,
@@ -33,9 +35,22 @@ import {
 import { loadAcquisitionAuthority } from "./lateon-model-store.js";
 
 const POTION_ASSETS_ROOT = fileURLToPath(new URL("../../mcp/assets/potion/linux-x64/", import.meta.url));
+const ARM64_POTION_ASSETS_ROOT = fileURLToPath(new URL("../../mcp/assets/potion/linux-arm64/", import.meta.url));
 const loadWorkspaceCore = async (): Promise<PotionRuntimeCoreModule> => (
     import("@satori-code/core") as Promise<PotionRuntimeCoreModule>
 );
+// The qualified ARM64 helper cannot execute on this host. These cases prove
+// target selection and byte integrity; execution is qualified on ARM hardware.
+const loadSimulatedArmCore = async (): Promise<PotionRuntimeCoreModule> => ({
+    restoreVerifiedOwnerExecutableBit: async () => undefined,
+    PotionEmbedding: {
+        async create() {
+            return { async close() {} };
+        },
+    },
+});
+const ARM64_TARGET = { platform: "linux", architecture: "arm64", libc: "gnu" } as const;
+const X64_TARGET = { platform: "linux", architecture: "x64" } as const;
 
 function installRuntimeWithProbeMarker(markerPath: string) {
     return ((_command: string, args: string[]) => {
@@ -790,6 +805,192 @@ test("bundled Potion verification rejects missing artifact when manifest is vali
     }
 });
 
+test("Potion platform acceptance covers Linux x64 and qualified Linux arm64 only", () => {
+    assert.doesNotThrow(() => assertSupportedPotionPlatform({ platform: "linux", architecture: "x64" }));
+    assert.doesNotThrow(() => assertSupportedPotionPlatform({ platform: "linux", architecture: "x64", libc: "musl" }));
+    assert.doesNotThrow(() => assertSupportedPotionPlatform(ARM64_TARGET));
+    assert.throws(
+        () => assertSupportedPotionPlatform({ platform: "linux", architecture: "arm64", libc: "musl" }),
+        /supports Linux x64 and Linux arm64 glibc; received linux arm64\/musl/,
+    );
+    assert.throws(
+        () => assertSupportedPotionPlatform({ platform: "darwin", architecture: "arm64" }),
+        /supports Linux x64 and Linux arm64 glibc; received darwin arm64/,
+    );
+});
+
+test("Linux arm64 glibc offline install selects the pinned ARM helper", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-arm64-preflight-"));
+    try {
+        const result = await runInstallPreflight({
+            runtime: "offline",
+            homeDir,
+            env: {},
+            reranker: "none",
+            potionAssetsRoot: ARM64_POTION_ASSETS_ROOT,
+            potionModelPath: path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            ...ARM64_TARGET,
+        }, {
+            probeLanceDb: async () => undefined,
+            verifyPotionRuntime: (assetsRoot, modelPath, target) => verifyBundledPotionRuntime(
+                assetsRoot,
+                modelPath,
+                loadSimulatedArmCore,
+                target,
+            ),
+        });
+
+        assert.equal(
+            result.runtimeEnvironment.POTION_HELPER_PATH,
+            path.join(ARM64_POTION_ASSETS_ROOT, "satori-potion"),
+        );
+        assert.equal(result.runtimeEnvironment.EMBEDDING_MODEL, POTION_MODEL_ID);
+        assert.equal(result.runtimeEnvironment.EMBEDDING_OUTPUT_DIMENSION, String(POTION_DIMENSION));
+        assert.equal(result.runtimeEnvironment.SATORI_RERANKER_PROVIDER, "none");
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("Linux arm64 musl rejects before artifact verification", async () => {
+    let verificationCalls = 0;
+    await assert.rejects(
+        runInstallPreflight({
+            runtime: "offline",
+            homeDir: "/tmp/satori-potion-arm64-musl",
+            env: {},
+            potionAssetsRoot: ARM64_POTION_ASSETS_ROOT,
+            potionModelPath: path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            platform: "linux",
+            architecture: "arm64",
+            libc: "musl",
+        }, {
+            probeLanceDb: async () => undefined,
+            verifyPotionRuntime: async () => { verificationCalls += 1; },
+        }),
+        /supports Linux x64 and Linux arm64 glibc; received linux arm64\/musl/,
+    );
+    assert.equal(verificationCalls, 0);
+});
+
+test("ARM64 Potion manifest pins the same model identity and artifact closure", () => {
+    const manifest = JSON.parse(
+        fs.readFileSync(path.join(ARM64_POTION_ASSETS_ROOT, "manifest.json"), "utf8"),
+    ) as {
+        schemaVersion: number;
+        platform: string;
+        architecture: string;
+        target: string;
+        files: Array<{ path: string; bytes: number; sha256: string; executable?: boolean }>;
+    };
+    assert.equal(manifest.schemaVersion, 1);
+    assert.equal(manifest.platform, "linux");
+    assert.equal(manifest.architecture, "arm64");
+    assert.equal(manifest.target, "aarch64-unknown-linux-gnu");
+    assert.deepEqual(
+        manifest.files.map((artifact) => artifact.path).sort(),
+        [
+            "MODEL2VEC_RS_LICENSE",
+            "MODEL_CARD.md",
+            "model/config.json",
+            "model/model.safetensors",
+            "model/tokenizer.json",
+            "satori-potion",
+        ],
+    );
+    assert.deepEqual(
+        manifest.files.find((artifact) => artifact.path === "satori-potion"),
+        {
+            path: "satori-potion",
+            bytes: 3937576,
+            sha256: "1ab2ef763651d7f73e4faa0904f7393184d8c476821441005f44439aefc203f2",
+            executable: true,
+        },
+    );
+    assert.deepEqual(
+        readPotionModelSpec(ARM64_POTION_ASSETS_ROOT, ARM64_TARGET),
+        readPotionModelSpec(POTION_ASSETS_ROOT, X64_TARGET),
+    );
+});
+
+test("Potion model acquisition uses the supplied target before fetching", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-model-target-"));
+    try {
+        for (const [assetsRoot, target] of [
+            [ARM64_POTION_ASSETS_ROOT, ARM64_TARGET],
+            [POTION_ASSETS_ROOT, X64_TARGET],
+        ] as const) {
+            let fetchCalls = 0;
+            const fetchImpl: typeof fetch = async () => {
+                fetchCalls += 1;
+                throw new Error("simulated model download stopped");
+            };
+            await assert.rejects(
+                resolveVerifiedPotionModel(
+                    path.join(homeDir, target.architecture),
+                    assetsRoot,
+                    fetchImpl,
+                    undefined,
+                    undefined,
+                    {},
+                    [],
+                    target,
+                ),
+                /simulated model download stopped/,
+            );
+            assert.equal(fetchCalls, 1, `model manifest must accept ${target.architecture} before acquisition`);
+        }
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("ARM64 Potion verification rejects an altered helper", async () => {
+    const assetsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-arm64-tamper-"));
+    try {
+        for (const file of ["manifest.json", "satori-potion", "MODEL_CARD.md", "MODEL2VEC_RS_LICENSE"]) {
+            fs.copyFileSync(path.join(ARM64_POTION_ASSETS_ROOT, file), path.join(assetsRoot, file));
+        }
+        const helperPath = path.join(assetsRoot, "satori-potion");
+        const helperBytes = fs.readFileSync(helperPath);
+        helperBytes[helperBytes.length - 1] = helperBytes[helperBytes.length - 1]! ^ 0xff;
+        fs.writeFileSync(helperPath, helperBytes);
+
+        await assert.rejects(
+            verifyBundledPotionRuntime(
+                assetsRoot,
+                path.join(assetsRoot, "model"),
+                loadSimulatedArmCore,
+                ARM64_TARGET,
+            ),
+            /failed checksum/,
+        );
+    } finally {
+        fs.rmSync(assetsRoot, { recursive: true, force: true });
+    }
+});
+
+test("Potion asset roots from another host target are rejected", async () => {
+    await assert.rejects(
+        verifyBundledPotionRuntime(
+            ARM64_POTION_ASSETS_ROOT,
+            path.join(ARM64_POTION_ASSETS_ROOT, "model"),
+            loadSimulatedArmCore,
+            X64_TARGET,
+        ),
+        /missing, invalid, or untrusted/,
+    );
+    await assert.rejects(
+        verifyBundledPotionRuntime(
+            POTION_ASSETS_ROOT,
+            path.join(POTION_ASSETS_ROOT, "model"),
+            loadSimulatedArmCore,
+            ARM64_TARGET,
+        ),
+        /missing, invalid, or untrusted/,
+    );
+});
+
 test("new offline install persists Potion embeddings and LateOn D128 in the managed launcher", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-install-"));
     const fixture = fixtureLateOnRuntime(homeDir);
@@ -1467,7 +1668,7 @@ test("non-Linux-x64 with explicit lateon rejects", async () => {
             env: {},
             platform: "darwin",
             architecture: "arm64",
-        }), /LateOn D128 is supported only on Linux x64\/WSL2; received darwin arm64/);
+        }), /LateOn D128 is supported only on Linux x64\/WSL2 and Linux arm64 glibc; received darwin arm64/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -2096,6 +2297,95 @@ test("offline reranker selection prefers flag, environment, launcher, then platf
         assert.throws(
             () => resolveOfflineReranker(selection, managedEnvironment, env, "linux", "x64"),
             /VOYAGEAI_API_KEY/,
+        );
+    }
+});
+
+test("Linux x64 and arm64 reranker selection keeps LateOn, none and Voyage precedence", () => {
+    const command = {
+        kind: "install",
+        client: "all",
+        dryRun: false,
+        runtime: "offline",
+    } as const;
+    const managedLateOn = {
+        SATORI_RUNTIME_PROFILE: "offline",
+        SATORI_RERANKER_PROVIDER: "lateon",
+        SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
+    };
+    const managedNone = {
+        SATORI_RUNTIME_PROFILE: "offline",
+        SATORI_RERANKER_PROVIDER: "none",
+    };
+    const managedVoyage = {
+        SATORI_RUNTIME_PROFILE: "offline",
+        SATORI_RERANKER_PROVIDER: "voyage",
+    };
+
+    for (const architecture of ["x64", "arm64"]) {
+        assert.equal(
+            resolveOfflineReranker(command, {}, {}, "linux", architecture),
+            "lateon",
+            `fresh Linux ${architecture} install must default to LateOn`,
+        );
+        assert.equal(
+            resolveOfflineReranker({ ...command, reranker: "lateon" }, {}, {}, "linux", architecture),
+            "lateon",
+        );
+        assert.equal(
+            resolveOfflineReranker(command, {}, { SATORI_RERANKER_PROVIDER: "lateon" }, "linux", architecture),
+            "lateon",
+        );
+        assert.equal(
+            resolveOfflineReranker(command, managedLateOn, {}, "linux", architecture),
+            "lateon",
+        );
+        assert.equal(
+            resolveOfflineReranker({ ...command, reranker: "none" }, managedLateOn, {}, "linux", architecture),
+            "none",
+        );
+        assert.equal(
+            resolveOfflineReranker(command, managedNone, {}, "linux", architecture),
+            "none",
+        );
+        assert.equal(
+            resolveOfflineReranker(command, managedVoyage, { VOYAGEAI_API_KEY: "test-voyage-key" }, "linux", architecture),
+            "voyage",
+        );
+        assert.throws(
+            () => resolveOfflineReranker(command, managedVoyage, { VOYAGEAI_API_KEY: "" }, "linux", architecture),
+            /VOYAGEAI_API_KEY/,
+        );
+        assert.throws(
+            () => resolveOfflineReranker(command, {
+                ...managedLateOn,
+                SATORI_LATEON_PROFILE: "lateon_projection_v2_d16_v1",
+            }, {}, "linux", architecture),
+            /Existing managed LateOn installation uses unsupported profile lateon_projection_v2_d16_v1\./,
+        );
+    }
+});
+
+test("unsupported reranker targets keep the none default and reject explicit lateon", () => {
+    const command = {
+        kind: "install",
+        client: "all",
+        dryRun: false,
+        runtime: "offline",
+    } as const;
+
+    for (const [platform, architecture] of [
+        ["darwin", "arm64"],
+        ["linux", "s390x"],
+        ["win32", "x64"],
+    ] as const) {
+        assert.equal(resolveOfflineReranker(command, {}, {}, platform, architecture), "none");
+        assert.throws(
+            () => resolveOfflineReranker({ ...command, reranker: "lateon" }, {}, {}, platform, architecture),
+            (error: unknown) => error instanceof CliError
+                && error.token === "E_USAGE"
+                && /LateOn D128 is supported only on Linux x64\/WSL2 and Linux arm64 glibc/.test(error.message)
+                && error.message.includes(`received ${platform} ${architecture}`),
         );
     }
 });

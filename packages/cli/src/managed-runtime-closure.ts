@@ -72,7 +72,7 @@ function readManagedTypeScriptVersion(): string {
     return readManagedRuntimeRelease().typescript;
 }
 
-function detectLinuxLibc(): "gnu" | "musl" {
+export function detectLinuxLibc(): "gnu" | "musl" {
     if (process.platform !== "linux") {
         return "gnu";
     }

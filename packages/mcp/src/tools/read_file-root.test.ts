@@ -73,6 +73,60 @@ test('recommended symbol reads and continuations retain their root across overla
     assert.equal(composed, beforeDenied);
 });
 
+test('range reads bind to codebaseRoot and serve the requested lines', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-read-range-root-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, 'range.ts'), 'line one\nline two\nline three\nline four\n');
+    const publication = { publication: { canonicalRoot: root } };
+    const ctx = {
+        workspacePolicy: createSessionWorkspacePolicy({ roots: [root], homeDirectory: '/home/user', stateRoot: '/state' }),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [['range.ts', 'hash']] }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+    } as unknown as ToolContext;
+    const response = await readFileTool.execute({
+        path: path.join(root, 'range.ts'),
+        codebaseRoot: root,
+        start_line: 2,
+        end_line: 3,
+    }, ctx);
+    assert.notEqual(response.isError, true);
+    assert.equal(response.content[0].text, 'line two\nline three');
+});
+
+test('range reads reject a codebaseRoot that does not contain the path', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-read-range-root-')));
+    const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-read-range-other-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, 'range.ts'), 'line one\nline two\nline three\nline four\n');
+    const publication = { publication: { canonicalRoot: root } };
+    const ctx = {
+        workspacePolicy: createSessionWorkspacePolicy({ roots: [root, other], homeDirectory: '/home/user', stateRoot: '/state' }),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [['range.ts', 'hash']] }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+    } as unknown as ToolContext;
+    const response = await readFileTool.execute({
+        path: path.join(root, 'range.ts'),
+        codebaseRoot: other,
+        start_line: 2,
+        end_line: 3,
+    }, ctx);
+    assert.equal(response.isError, true);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.code, 'ROOT_BINDING_INVALID');
+    assert.doesNotMatch(response.content[0].text, /line two/);
+});
+
 test('plain reads reject a final symlink even when its target is published in the same root', async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-read-symlink-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

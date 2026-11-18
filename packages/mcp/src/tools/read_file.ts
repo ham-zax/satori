@@ -40,7 +40,6 @@ import {
     SYMBOL_CONTEXT_LIMITS,
     composePublicSymbolContextEnvelope,
     exactSymbolOpenRequestSchema,
-    hasExactSymbolMarker,
     openSymbolRequestSchema,
     resolveSymbolContextOperation,
     type ExactSymbolOpenRequest,
@@ -52,7 +51,7 @@ export const readFileInputSchema = z.object({
         "ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected).",
     ),
     codebaseRoot: absoluteFilesystemPathSchema(
-        "Originating indexed root for open_symbol requests only. Preserve it when continuing an exact-symbol read. For start_line/end_line range reads, omit codebaseRoot and open_symbol.",
+        "Optional originating indexed root for open_symbol or start_line/end_line range reads. Preserve it when continuing an exact-symbol read.",
     ).optional(),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive). An end_line past the end of the file reads to the last line."),
@@ -60,13 +59,6 @@ export const readFileInputSchema = z.object({
     presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
     open_symbol: openSymbolRequestSchema.optional().describe("Read bounded symbol source with continuation-aware excerpts using {contractVersion:2, symbolId}; context defaults to {preset:definition}. Explicit context and continuation are mutually exclusive. Direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
-    if (input.codebaseRoot && !hasExactSymbolMarker(input.open_symbol)) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["codebaseRoot"],
-            message: "codebaseRoot applies only to exact-symbol requests.",
-        });
-    }
     if (input.start_line !== undefined && input.end_line !== undefined && input.start_line > input.end_line) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,

@@ -67,11 +67,11 @@ test("shared runtime identity is exact, non-secret, and bounded to eligible Linu
     assert.equal(isSharedOfflineRuntimeEligible({ ...env, EMBEDDING_PROVIDER: "VoyageAI" }), false);
 
     const identity = buildSharedRuntimeIdentity(runtimeEntry, env);
-    assert.notEqual(
+    assert.equal(
         buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_AUTO_INDEX_WORKSPACE: 'true' }).hash,
         identity.hash,
     );
-    assert.equal(
+    assert.notEqual(
         buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_AUTO_INDEX_WORKSPACE: 'false' }).hash,
         identity.hash,
     );

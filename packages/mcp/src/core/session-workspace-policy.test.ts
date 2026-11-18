@@ -369,3 +369,26 @@ test("denies paths through a dangling symlink inside an authorized root", (t) =>
         fs.rmSync(stateRoot, { recursive: true, force: true });
     }
 });
+
+test("allowImplicitBroadContainerRoot permits descendant repos under HOME while blocking HOME and stateRoot", () => {
+    const home = makeTempDir("satori-workspace-policy-home-");
+    const stateRoot = path.join(home, ".satori");
+    const repo = path.join(home, "repo", "satori");
+    fs.mkdirSync(path.join(stateRoot, "models"), { recursive: true });
+    fs.mkdirSync(repo, { recursive: true });
+    try {
+        const policy = createSessionWorkspacePolicy({
+            roots: [home],
+            homeDirectory: home,
+            stateRoot,
+            allowImplicitBroadContainerRoot: true,
+        });
+        assert.equal(policy.authorizeRoot(repo).canonicalPath, fs.realpathSync.native(repo));
+        expectCode(() => policy.authorizeRoot(home), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => policy.authorizePath(home), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => policy.authorizeRoot(stateRoot), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => policy.authorizePath(path.join(stateRoot, "models")), "BROAD_ROOT_NOT_ALLOWED");
+    } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+});

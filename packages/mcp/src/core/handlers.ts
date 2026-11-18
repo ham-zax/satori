@@ -359,6 +359,7 @@ export class ToolHandlers {
     private readonly relationshipBackedCallGraph: RelationshipBackedCallGraph;
     private readonly toolResponseBuilders: ToolResponseBuilders;
     private readonly readFileMaxBytes: number;
+    private readonly isAutomaticIndexing?: (codebasePath: string) => boolean;
 
     constructor(
         context: Context,
@@ -376,6 +377,8 @@ export class ToolHandlers {
             readFileMaxBytes?: number;
             collectPublicationGarbageAfterSync?: (codebasePath: string) => Promise<string[]>;
             ownDetachedMutationCompletion?: (completion: Promise<void>) => void;
+            isAutomaticIndexing?: (codebasePath: string) => boolean;
+            requestAutomaticCreate?: (codebasePath: string) => boolean;
             requestAutomaticReindex?: (
                 codebasePath: string,
                 reason: AutomaticReindexReason,
@@ -390,6 +393,7 @@ export class ToolHandlers {
         this.now = now;
         this.reranker = reranker || null;
         this.readFileMaxBytes = Math.max(1, options?.readFileMaxBytes ?? READ_FILE_MAX_BYTES_DEFAULT);
+        this.isAutomaticIndexing = options?.isAutomaticIndexing;
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         this.navigationStore = navigationStore;
         this.preparedReadCacheOwner = new PreparedReadCacheOwner({
@@ -465,6 +469,7 @@ export class ToolHandlers {
             buildStatusHint: this.buildStatusHint.bind(this),
             buildManageIndexRecommendedAction: this.buildManageIndexRecommendedAction.bind(this),
             buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
+            requestAutomaticCreate: options?.requestAutomaticCreate,
             requestAutomaticReindex: options?.requestAutomaticReindex,
         };
         this.trackedRootReadiness = new TrackedRootReadiness(trackedRootReadinessHost);
@@ -549,6 +554,7 @@ export class ToolHandlers {
             getPublicationNavigationAddress: (publication) => this.context.getPublicationNavigationAddress(publication),
             buildRuntimeOwnerConflictResponseIfBlocked: this.buildRuntimeOwnerConflictResponseIfBlocked.bind(this),
             readPublicationSymbolRegistry: (publication) => this.context.readPublicationSymbolRegistry(publication),
+            readPublicationRelationshipManifest: (publication, expectedHash) => this.context.readPublicationRelationshipManifest(publication, expectedHash),
             manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
@@ -956,6 +962,8 @@ export class ToolHandlers {
         const state = await this.prepareTrackedRootReadWithObservation(
             absolutePath,
             () => undefined,
+            'semantic',
+            { allowAutomaticCreate: false },
         );
         if (state.state === 'ready') {
             this.seedPreparedRead(state, false, true);
@@ -967,11 +975,13 @@ export class ToolHandlers {
         absolutePath: string,
         onPhase: (phase: ReadinessPhase, durationMs: number) => void,
         accessMode: 'semantic' | 'navigation' = 'semantic',
+        options?: { allowAutomaticCreate?: boolean },
     ): Promise<TrackedRootReadinessState> {
         const state = await this.trackedRootReadiness.prepareTrackedRootForRead(
             absolutePath,
             accessMode,
             onPhase,
+            options,
         );
         if (state.state !== 'ready') {
             return state;
@@ -1389,13 +1399,21 @@ export class ToolHandlers {
         });
     }
 
-    private buildIndexingMetadata(codebasePath: string): { progressPct: number | null; lastUpdated: string | null; phase: string | null } {
+    private buildIndexingMetadata(codebasePath: string): {
+        progressPct: number | null;
+        lastUpdated: string | null;
+        phase: string | null;
+        mode?: "indexing" | "auto_indexing";
+        autoIndexing?: boolean;
+    } {
+        const autoIndexing = this.isAutomaticIndexing?.(codebasePath) === true;
         const activity = this.mutationRuntime.getActiveMutation(codebasePath);
         if (!activity) {
             return {
                 progressPct: null,
                 lastUpdated: null,
                 phase: null,
+                ...(autoIndexing ? { mode: "auto_indexing" as const, autoIndexing: true } : {}),
             };
         }
         const operation = this.mutationRuntime.getOperation(codebasePath);
@@ -1403,6 +1421,8 @@ export class ToolHandlers {
             progressPct: operation?.progress ?? null,
             lastUpdated: operation?.updatedAt ?? activity.acceptedAt,
             phase: operation?.phase ?? null,
+            mode: autoIndexing ? "auto_indexing" : "indexing",
+            autoIndexing,
         };
     }
 

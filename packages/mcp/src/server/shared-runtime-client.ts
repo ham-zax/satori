@@ -20,7 +20,11 @@ import {
     type SharedRuntimeHostMetadata,
 } from "./shared-runtime-lifecycle.js";
 import { assertRemovedRuntimeEnvUnset } from "../config.js";
-import { resolveAllowBroadRoots, resolveSessionWorkspaceRoots } from "./shared-runtime.js";
+import {
+    hasExplicitSessionWorkspaceRoots,
+    resolveAllowBroadRoots,
+    resolveSessionWorkspaceRoots,
+} from "./shared-runtime.js";
 
 type AttachRequest = Readonly<{
     type: "satori-shared-runtime-attach";
@@ -31,6 +35,7 @@ type AttachRequest = Readonly<{
     challengeNonce: string;
     workspaceRoots: readonly string[];
     allowBroadRoots: boolean;
+    allowImplicitBroadContainerRoot?: boolean;
 }>;
 
 type AttachResponse = Readonly<{
@@ -94,6 +99,7 @@ async function attach(
     timeoutMs: number,
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
+    allowImplicitBroadContainerRoot: boolean,
     expectedHost?: SharedRuntimeHostMetadata,
 ): Promise<net.Socket> {
     const socket = await connectSocket(socketPath, timeoutMs);
@@ -113,6 +119,7 @@ async function attach(
         challengeNonce,
         workspaceRoots,
         allowBroadRoots,
+        allowImplicitBroadContainerRoot,
     });
     socket.write(`${JSON.stringify(request)}\n`);
 
@@ -217,6 +224,7 @@ async function attachFromMetadata(
     timeoutMs: number,
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
+    allowImplicitBroadContainerRoot: boolean,
 ): Promise<net.Socket | null> {
     const metadata = readHostMetadata(metadataPath);
     if (!metadata) return null;
@@ -230,7 +238,7 @@ async function attachFromMetadata(
     })) {
         return null;
     }
-    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, metadata);
+    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, allowImplicitBroadContainerRoot, metadata);
 }
 
 function isTransientAttachError(error: unknown): boolean {
@@ -248,6 +256,7 @@ async function waitForHostTransition(
     timeoutMs: number,
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
+    allowImplicitBroadContainerRoot: boolean,
 ): Promise<net.Socket | null> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
@@ -262,6 +271,7 @@ async function waitForHostTransition(
                     Math.min(500, Math.max(1, deadline - Date.now())),
                     workspaceRoots,
                     allowBroadRoots,
+                    allowImplicitBroadContainerRoot,
                 );
                 unexpected.destroy();
                 throw new Error(
@@ -293,6 +303,7 @@ async function waitForHostTransition(
                     Math.min(500, Math.max(1, deadline - Date.now())),
                     workspaceRoots,
                     allowBroadRoots,
+                    allowImplicitBroadContainerRoot,
                     metadata,
                 );
             } catch (error) {
@@ -338,6 +349,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
     // runtime identity so one host can serve narrow and broad sessions.
     const workspaceRoots = resolveSessionWorkspaceRoots(options.env);
     const allowBroadRoots = resolveAllowBroadRoots(options.env);
+    const allowImplicitBroadContainerRoot = !hasExplicitSessionWorkspaceRoots(options.env);
     const remainingTime = (): number => Math.max(1, deadline - Date.now());
 
     for (;;) {
@@ -349,6 +361,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 Math.min(500, remainingTime()),
                 workspaceRoots,
                 allowBroadRoots,
+                allowImplicitBroadContainerRoot,
             );
         } catch (error) {
             if (!isTransientAttachError(error)) throw error;
@@ -359,6 +372,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 remainingTime(),
                 workspaceRoots,
                 allowBroadRoots,
+                allowImplicitBroadContainerRoot,
             );
         }
         if (existing) return existing;
@@ -376,6 +390,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                     Math.min(500, remainingTime()),
                     workspaceRoots,
                     allowBroadRoots,
+                    allowImplicitBroadContainerRoot,
                 );
             } catch (error) {
                 if (!isTransientAttachError(error)) throw error;
@@ -410,6 +425,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         Math.min(500, remainingTime()),
                         workspaceRoots,
                         allowBroadRoots,
+                        allowImplicitBroadContainerRoot,
                     );
                 } catch (error) {
                     const code = (error as NodeJS.ErrnoException).code;
@@ -448,6 +464,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         Math.min(500, remainingTime()),
                         workspaceRoots,
                         allowBroadRoots,
+                        allowImplicitBroadContainerRoot,
                     );
                     if (connected) return connected;
                 } catch (error) {

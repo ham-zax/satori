@@ -80,6 +80,14 @@ type ManageMaintenanceHandlersHost = {
         navigationRoot: string;
     } | null;
     readPublicationSymbolRegistry(publication: PublicationRef): Promise<ReadSymbolRegistrySidecarResult | undefined>;
+    /**
+     * Optional so hosts that only need symbol quality can omit the relationship
+     * read; `manage_index status` falls back to the sidecar reader when absent.
+     */
+    readPublicationRelationshipManifest?(
+        publication: PublicationRef,
+        expectedSymbolRegistryManifestHash: string,
+    ): ReturnType<Context["readPublicationRelationshipManifest"]>;
     buildRuntimeOwnerConflictResponseIfBlocked(
         action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
         codebasePath: string,
@@ -476,17 +484,27 @@ export class ManageMaintenanceHandlers {
                 envelopePath = trackedRootState.codebasePath;
                 envelopeStatus = "not_ready";
                 envelopeReason = "indexing";
+                const indexingMeta = this.host.buildIndexingMetadata(trackedRootState.codebasePath) as {
+                    progressPct: number | null;
+                    lastUpdated: string | null;
+                    phase: string | null;
+                    mode?: "indexing" | "auto_indexing";
+                    autoIndexing?: boolean;
+                };
+                const verb = indexingMeta?.autoIndexing
+                    ? "auto-indexing in the background"
+                    : "currently being indexed";
                 envelopeHints = {
                     status: this.host.buildStatusHint(trackedRootState.codebasePath),
                     retryAfterMs: this.host.getManageRetryAfterMs(),
-                    indexing: this.host.buildIndexingMetadata(trackedRootState.codebasePath),
+                    indexing: indexingMeta,
                 };
                 const activeMutation = this.host.mutationRuntime.getActiveMutation(trackedRootState.codebasePath);
                 const operation = activeMutation
                     ? this.host.mutationRuntime.getOperation(trackedRootState.codebasePath)
                     : undefined;
                 if (operation?.progress !== undefined) {
-                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed. Progress: ${operation.progress.toFixed(1)}%`;
+                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is ${verb}. Progress: ${operation.progress.toFixed(1)}%`;
                     if (operation.progress < 10) {
                         statusMessage += " (Preparing and scanning files...)";
                     } else if (operation.progress < 100) {
@@ -494,7 +512,7 @@ export class ManageMaintenanceHandlers {
                     }
                     statusMessage += `\n🕐 Last updated: ${new Date(operation.updatedAt).toLocaleString()}`;
                 } else {
-                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed.`;
+                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is ${verb}.`;
                 }
             } else if (trackedRootState.state === "index_failed") {
                 envelopePath = trackedRootState.codebasePath;
@@ -624,12 +642,21 @@ export class ManageMaintenanceHandlers {
                             evidenceAvailability,
                         };
                     if (includeCapabilities && registryRead && navigation) {
+                        const relationshipsRead = lease
+                            && registryRead.status === "ok"
+                            && typeof this.host.readPublicationRelationshipManifest === "function"
+                            ? await this.host.readPublicationRelationshipManifest(
+                                lease,
+                                registryRead.manifestHash,
+                            )
+                            : undefined;
                         languageCapabilities = await resolveLanguageCapabilityEvidence({
                             normalizedRootPath: envelopePath,
                             searchable: envelopeStatus === "ok" && evidenceAvailability === 'ready',
                             publicationId: navigation.publicationId,
                             navigationRoot: navigation.navigationRoot,
                             registryRead,
+                            ...(relationshipsRead ? { relationshipsRead } : {}),
                         });
                         if (registryRead.status === "ok" && registryRead.registry) {
                             const structuralLanguages = new Set(

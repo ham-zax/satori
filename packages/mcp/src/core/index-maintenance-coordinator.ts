@@ -88,6 +88,7 @@ export class IndexMaintenanceCoordinator {
     private readonly admission = new Map<string, Promise<AutomaticReindexScheduleResult>>();
     private readonly automaticCompletions = new Map<string, Promise<void>>();
     private readonly workspaceRequests = new Map<string, Promise<void>>();
+    private readonly activeWorkspaceCreates = new Set<string>();
     private workspaceQueue: Promise<void> = Promise.resolve();
     private readonly failures = new Map<string, AutomaticMaintenanceFailureState>();
     private readonly workspaceFailures = new Map<string, AutomaticMaintenanceFailureState>();
@@ -125,6 +126,7 @@ export class IndexMaintenanceCoordinator {
         const existing = this.workspaceRequests.get(codebasePath);
         if (existing) return existing;
 
+        this.activeWorkspaceCreates.add(codebasePath);
         let tracked!: Promise<void>;
         const attempt = this.workspaceQueue.then(async () => {
             if (this.options.getActiveMutation(codebasePath)) return;
@@ -186,6 +188,7 @@ export class IndexMaintenanceCoordinator {
             }
         });
         tracked = attempt.finally(() => {
+            this.activeWorkspaceCreates.delete(codebasePath);
             const failure = this.workspaceFailures.get(epochKey);
             if (
                 failure?.classification === "retryable_external"
@@ -197,6 +200,12 @@ export class IndexMaintenanceCoordinator {
         this.workspaceRequests.set(codebasePath, tracked);
         this.workspaceQueue = tracked.catch(() => undefined);
         return tracked;
+    }
+
+    public isAutomaticMaintenanceActive(codebasePath: string): boolean {
+        return this.activeWorkspaceCreates.has(codebasePath)
+            || this.automaticCompletions.has(codebasePath)
+            || this.admission.has(codebasePath);
     }
 
     async requestAutomaticReindex(

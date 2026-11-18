@@ -138,8 +138,18 @@ export function createSessionWorkspacePolicy(input: {
     homeDirectory: string;
     stateRoot: string;
     allowBroadRoots?: boolean;
+    /**
+     * Set only when `roots` fell back to `[process.cwd()]` because no explicit
+     * `SATORI_SESSION_ROOTS_JSON` was supplied (e.g. global IDE hosts such as
+     * Cursor, VS Code, Windsurf, or Antigravity spawning MCP servers in `$HOME`
+     * or `/`). Allows `$HOME` or `/` to act as a container for descendant
+     * project paths while still rejecting `$HOME`, `/`, and `stateRoot` (plus
+     * all `stateRoot` descendants) as direct index/read targets.
+     */
+    allowImplicitBroadContainerRoot?: boolean;
 }): SessionWorkspacePolicy {
     const allowBroadRoots = input.allowBroadRoots === true;
+    const allowImplicitBroadContainerRoot = input.allowImplicitBroadContainerRoot === true;
 
     const canonicalRoots: string[] = [];
     for (const root of input.roots) {
@@ -160,9 +170,14 @@ export function createSessionWorkspacePolicy(input: {
         || canonicalPath === canonicalHome
         || canonicalPath === canonicalStateRoot;
 
+    const isAllowedImplicitContainer = (canonicalPath: string): boolean =>
+        allowImplicitBroadContainerRoot
+        && !isPathInsideRoot(canonicalPath, canonicalStateRoot)
+        && (canonicalPath === canonicalHome || canonicalPath === path.sep);
+
     if (!allowBroadRoots) {
         for (const root of canonicalRoots) {
-            if (isBroadPath(root)) {
+            if (isBroadPath(root) && !isAllowedImplicitContainer(root)) {
                 throw new WorkspaceAuthorizationError(
                     "BROAD_ROOT_NOT_ALLOWED",
                     `Broad workspace root is not allowed without allowBroadRoots: ${root}`,
@@ -182,6 +197,9 @@ export function createSessionWorkspacePolicy(input: {
         reducedRoots.push(root);
     }
     const roots = Object.freeze(reducedRoots);
+    const hasExplicitChildUnderStateRoot = roots.some(
+        (root) => root !== canonicalStateRoot && isPathInsideRoot(root, canonicalStateRoot),
+    );
 
     const authorize = (candidate: string): AuthorizedWorkspacePath => {
         if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
@@ -191,7 +209,9 @@ export function createSessionWorkspacePolicy(input: {
             );
         }
         const canonicalPath = canonicalizePath(candidate);
-        if (!allowBroadRoots && isBroadPath(canonicalPath)) {
+        const isBlockedStateSubpath = !hasExplicitChildUnderStateRoot
+            && isPathInsideRoot(canonicalPath, canonicalStateRoot);
+        if (!allowBroadRoots && (isBroadPath(canonicalPath) || isBlockedStateSubpath)) {
             throw new WorkspaceAuthorizationError(
                 "BROAD_ROOT_NOT_ALLOWED",
                 `Broad path is not authorized: ${canonicalPath}`,

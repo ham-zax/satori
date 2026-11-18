@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
     compareContractStrings,
     type PublicationNavigationStatus,
@@ -125,6 +127,7 @@ export type TrackedRootReadinessHost = {
     buildStatusHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildManageIndexRecommendedAction(action: ManageIndexAction, codebasePath: string, rationale: string): SearchRecommendedNextAction;
     buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: CompletionProofReason): string;
+    requestAutomaticCreate?(codebasePath: string): boolean;
     requestAutomaticReindex?(
         codebasePath: string,
         reason: AutomaticReindexReason,
@@ -381,6 +384,7 @@ export class TrackedRootReadiness {
         absolutePath: string,
         accessMode: "semantic" | "navigation" = "semantic",
         onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+        options?: { allowAutomaticCreate?: boolean },
     ): Promise<TrackedRootReadinessState> {
         const { searchableRoot, indexingRoot } = this.measurePhase(
             "tracked_root_resolution",
@@ -425,12 +429,36 @@ export class TrackedRootReadiness {
                     },
                 };
             }
+            if (options?.allowAutomaticCreate !== false && this.host.requestAutomaticCreate) {
+                const autoTarget = this.resolveAutomaticCreateTarget(absolutePath);
+                if (autoTarget && !this.host.getFailedIndexOperation?.(autoTarget) && this.host.requestAutomaticCreate(autoTarget)) {
+                    const operation = this.host.getIndexingOperation?.(autoTarget);
+                    return {
+                        state: "indexing",
+                        codebasePath: autoTarget,
+                        ...(operation ? { operation } : {}),
+                        searchableGenerationAvailable: false,
+                    };
+                }
+            }
             return {
                 state: "not_indexed",
             };
         }
 
         return this.evaluateRootReadinessCoalesced(searchableRoot, accessMode, onPhase);
+    }
+
+    private resolveAutomaticCreateTarget(absolutePath: string): string | null {
+        let candidate = absolutePath;
+        for (;;) {
+            if (fs.existsSync(path.join(candidate, ".git"))) {
+                return candidate;
+            }
+            const parent = path.dirname(candidate);
+            if (parent === candidate) return null;
+            candidate = parent;
+        }
     }
 
     private evaluateRootReadinessCoalesced(

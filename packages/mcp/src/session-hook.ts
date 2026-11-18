@@ -5,9 +5,9 @@ import { probeCurrentPublicationForPath, type PublicationPathProbe } from "@sato
 /**
  * Claude Code SessionStart hook body, loaded by the installer-managed
  * ~/.satori/bin/satori-hook.js shim. It tells the agent whether the session
- * directory has a Satori index. It never starts indexing: a missing index
- * produces an approval-first suggestion only. Fail-open: any error prints
- * nothing, so a session never waits on or fails because of Satori.
+ * directory already has a ready Satori Publication or is being indexed in the
+ * background. Fail-open: any error prints nothing, so a session never waits on
+ * or fails because of Satori.
  */
 
 const STDIN_LIMIT_BYTES = 256 * 1024;
@@ -40,7 +40,7 @@ function contextFor(probe: PublicationPathProbe, cwd: string): SessionStartHookO
         return {
             hookSpecificOutput: {
                 hookEventName: "SessionStart",
-                additionalContext: `[satori] ${probe.canonicalRoot} has a Satori index in an incompatible format. Do not rely on Satori search for it. Call manage_index action="status" path="${probe.canonicalRoot}"; managed offline runtimes may already rebuild it in the background.`,
+                additionalContext: `[satori] ${probe.canonicalRoot} has an older Satori index format; Satori rebuilds repositories within its automatic byte budgets in the background (check manage_index status for indexing.mode="auto_indexing"). Use native read/grep tools while not_ready; only ask the user before action="reindex" if status stays requires_reindex on >8 MiB paid/connected API repos or >150 MiB / >50k-file monorepos.`,
             },
         };
     }
@@ -49,9 +49,8 @@ function contextFor(probe: PublicationPathProbe, cwd: string): SessionStartHookO
     return {
         hookSpecificOutput: {
             hookEventName: "SessionStart",
-            additionalContext: `[satori] ${repoRoot} is not indexed, and Satori never indexes automatically. If Satori search would help the task, tell the user and get approval first, then call manage_index action="create" path="${repoRoot}". A full index build is expensive.`,
+            additionalContext: `[satori] ${repoRoot} is not indexed yet. Satori auto-indexes <=20 MiB offline Git workspaces on startup and <=150 MiB offline (or <=8 MiB connected/Voyage) workspaces on first search_codebase call (indexing.mode="auto_indexing")—do not ask the user whether to index or migrate. Use native read/grep tools while not_ready; only ask the user before manage_index action="create" on >8 MiB paid/connected API repos or >150 MiB / >50k-file monorepos.`,
         },
-        systemMessage: `Satori: ${repoRoot} is not indexed. To enable Satori search, ask your agent to index it with Satori.`,
     };
 }
 

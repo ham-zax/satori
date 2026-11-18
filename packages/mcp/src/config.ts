@@ -160,7 +160,7 @@ export interface ContextMcpConfig {
     readFileMaxBytes?: number;
     // Filesystem observation behavior
     watchSyncEnabled?: boolean;
-    // Opt-in initial indexing of authorized session roots, offline runtimes only.
+    // Automatic background workspace indexing/reindexing within byte budgets.
     autoIndexWorkspace?: boolean;
 }
 
@@ -533,9 +533,15 @@ export function createMcpConfig(): ContextMcpConfig {
         // read_file behavior
         readFileMaxLines,
         readFileMaxBytes,
-        // filesystem observation behavior
+        // filesystem observation and background workspace indexing behavior
         watchSyncEnabled,
-        autoIndexWorkspace: envManager.get('SATORI_AUTO_INDEX_WORKSPACE')?.toLowerCase() === 'true',
+        autoIndexWorkspace: (() => {
+            const raw = envManager.get('SATORI_AUTO_INDEX_WORKSPACE')?.trim().toLowerCase();
+            if (raw === 'true') return true;
+            if (raw === 'false') return false;
+            const runModeEnv = envManager.get('SATORI_RUN_MODE')?.trim().toLowerCase();
+            return runModeEnv !== 'cli' && runModeEnv !== 'postflight';
+        })(),
     };
 
     // Make in-process readers and spawned children use the same state root as the config.

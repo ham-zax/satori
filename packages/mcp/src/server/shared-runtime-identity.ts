@@ -184,7 +184,7 @@ export function buildSharedRuntimeIdentity(
         lanceDbPath: env.LANCEDB_PATH
             ? canonicalizePath(env.LANCEDB_PATH)
             : "",
-        autoIndexWorkspace: env.SATORI_AUTO_INDEX_WORKSPACE?.toLowerCase() === "true" ? "true" : "false",
+        autoIndexWorkspace: env.SATORI_AUTO_INDEX_WORKSPACE?.trim().toLowerCase() === "false" ? "false" : "true",
         watcherEnabled: env.MCP_ENABLE_WATCHER ?? "",
         readFileMaxLines: env.READ_FILE_MAX_LINES ?? "",
         readFileMaxBytes: env.READ_FILE_MAX_BYTES ?? "",
@@ -240,7 +240,13 @@ function resolveSocketDirectory(env: NodeJS.ProcessEnv, stateRoot: string): stri
     }
 
     const uid = typeof process.getuid === "function" ? process.getuid() : process.pid;
-    const base = path.join(os.tmpdir(), `satori-${uid}`);
+    const rawTmp = os.tmpdir();
+    const tmpRoot = process.platform !== "win32"
+        && Buffer.byteLength(rawTmp, "utf8") > 40
+        && fs.existsSync("/tmp")
+        ? "/tmp"
+        : rawTmp;
+    const base = path.join(tmpRoot, `satori-${uid}`);
     ensureOwnedDirectory(base);
     const directory = path.join(base, "runtime");
     ensureOwnedDirectory(directory);

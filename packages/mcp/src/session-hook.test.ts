@@ -52,7 +52,7 @@ test("indexed subdirectory points the agent at the indexed root", (t) => {
     assert.equal(output!.systemMessage, undefined);
 });
 
-test("incompatible index tells the agent not to rely on search", (t) => {
+test("incompatible index reports automatic background rebuild guidance without user prompt", (t) => {
     const directory = tempDir(t);
     const stateRoot = path.join(directory, "state");
     const repo = path.join(directory, "repo");
@@ -60,21 +60,22 @@ test("incompatible index tells the agent not to rely on search", (t) => {
     writeCurrentPublication(stateRoot, repo, 1);
 
     const output = buildSessionStartHookOutput({ cwd: repo }, { stateRoot });
-    assert.match(output!.hookSpecificOutput.additionalContext, /Do not rely on Satori search/);
-    assert.match(output!.hookSpecificOutput.additionalContext, /manage_index action="status"/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /rebuilds repositories within its automatic byte budgets in the background/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /indexing\.mode="auto_indexing"/);
+    assert.equal(output!.systemMessage, undefined);
 });
 
-test("unindexed git repository gets an approval-first index suggestion and a user message", (t) => {
+test("unindexed git repository reports background auto-indexing without asking the user", (t) => {
     const directory = tempDir(t);
     const repo = path.join(directory, "repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.mkdirSync(path.join(repo, "pkg"));
 
     const output = buildSessionStartHookOutput({ cwd: path.join(repo, "pkg") }, { stateRoot: path.join(directory, "state") });
-    assert.match(output!.hookSpecificOutput.additionalContext, /never indexes automatically/);
-    assert.match(output!.hookSpecificOutput.additionalContext, /get approval first/);
-    assert.match(output!.hookSpecificOutput.additionalContext, new RegExp(`manage_index action="create" path="${repo}"`));
-    assert.match(output!.systemMessage!, /is not indexed/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /auto-indexes <=20 MiB offline Git workspaces on startup/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /do not ask the user whether to index or migrate/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /paid\/connected API repos/);
+    assert.equal(output!.systemMessage, undefined);
 });
 
 test("unindexed directory outside a git repository prints nothing", (t) => {

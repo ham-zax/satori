@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Readable, Writable } from "node:stream";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSourceMeasurementOperation } from "@satori-code/core";
@@ -87,6 +88,11 @@ export function resolveSessionWorkspaceRoots(env: NodeJS.ProcessEnv): readonly s
     return parsed;
 }
 
+export function hasExplicitSessionWorkspaceRoots(env: NodeJS.ProcessEnv): boolean {
+    const raw = env.SATORI_SESSION_ROOTS_JSON;
+    return raw !== undefined && raw !== "";
+}
+
 export function resolveAllowBroadRoots(env: NodeJS.ProcessEnv): boolean {
     return env.SATORI_ALLOW_BROAD_ROOTS?.toLowerCase() === "true";
 }
@@ -97,6 +103,7 @@ export function createSessionWorkspacePolicyFromEnv(env: NodeJS.ProcessEnv): Ses
         homeDirectory: os.homedir(),
         stateRoot: env.SATORI_STATE_ROOT ?? path.join(env.HOME ?? os.homedir(), ".satori"),
         allowBroadRoots: resolveAllowBroadRoots(env),
+        allowImplicitBroadContainerRoot: !hasExplicitSessionWorkspaceRoots(env),
     });
 }
 
@@ -152,6 +159,15 @@ class SessionProviderRuntime {
             {
                 readFileMaxBytes: shared.readFileMaxBytes,
                 ownDetachedMutationCompletion: (completion) => this.providerRuntime.ownDetachedMutationCompletion(completion),
+                isAutomaticIndexing: (codebasePath) => this.providerRuntime.isAutomaticIndexing(codebasePath),
+                requestAutomaticCreate: (codebasePath) => {
+                    try {
+                        const authorized = this.workspacePolicy.authorizeRoot(codebasePath);
+                        return this.providerRuntime.requestAutomaticCreate(authorized.canonicalPath);
+                    } catch {
+                        return false;
+                    }
+                },
                 requestAutomaticReindex: (codebasePath, reason) => (
                     this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
                 ),
@@ -269,6 +285,7 @@ export class SharedRuntimeHost {
         this.localSyncManager = new SyncManager(this.localContext, {
             watchEnabled: this.watchSyncEnabled,
             mutationRuntime: this.mutationRuntime,
+            onLifecycleActivityChanged: () => this.notifyActivityChanged(),
             preparedReadObservationSource: (codebasePath) => this.providerRuntime.getPreparedReadObservation(codebasePath),
             externalSyncFlightSource: (codebasePath) => this.providerRuntime.captureExternalSyncFlight(codebasePath),
             syncWorkerStandby: this.providerRuntime.externalSyncWorkerStandby,
@@ -287,11 +304,36 @@ export class SharedRuntimeHost {
         if (!this.config.autoIndexWorkspace || this.config.executionProfile !== "offline") return;
         for (const root of policy.roots) {
             if (this.shutdownStarted) return;
-            const authorized = policy.authorizeRoot(root);
+            let authorized;
             try {
-                await this.providerRuntime.requestWorkspaceIndexing(authorized.canonicalPath);
+                authorized = policy.authorizeRoot(root);
             } catch (error) {
-                console.warn(`[AUTO-INDEX] '${authorized.canonicalPath}': ${errorMessage(error)}`);
+                if (error instanceof WorkspaceAuthorizationError && error.code === "BROAD_ROOT_NOT_ALLOWED") {
+                    // Implicit IDE container roots ($HOME or /) are never indexed directly;
+                    // descendant Git repositories auto-index on first tool demand.
+                    continue;
+                }
+                throw error;
+            }
+            let targetPath = authorized.canonicalPath;
+            let cursor = authorized.canonicalPath;
+            for (;;) {
+                if (fs.existsSync(path.join(cursor, ".git"))) {
+                    try {
+                        targetPath = policy.authorizeRoot(cursor).canonicalPath;
+                    } catch {
+                        targetPath = authorized.canonicalPath;
+                    }
+                    break;
+                }
+                const parent = path.dirname(cursor);
+                if (parent === cursor) break;
+                cursor = parent;
+            }
+            try {
+                await this.providerRuntime.requestWorkspaceIndexing(targetPath);
+            } catch (error) {
+                console.warn(`[AUTO-INDEX] '${targetPath}': ${errorMessage(error)}`);
             }
         }
     }
@@ -326,6 +368,15 @@ export class SharedRuntimeHost {
                     return providerContext.context.collectPublicationGarbage(codebasePath);
                 },
                 ownDetachedMutationCompletion: (completion) => this.ownDetachedMutationCompletion(completion),
+                isAutomaticIndexing: (codebasePath) => this.providerRuntime.isAutomaticIndexing(codebasePath),
+                requestAutomaticCreate: (codebasePath) => {
+                    try {
+                        const authorized = workspacePolicy.authorizeRoot(codebasePath);
+                        return this.providerRuntime.requestAutomaticCreate(authorized.canonicalPath);
+                    } catch {
+                        return false;
+                    }
+                },
                 requestAutomaticReindex: (codebasePath, reason) => (
                     this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
                 ),
@@ -403,7 +454,8 @@ export class SharedRuntimeHost {
             sessions: this.activeSessions,
             operations: this.activeOperations
                 + this.detachedMutationCompletions.size
-                + this.providerRuntime.getActiveLifecycleOperationCount(),
+                + this.providerRuntime.getActiveLifecycleOperationCount()
+                + this.localSyncManager.getActiveLifecycleOperationCount(),
         });
     }
 
@@ -437,7 +489,7 @@ export class SharedRuntimeHost {
     }
 }
 
-const SATORI_MCP_INSTRUCTIONS = "Satori is a repository code-intelligence layer for coding agents. Use search_codebase for unfamiliar behavior, ownership, symbols, configuration, or related implementation; then follow recommendedNextAction into read_file, file_outline, continue_search, or call_graph. For a plain-English search_codebase question, also pass likely code identifiers in alt_terms: grounded guesses raise owner recall, unrelated ones rank worse than none. Use trace_path when both exact published symbol IDs are known and you need one bounded relationship path between them. Use find_references when a canonical symbol is known and exact published-source occurrence coverage is needed without ranking. Prefer the host's native exact-file or literal workflow when the path and location are already known or the edit is small and local. Treat call_graph as conservative navigation evidence, not complete blast-radius proof; observational source references never become CALLS without semantic proof. Use list_codebases or manage_index status detail=full when index readiness or structural coverage is uncertain; that coverage is bounded by the current Publication policy. Use read_file on a specific absolute path for an exact published-path coverage check. Get the user's approval before manage_index action=\"create\" or action=\"reindex\": a full index build is expensive. Never run action=\"clear\" unless the user asks for a reset. Managed offline runtimes automatically rebuild a tracked incompatible Publication in the background; retry after the returned not_ready/indexing hint.";
+const SATORI_MCP_INSTRUCTIONS = "Satori is a repository code-intelligence layer for coding agents. Use search_codebase for unfamiliar behavior, ownership, symbols, configuration, or related implementation; then follow recommendedNextAction into read_file, file_outline, continue_search, or call_graph. For a plain-English search_codebase question, also pass likely code identifiers in alt_terms: grounded guesses raise owner recall, unrelated ones rank worse than none. Use trace_path when both exact published symbol IDs are known and you need one bounded relationship path between them. Use find_references when a canonical symbol is known and exact published-source occurrence coverage is needed without ranking. Prefer the host's native exact-file or literal workflow when the path and location are already known or the edit is small and local. Treat call_graph as conservative navigation evidence, not complete blast-radius proof; observational source references never become CALLS without semantic proof. Use list_codebases or manage_index status detail=full when index readiness or structural coverage is uncertain; that coverage is bounded by the current Publication policy. Use read_file on a specific absolute path for an exact published-path coverage check. Satori gates background auto-indexing by eligible source bytes (with a 50k-file OOM fuse): offline runtimes auto-index <=20 MiB workspaces on session start and <=150 MiB workspaces on first tool call, and connected/Voyage runtimes auto-index <=8 MiB (~2M-token) workspaces on first tool call (reported via status=\"not_ready\" and indexing.mode=\"auto_indexing\"). Never ask the user whether to index or migrate within those automatic budgets—use native read/grep tools or wait briefly and retry. Only ask the user before manage_index action=\"create\" or \"reindex\" when status remains not_indexed/requires_reindex because a repository exceeds the paid API budget (>8 MiB on Voyage) or massive monorepo limits (>150 MiB or >50k files). Never run action=\"clear\" unless the user explicitly asks for a reset.";
 
 export class McpSession {
     private readonly server: Server;

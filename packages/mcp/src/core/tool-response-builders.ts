@@ -296,6 +296,14 @@ export class ToolResponseBuilders {
         codebasePath: string,
         searchContext: SearchContext,
     ): SearchResponseEnvelope {
+        const indexing = this.host.buildIndexingMetadata(codebasePath) as {
+            progressPct: number | null;
+            lastUpdated: string | null;
+            phase: string | null;
+            mode?: "indexing" | "auto_indexing";
+            autoIndexing?: boolean;
+        };
+        const isAuto = indexing?.autoIndexing === true;
         return {
             formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_ready",
@@ -308,11 +316,15 @@ export class ToolResponseBuilders {
             groupBy: searchContext.groupBy,
             resultMode: searchContext.resultMode,
             limit: searchContext.limit,
-            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
+            message: isAuto
+                ? `Codebase '${codebasePath}' is auto-indexing in the background. Continue with native read/grep tools or wait briefly and retry.`
+                : `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
             recommendedNextAction: this.host.buildManageIndexRecommendedAction(
                 "status",
                 codebasePath,
-                "Check indexing progress before retrying search.",
+                isAuto
+                    ? "Auto-indexing is running in the background; check status or retry after a moment."
+                    : "Check indexing progress before retrying search.",
             ),
             hints: {
                 status: this.host.buildStatusHint(codebasePath),
@@ -320,7 +332,7 @@ export class ToolResponseBuilders {
                     completionProof: "current_publication",
                 },
             },
-            indexing: this.host.buildIndexingMetadata(codebasePath),
+            indexing,
             results: [],
         } as SearchResponseEnvelope;
     }

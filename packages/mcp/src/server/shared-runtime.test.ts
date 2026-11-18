@@ -595,3 +595,59 @@ test("direct stdio and shared runtime resolve roots identically", () => {
     // directory, identical for direct stdio and the shared runtime launcher.
     assert.deepEqual(resolveSessionWorkspaceRoots({}), [process.cwd()]);
 });
+
+test("runtime activity includes local sync lifecycle operations", async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-sync-activity-"));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    const runtimeConfig = config();
+    const host = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, 1024),
+        "cli",
+    );
+    t.after(async () => {
+        await host.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+    const localSyncManager = (host as unknown as {
+        localSyncManager: {
+            ensureFreshness(
+                root: string,
+                thresholdMs: number,
+                options: { skipIgnoreControlCheck: boolean },
+            ): Promise<unknown>;
+            getActiveLifecycleOperationCount(): number;
+            stopBackgroundSync(): void;
+            syncCodebase(root: string): Promise<unknown>;
+        };
+    }).localSyncManager;
+    localSyncManager.stopBackgroundSync();
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    t.mock.method(localSyncManager, "syncCodebase", async () => {
+        markStarted();
+        await syncGate;
+        return { mode: "synced" };
+    });
+
+    assert.deepEqual(host.getActivity(), { sessions: 0, operations: 0 });
+
+    const sync = localSyncManager.ensureFreshness("/repo", 0, { skipIgnoreControlCheck: true });
+    await started;
+    assert.equal(localSyncManager.getActiveLifecycleOperationCount(), 1);
+    assert.deepEqual(
+        host.getActivity(),
+        { sessions: 0, operations: 1 },
+        "an in-flight local sync is visible as a runtime operation",
+    );
+
+    releaseSync();
+    await sync;
+    assert.equal(localSyncManager.getActiveLifecycleOperationCount(), 0);
+    assert.deepEqual(host.getActivity(), { sessions: 0, operations: 0 });
+});

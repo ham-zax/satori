@@ -42,6 +42,7 @@ type AttachRequest = Readonly<{
     challengeNonce: string;
     workspaceRoots: readonly string[];
     allowBroadRoots: boolean;
+    allowImplicitBroadContainerRoot?: boolean;
 }>;
 
 function isAbsolutePathArray(value: unknown): value is readonly string[] {
@@ -92,6 +93,7 @@ function parseAttachRequest(line: string): AttachRequest | typeof UNSUPPORTED_PR
             challengeNonce: value.challengeNonce,
             workspaceRoots: value.workspaceRoots,
             allowBroadRoots: value.allowBroadRoots === true,
+            allowImplicitBroadContainerRoot: value.allowImplicitBroadContainerRoot === true,
         } as AttachRequest);
     } catch {
         return null;
@@ -314,6 +316,7 @@ export class SharedRuntimeSocketHost {
                     homeDirectory: os.homedir(),
                     stateRoot: this.identity.stateRoot,
                     allowBroadRoots: request.allowBroadRoots,
+                    allowImplicitBroadContainerRoot: request.allowImplicitBroadContainerRoot,
                 });
             } catch (error) {
                 const reason = error instanceof WorkspaceAuthorizationError

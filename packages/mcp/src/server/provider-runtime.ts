@@ -25,6 +25,11 @@ import {
     type AutomaticReindexScheduleResult,
 } from "../core/index-maintenance-coordinator.js";
 import {
+    evaluateAutoIndexPolicy,
+    type AutoIndexDecision,
+    type AutoIndexTrigger,
+} from "../core/auto-index-policy.js";
+import {
     RootMutationRuntime,
     type RootMutationExecution,
     type SharedPublicationRuntime,
@@ -343,7 +348,8 @@ export class ProviderRuntime {
         this.onLifecycleActivityChanged = args.onLifecycleActivityChanged;
         this.now = args.now || (() => Date.now());
         this.indexMaintenanceCoordinator = new IndexMaintenanceCoordinator({
-            enabled: this.config.executionProfile === "offline",
+            enabled: this.config.autoIndexWorkspace !== false
+                && (this.config.executionProfile === "offline" || Boolean(this.config.autoIndexWorkspace)),
             runtimeEpoch: summarizeIndexFingerprint(this.runtimeFingerprint),
             getActiveMutation: (codebasePath) => this.mutationRuntime.getActiveMutation(codebasePath),
             getOperation: (codebasePath) => this.mutationRuntime.getOperation(codebasePath),
@@ -362,17 +368,65 @@ export class ProviderRuntime {
         });
     }
 
-    public requestWorkspaceIndexing(codebasePath: string): Promise<void> {
-        if (!this.config.autoIndexWorkspace || this.config.executionProfile !== "offline") return Promise.resolve();
+    public evaluateAutoIndex(
+        codebasePath: string,
+        trigger: AutoIndexTrigger,
+        requireGitRepository = false,
+    ): AutoIndexDecision {
+        return evaluateAutoIndexPolicy({
+            rootPath: codebasePath,
+            executionProfile: this.config.executionProfile,
+            autoIndexWorkspace: Boolean(this.config.autoIndexWorkspace),
+            trigger,
+            requireGitRepository,
+        });
+    }
+
+    public isAutomaticIndexing(codebasePath: string): boolean {
+        return this.indexMaintenanceCoordinator.isAutomaticMaintenanceActive(codebasePath);
+    }
+
+    public requestWorkspaceIndexing(
+        codebasePath: string,
+        trigger: AutoIndexTrigger = "session_open",
+    ): Promise<void> {
+        if (this.validate("embedding_vector") !== null) return Promise.resolve();
+        const decision = this.evaluateAutoIndex(codebasePath, trigger, true);
+        if (!decision.allow) return Promise.resolve();
         const completion = this.indexMaintenanceCoordinator.requestWorkspaceIndexing(codebasePath);
         this.ownDetachedMutationCompletion(completion);
         return completion;
+    }
+
+    public requestAutomaticCreate(codebasePath: string): boolean {
+        if (this.validate("embedding_vector") !== null) return false;
+        const decision = this.evaluateAutoIndex(codebasePath, "tool_demand", true);
+        if (!decision.allow) return false;
+        const completion = this.indexMaintenanceCoordinator.requestWorkspaceIndexing(codebasePath);
+        this.ownDetachedMutationCompletion(completion);
+        void completion.catch((error: unknown) => {
+            console.warn(`[AUTO-INDEX] '${codebasePath}': ${error instanceof Error ? error.message : String(error)}`);
+        });
+        return true;
     }
 
     public requestAutomaticReindex(
         codebasePath: string,
         reason: AutomaticReindexReason,
     ): Promise<AutomaticReindexScheduleResult> {
+        if (this.validate("embedding_vector") !== null) {
+            return Promise.resolve(Object.freeze({ outcome: "unavailable" }));
+        }
+        const decision = evaluateAutoIndexPolicy({
+            rootPath: codebasePath,
+            executionProfile: this.config.executionProfile,
+            autoIndexWorkspace: this.config.autoIndexWorkspace !== false
+                && (this.config.executionProfile === "offline" || Boolean(this.config.autoIndexWorkspace)),
+            trigger: "compatibility_reindex",
+        });
+        if (!decision.allow) {
+            return Promise.resolve(Object.freeze({ outcome: "unavailable" }));
+        }
         return this.indexMaintenanceCoordinator.requestAutomaticReindex(codebasePath, reason);
     }
 
@@ -507,6 +561,8 @@ export class ProviderRuntime {
                 {
                     readFileMaxBytes: this.readFileMaxBytes,
                     ownDetachedMutationCompletion: (completion) => this.ownDetachedMutationCompletion(completion),
+                    isAutomaticIndexing: (codebasePath) => this.isAutomaticIndexing(codebasePath),
+                    requestAutomaticCreate: (codebasePath) => this.requestAutomaticCreate(codebasePath),
                     requestAutomaticReindex: (codebasePath, reason) => (
                         this.requestAutomaticReindex(codebasePath, reason)
                     ),

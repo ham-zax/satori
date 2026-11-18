@@ -257,6 +257,39 @@ test("runDoctor validates each configured client runtime instead of a shell-defa
                 reranker: null,
                 store: null,
             },
+            {
+                client: "cursor",
+                status: "not_configured",
+                source: null,
+                profile: null,
+                provider: null,
+                model: null,
+                dimension: null,
+                reranker: null,
+                store: null,
+            },
+            {
+                client: "vscode",
+                status: "not_configured",
+                source: null,
+                profile: null,
+                provider: null,
+                model: null,
+                dimension: null,
+                reranker: null,
+                store: null,
+            },
+            {
+                client: "windsurf",
+                status: "not_configured",
+                source: null,
+                profile: null,
+                provider: null,
+                model: null,
+                dimension: null,
+                reranker: null,
+                store: null,
+            },
         ],
     );
     assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");
@@ -1764,6 +1797,83 @@ test("runDoctor keeps a broken launcher's repair step without a duplicate instal
         assert.equal(result.nextSteps.length, 1);
         assert.match(result.nextSteps[0] ?? "", /replace the managed launcher/);
         assert.equal(result.nextSteps.some((step) => step === "Run npx -y @satori-code/cli@latest install."), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor lists all 7 supported clients when not installed and validates cursor, vscode, and windsurf", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-7clients-"));
+    try {
+        const notInstalled = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir },
+            managedLauncherPath: path.join(tempDir, ".satori", "bin", "satori-mcp.js"),
+            inspectManagedClients: () => [],
+        }));
+        const notInstalledCheck = notInstalled.checks.find((check) => check.name === "managed_client_configuration");
+        assert.match(
+            notInstalledCheck?.message ?? "",
+            /Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, Antigravity/,
+        );
+        assert.deepEqual(
+            notInstalled.runtimeConfigurations?.map((entry) => entry.client),
+            ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf"],
+        );
+
+        const configured = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir },
+            inspectManagedClients: () => [
+                {
+                    client: "cursor",
+                    configPath: "/tmp/cursor.json",
+                    status: "error",
+                    message: "cursor config does not point exactly to launcher.",
+                    usesManagedLauncher: false,
+                    runtimeEnvironment: {
+                        SATORI_RUNTIME_PROFILE: "offline",
+                        VECTOR_STORE_PROVIDER: "LanceDB",
+                        EMBEDDING_PROVIDER: "Potion",
+                        POTION_HELPER_PATH: "/tmp/potion-helper",
+                        POTION_MODEL_PATH: "/tmp/potion-model",
+                    },
+                },
+                {
+                    client: "vscode",
+                    configPath: "/tmp/vscode.json",
+                    status: "error",
+                    message: "vscode config does not point exactly to launcher.",
+                    usesManagedLauncher: false,
+                    runtimeEnvironment: {
+                        SATORI_RUNTIME_PROFILE: "offline",
+                        VECTOR_STORE_PROVIDER: "LanceDB",
+                        EMBEDDING_PROVIDER: "Potion",
+                        POTION_HELPER_PATH: "/tmp/potion-helper",
+                        POTION_MODEL_PATH: "/tmp/potion-model",
+                    },
+                },
+                {
+                    client: "windsurf",
+                    configPath: "/tmp/windsurf.json",
+                    status: "error",
+                    message: "windsurf config does not point exactly to launcher.",
+                    usesManagedLauncher: false,
+                    runtimeEnvironment: {
+                        SATORI_RUNTIME_PROFILE: "offline",
+                        VECTOR_STORE_PROVIDER: "LanceDB",
+                        EMBEDDING_PROVIDER: "Potion",
+                        POTION_HELPER_PATH: "/tmp/potion-helper",
+                        POTION_MODEL_PATH: "/tmp/potion-model",
+                    },
+                },
+            ],
+        }));
+
+        assert.match(configured.checks.find((c) => c.name === "client_runtime_cursor")?.message ?? "", /^Cursor:/);
+        assert.match(configured.checks.find((c) => c.name === "client_runtime_vscode")?.message ?? "", /^VS Code:/);
+        assert.match(configured.checks.find((c) => c.name === "client_runtime_windsurf")?.message ?? "", /^Windsurf:/);
+        assert.equal(configured.nextSteps.some((s) => s.includes("--client cursor") && s.includes("restart Cursor")), true);
+        assert.equal(configured.nextSteps.some((s) => s.includes("--client vscode") && s.includes("restart VS Code")), true);
+        assert.equal(configured.nextSteps.some((s) => s.includes("--client windsurf") && s.includes("restart Windsurf")), true);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

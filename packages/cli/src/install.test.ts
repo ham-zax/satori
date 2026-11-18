@@ -19,6 +19,7 @@ import {
     executeInstallCommand as executeInstallCommandProduction,
     executeManagedRuntimeUpgrade,
     createInstallPlan,
+    detectClientTargets,
     inspectManagedClientConfigurations,
     type InstallCommandInput,
     type InstallCommandOptions,
@@ -2139,6 +2140,8 @@ test("managed launcher closes the real postflight runtime on stdin EOF and unreg
     }
 
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-real-postflight-close-"));
+    const workspaceDir = path.join(homeDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
     const ownersPath = path.join(homeDir, ".satori", "runtime-owner", "owners.json");
     let runtimePid: number | undefined;
     let session: Awaited<ReturnType<typeof connectCliMcpSession>> | undefined;
@@ -2154,6 +2157,7 @@ test("managed launcher closes the real postflight runtime on stdin EOF and unreg
         session = await connectCliMcpSession({
             command: process.execPath,
             args: [launcherPath(homeDir)],
+            cwd: workspaceDir,
             env: {
                 HOME: homeDir,
                 SATORI_RUN_MODE: "postflight",
@@ -2199,6 +2203,8 @@ test("managed offline launchers attach independent sessions to one shared runtim
     }
 
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-shared-host-"));
+    const workspaceDir = path.join(homeDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
     const runtimeDirectory = path.join(homeDir, "runtime");
     fs.mkdirSync(runtimeDirectory, { mode: 0o700 });
     const stateRoot = path.join(homeDir, ".satori");
@@ -2232,28 +2238,34 @@ test("managed offline launchers attach independent sessions to one shared runtim
             SATORI_STATE_ROOT: stateRoot,
             XDG_RUNTIME_DIR: runtimeDirectory,
         };
-        [first, second] = await Promise.all([
+        await Promise.all([
             connectCliMcpSession({
                 command: process.execPath,
                 args: [launcherPath(homeDir)],
+                cwd: workspaceDir,
                 env: clientEnv,
                 startupTimeoutMs: 15_000,
                 callTimeoutMs: 5_000,
                 writeStderr: () => {},
+            }).then((session) => {
+                first = session;
             }),
             connectCliMcpSession({
                 command: process.execPath,
                 args: [launcherPath(homeDir)],
+                cwd: workspaceDir,
                 env: clientEnv,
                 startupTimeoutMs: 15_000,
                 callTimeoutMs: 5_000,
                 writeStderr: () => {},
+            }).then((session) => {
+                second = session;
             }),
         ]);
 
-        assert.equal((await first.listTools()).tools.length, 11);
-        assert.equal((await second.listTools()).tools.length, 11);
-        assert.notEqual(first.launcherPid, second.launcherPid);
+        assert.equal((await first!.listTools()).tools.length, 11);
+        assert.equal((await second!.listTools()).tools.length, 11);
+        assert.notEqual(first!.launcherPid, second!.launcherPid);
 
         const metadataRoot = path.join(stateRoot, "runtime-host");
         const identities = fs.readdirSync(metadataRoot);
@@ -2265,54 +2277,74 @@ test("managed offline launchers attach independent sessions to one shared runtim
         hostPid = metadata.hostPid;
         assert.equal(isProcessLive(hostPid), true);
 
-        await first.close();
+        await first!.close();
         first = undefined;
-        assert.equal((await second.listTools()).tools.length, 11);
-        await second.close();
+        assert.equal((await second!.listTools()).tools.length, 11);
+        await second!.close();
         second = undefined;
 
         process.kill(hostPid, "SIGKILL");
         assert.equal(await waitForProcessExit(hostPid, 5_000), true);
 
-        [replacement, replacementSecond] = await Promise.all([
+        await Promise.all([
             connectCliMcpSession({
                 command: process.execPath,
                 args: [launcherPath(homeDir)],
+                cwd: workspaceDir,
                 env: clientEnv,
                 startupTimeoutMs: 15_000,
                 callTimeoutMs: 5_000,
                 writeStderr: () => {},
+            }).then((session) => {
+                replacement = session;
             }),
             connectCliMcpSession({
                 command: process.execPath,
                 args: [launcherPath(homeDir)],
+                cwd: workspaceDir,
                 env: clientEnv,
                 startupTimeoutMs: 15_000,
                 callTimeoutMs: 5_000,
                 writeStderr: () => {},
+            }).then((session) => {
+                replacementSecond = session;
             }),
         ]);
-        assert.equal((await replacement.listTools()).tools.length, 11);
-        assert.equal((await replacementSecond.listTools()).tools.length, 11);
+        assert.equal((await replacement!.listTools()).tools.length, 11);
+        assert.equal((await replacementSecond!.listTools()).tools.length, 11);
         const replacementMetadata = JSON.parse(fs.readFileSync(
             path.join(metadataRoot, identities[0]!, "host.json"),
             "utf8",
         )) as { hostPid: number };
         assert.notEqual(replacementMetadata.hostPid, hostPid);
         hostPid = replacementMetadata.hostPid;
-        await replacement.close();
+        await replacement!.close();
         replacement = undefined;
-        await replacementSecond.close();
+        await replacementSecond!.close();
         replacementSecond = undefined;
         process.kill(hostPid, "SIGTERM");
         assert.equal(await waitForProcessExit(hostPid, 5_000), true);
     } finally {
-        await first?.close();
-        await second?.close();
-        await replacement?.close();
-        await replacementSecond?.close();
+        await first?.close().catch(() => {});
+        await second?.close().catch(() => {});
+        await replacement?.close().catch(() => {});
+        await replacementSecond?.close().catch(() => {});
         if (hostPid !== undefined && isProcessLive(hostPid)) {
             process.kill(hostPid, "SIGKILL");
+        }
+        const metadataRoot = path.join(stateRoot, "runtime-host");
+        if (fs.existsSync(metadataRoot)) {
+            for (const entry of fs.readdirSync(metadataRoot, { withFileTypes: true })) {
+                if (!entry.isDirectory()) continue;
+                try {
+                    const hostMeta = JSON.parse(fs.readFileSync(path.join(metadataRoot, entry.name, "host.json"), "utf8")) as { hostPid?: unknown };
+                    if (typeof hostMeta.hostPid === "number" && isProcessLive(hostMeta.hostPid)) {
+                        process.kill(hostMeta.hostPid, "SIGKILL");
+                    }
+                } catch {
+                    // Best-effort cleanup of any spawned test host.
+                }
+            }
         }
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -3447,7 +3479,7 @@ test("install all smoke writes launcher-backed config for every supported client
             dryRun: false,
         }, installOptions(homeDir));
 
-        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode", "agy"]);
+        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf"]);
         assert.equal(result.results.every((entry) => entry.status === "updated"), true);
 
         const launcher = readFile(launcherPath(homeDir));
@@ -3799,7 +3831,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
             VOYAGEAI_API_KEY: "pa-client-owned",
             MILVUS_ADDRESS: "localhost:19530",
         });
-        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode", "agy"]);
+        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf"]);
         assert.equal(healthy.every((proof) => proof.status === "ok"), true);
         assert.equal(healthy.every((proof) => proof.usesManagedLauncher === true), true);
         assert.equal(
@@ -3816,7 +3848,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
 
         const stale = inspectManagedClientConfigurations(homeDir);
         assert.equal(stale.find((proof) => proof.client === "claude")?.status, "error");
-        assert.equal(stale.filter((proof) => proof.status === "ok").length, 3);
+        assert.equal(stale.filter((proof) => proof.status === "ok").length, 6);
     });
 });
 
@@ -4062,7 +4094,7 @@ test("dry-run reports install actions without writing files", async () => {
             dryRun: true,
         }, installOptions(homeDir));
 
-        assert.equal(result.results.length, 4);
+        assert.equal(result.results.length, 7);
         assert.equal(result.results.every((entry) => entry.dryRun), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".gemini", "config", "mcp_config.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
@@ -4494,5 +4526,135 @@ test("managed runtime upgrade retains the active candidate when post-activation 
         const activeEntry = parseManagedLauncherDescriptor(activeLauncher).args[0];
         assert.equal(fs.existsSync(activeEntry), true, "the active launcher must keep its runtime entry");
         assert.equal(fs.existsSync(path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@6.1.0")), true);
+    });
+});
+
+test("cursor, vscode, and windsurf auto-detect, configure, inspect, and uninstall cleanly", async () => {
+    await withTempHome(async (homeDir) => {
+        fs.mkdirSync(path.join(homeDir, ".cursor"), { recursive: true });
+        fs.mkdirSync(path.join(homeDir, ".codeium", "windsurf"), { recursive: true });
+        const vscodeDir = path.join(homeDir, ".config", "Code", "User");
+        if (process.platform !== "darwin" && process.platform !== "win32") {
+            fs.mkdirSync(vscodeDir, { recursive: true });
+        }
+
+        const detected = detectClientTargets(homeDir, {});
+        assert.equal(detected.includes("cursor"), true);
+        assert.equal(detected.includes("windsurf"), true);
+
+        const installed = await executeInstallCommand({
+            kind: "install",
+            client: "all",
+            runtime: "voyage",
+            dryRun: false,
+        }, installOptions(homeDir));
+        assert.equal(installed.results.some((r) => r.client === "cursor" && r.status === "updated"), true);
+        assert.equal(installed.results.some((r) => r.client === "vscode" && r.status === "updated"), true);
+        assert.equal(installed.results.some((r) => r.client === "windsurf" && r.status === "updated"), true);
+
+        const cursorCfg = JSON.parse(readFile(path.join(homeDir, ".cursor", "mcp.json"))) as { mcpServers?: { satori?: { command?: string } } };
+        assert.equal(typeof cursorCfg.mcpServers?.satori?.command, "string");
+        const windsurfCfg = JSON.parse(readFile(path.join(homeDir, ".codeium", "windsurf", "mcp_config.json"))) as { mcpServers?: { satori?: { command?: string } } };
+        assert.equal(typeof windsurfCfg.mcpServers?.satori?.command, "string");
+        const vscodePath = installed.results.find((r) => r.client === "vscode")!.configPath;
+        const vscodeCfg = JSON.parse(readFile(vscodePath)) as { servers?: { satori?: { type?: string; command?: string } } };
+        assert.equal(vscodeCfg.servers?.satori?.type, "stdio");
+        assert.equal(typeof vscodeCfg.servers?.satori?.command, "string");
+
+        const proofs = inspectManagedClientConfigurations(homeDir);
+        for (const client of ["cursor", "vscode", "windsurf"] as const) {
+            assert.equal(proofs.find((p) => p.client === client)?.status, "ok");
+        }
+
+        await executeInstallCommand({
+            kind: "uninstall",
+            client: "all",
+            dryRun: false,
+        }, installOptions(homeDir));
+        const afterCursor = JSON.parse(readFile(path.join(homeDir, ".cursor", "mcp.json"))) as { mcpServers?: unknown };
+        assert.equal(afterCursor.mcpServers, undefined);
+        const afterVscode = JSON.parse(readFile(vscodePath)) as { servers?: unknown };
+        assert.equal(afterVscode.servers, undefined);
+    });
+});
+
+test("vscode install, inspection, and uninstall support JSONC comments and trailing commas", async () => {
+    await withTempHome(async (homeDir) => {
+        const initialJsonc = [
+            "// VS Code MCP configuration",
+            "{",
+            '  "servers": {',
+            "    // Keep sibling MCP server intact",
+            '    "sibling": {',
+            '      "type": "stdio",',
+            '      "command": "npx",',
+            '      "args": ["-y", "sibling-mcp"],',
+            "    },",
+            "  },",
+            "}",
+            "",
+        ].join("\n");
+
+        const dryRun = await executeInstallCommand({
+            kind: "install",
+            client: "vscode",
+            runtime: "voyage",
+            dryRun: true,
+        }, installOptions(homeDir));
+        const configPath = dryRun.results.find((r) => r.client === "vscode")!.configPath;
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, initialJsonc, "utf8");
+
+        const installed = await executeInstallCommand({
+            kind: "install",
+            client: "vscode",
+            runtime: "voyage",
+            dryRun: false,
+        }, installOptions(homeDir));
+        assert.equal(installed.results[0]?.status, "updated");
+
+        const afterInstall = readFile(configPath);
+        assert.match(afterInstall, /\/\/ VS Code MCP configuration/);
+        assert.match(afterInstall, /\/\/ Keep sibling MCP server intact/);
+        assert.match(afterInstall, /"sibling"/);
+        assert.match(afterInstall, /"satori"/);
+
+        const proofs = inspectManagedClientConfigurations(homeDir);
+        assert.equal(proofs.find((p) => p.client === "vscode")?.status, "ok");
+
+        await executeInstallCommand({
+            kind: "uninstall",
+            client: "vscode",
+            dryRun: false,
+        }, installOptions(homeDir));
+        const afterSiblingUninstall = readFile(configPath);
+        assert.match(afterSiblingUninstall, /\/\/ VS Code MCP configuration/);
+        assert.match(afterSiblingUninstall, /\/\/ Keep sibling MCP server intact/);
+        assert.match(afterSiblingUninstall, /"sibling"/);
+        assert.doesNotMatch(afterSiblingUninstall, /"satori"/);
+
+        // Now verify uninstalling the last server entry removes "servers" while preserving top-level comments.
+        const onlySatoriJsonc = [
+            "// Top comment preserved",
+            "{",
+            '  "servers": {',
+            '    "satori": {',
+            '      "type": "stdio",',
+            `      "command": ${JSON.stringify(process.execPath)},`,
+            `      "args": [${JSON.stringify(launcherPath(homeDir))}],`,
+            "    },",
+            "  },",
+            "}",
+            "",
+        ].join("\n");
+        fs.writeFileSync(configPath, onlySatoriJsonc, "utf8");
+        await executeInstallCommand({
+            kind: "uninstall",
+            client: "vscode",
+            dryRun: false,
+        }, installOptions(homeDir));
+        const afterLastUninstall = readFile(configPath);
+        assert.match(afterLastUninstall, /\/\/ Top comment preserved/);
+        assert.doesNotMatch(afterLastUninstall, /"servers"/);
     });
 });

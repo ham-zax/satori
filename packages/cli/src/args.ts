@@ -45,6 +45,7 @@ export type ParsedCommand =
         rerankerModel?: string;
         noVerify?: boolean;
         skill?: boolean;
+        index?: boolean;
     }
     | {
         kind: "install";
@@ -57,6 +58,7 @@ export type ParsedCommand =
         rerankerModel?: string;
         noVerify?: boolean;
         skill?: boolean;
+        index?: boolean;
     }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean; purge: boolean }
     | { kind: "tools-list" }
@@ -73,7 +75,7 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "agy";
+export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "agy" | "cursor" | "vscode" | "windsurf";
 export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
@@ -94,19 +96,21 @@ export const GLOBAL_OPTION_SPECS: readonly CommandOptionSpec[] = [
     { flag: "--call-timeout-ms", value: "n", description: "MCP call timeout in milliseconds (default: 600000)" },
 ];
 
-const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy";
+const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy|cursor|vscode|windsurf";
 
 /** The flags each command's parser below accepts; per-command help renders exactly this table. */
 export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOptionSpec[]>> = {
     install: [
-        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode; agy is opt-in)" },
+        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf; agy is opt-in)" },
         { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
         { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
         { flag: "--reranker", value: Object.keys(RERANKER_PROVIDERS).join("|"), description: "Select the reranker provider (LateOn is offline only)" },
         { flag: "--reranker-model", value: "model", description: "Select a Voyage reranker model (requires --reranker voyage)" },
         { flag: "--no-verify", description: "Skip the Voyage reranker test call (requires --reranker voyage)" },
         { flag: "--profile", value: "default|minimal|all-text", description: "Repository index profile" },
-        { flag: "--skill", description: "Also install the optional satori agent skill" },
+        { flag: "--no-skill", description: "Skip installing the satori agent skill (installed by default)" },
+        { flag: "--index", description: "Index the current repository immediately after install" },
+        { flag: "--no-index", description: "Skip indexing the current repository after install" },
         { flag: "--dry-run", description: "Show what would change without changing anything" },
     ],
     uninstall: [
@@ -185,7 +189,11 @@ function parsePositiveInteger(value: string, flagName: string): number {
 }
 
 function normalizeFlagToken(token: string): string {
-    return token.replace(/^--/, "").replace(/-/g, "_");
+    return token
+        .replace(/^--/, "")
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .replace(/-/g, "_")
+        .toLowerCase();
 }
 
 function stripFlagPrefix(token: string): string {
@@ -341,14 +349,15 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let reranker: InstallReranker | undefined;
     let rerankerModel: string | undefined;
     let noVerify = false;
-    let skill = false;
+    let skill = true;
+    let indexRepo: boolean | undefined;
 
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
         if (token === "--client") {
             const next = args[i + 1];
-            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode" && next !== "agy") {
-                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode, agy.", 2);
+            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode" && next !== "agy" && next !== "cursor" && next !== "vscode" && next !== "windsurf") {
+                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf.", 2);
             }
             client = next;
             i += 1;
@@ -415,6 +424,18 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             skill = true;
             continue;
         }
+        if (kind === "install" && token === "--no-skill") {
+            skill = false;
+            continue;
+        }
+        if (kind === "install" && token === "--index") {
+            indexRepo = true;
+            continue;
+        }
+        if (kind === "install" && token === "--no-index") {
+            indexRepo = false;
+            continue;
+        }
         throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
     }
 
@@ -451,6 +472,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             ...(rerankerModel ? { rerankerModel } : {}),
             ...(noVerify ? { noVerify: true } : {}),
             ...(skill ? { skill: true } : {}),
+            ...(indexRepo !== undefined ? { index: indexRepo } : {}),
         };
     }
     return {
@@ -464,6 +486,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         ...(rerankerModel ? { rerankerModel } : {}),
         ...(noVerify ? { noVerify: true } : {}),
         ...(skill ? { skill: true } : {}),
+        ...(indexRepo !== undefined ? { index: indexRepo } : {}),
     };
 }
 
@@ -745,6 +768,20 @@ function isPrimitiveEnum(enumValues: unknown[]): boolean {
     });
 }
 
+function resolveWrapperPropertySchema(schema: WrapperJsonSchema): WrapperJsonSchema {
+    if (Array.isArray(schema.anyOf)) {
+        const arrayVariant = schema.anyOf.find(
+            (v): v is WrapperJsonSchema => isWrapperJsonSchema(v) && v.type === "array" && unsupportedSchemaReason(v) === null,
+        );
+        if (arrayVariant) return arrayVariant;
+        const anySupported = schema.anyOf.find(
+            (v): v is WrapperJsonSchema => isWrapperJsonSchema(v) && unsupportedSchemaReason(v) === null,
+        );
+        if (anySupported) return anySupported;
+    }
+    return schema;
+}
+
 function unsupportedSchemaReason(schema: unknown): string | null {
     if (!isWrapperJsonSchema(schema)) {
         return "schema is not an object";
@@ -753,6 +790,12 @@ function unsupportedSchemaReason(schema: unknown): string | null {
         return "oneOf is not supported in wrapper mode";
     }
     if ("anyOf" in schema) {
+        if (
+            Array.isArray(schema.anyOf)
+            && schema.anyOf.some((v) => isWrapperJsonSchema(v) && unsupportedSchemaReason(v) === null)
+        ) {
+            return null;
+        }
         return "anyOf is not supported in wrapper mode";
     }
     if ("allOf" in schema) {
@@ -781,6 +824,7 @@ function unsupportedSchemaReason(schema: unknown): string | null {
         if (typeof itemSchema.type === "string" && !PRIMITIVE_TYPES.has(itemSchema.type) && !Array.isArray(itemSchema.enum)) {
             return "array item type must be primitive";
         }
+        return null;
     }
 
     if (typeof schema.type === "string" && schema.type !== "object" && !PRIMITIVE_TYPES.has(schema.type) && !Array.isArray(schema.enum)) {
@@ -884,14 +928,6 @@ export function parseWrapperArgumentsFromSchema(
                 2
             );
         }
-        const unsupportedReason = unsupportedSchemaReason(propertySchema);
-        if (unsupportedReason) {
-            throw new CliError(
-                "E_SCHEMA_UNSUPPORTED",
-                `${toolName}.${propertyName} uses unsupported schema (${unsupportedReason}). Use --args-json/--args-file.`,
-                2
-            );
-        }
         const normalized = normalizeFlagToken(`--${propertyName}`);
         normalizedToCanonical.set(normalized, propertyName);
         propertySchemas.set(propertyName, propertySchema);
@@ -913,8 +949,8 @@ export function parseWrapperArgumentsFromSchema(
             throw new CliError("E_USAGE", `Unknown flag '${token}' for tool '${toolName}'.`, 2);
         }
 
-        const propertySchema = propertySchemas.get(canonicalName);
-        if (!propertySchema) {
+        const rawPropertySchema = propertySchemas.get(canonicalName);
+        if (!rawPropertySchema) {
             throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName}.${canonicalName} schema is missing. Use --args-json/--args-file.`, 2);
         }
         if (isJsonFlag) {
@@ -926,6 +962,16 @@ export function parseWrapperArgumentsFromSchema(
             i += 1;
             continue;
         }
+
+        const unsupportedReason = unsupportedSchemaReason(rawPropertySchema);
+        if (unsupportedReason) {
+            throw new CliError(
+                "E_SCHEMA_UNSUPPORTED",
+                `${toolName}.${canonicalName} uses unsupported schema (${unsupportedReason}). Use --args-json/--args-file.`,
+                2
+            );
+        }
+        const propertySchema = resolveWrapperPropertySchema(rawPropertySchema);
 
         if (propertySchema?.type === "object") {
             throw new CliError("E_USAGE", `Flag '${token}' requires JSON input. Use --${stripFlagPrefix(token)}-json '<json>'.`, 2);

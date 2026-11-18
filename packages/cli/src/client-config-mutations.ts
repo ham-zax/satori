@@ -272,7 +272,7 @@ function prepareCodexMutation(filePath: string, runtimeCommand: ManagedRuntimeCo
 
 export function parseJsonObject(filePath: string): Record<string, unknown> {
     const current = readTextIfExists(filePath);
-    if (!current) {
+    if (!current || current.trim().length === 0) {
         return {};
     }
     let parsed: unknown;
@@ -324,30 +324,60 @@ export function prepareAgyInstall(filePath: string, runtimeCommand: ManagedRunti
     return prepareMcpServersJsonInstall(filePath, runtimeCommand, buildAgyServerConfig);
 }
 
+export function prepareVsCodeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const raw = readTextIfExists(filePath);
+    const current = raw && raw.trim().length > 0 ? raw : "{}\n";
+    const currentObject = parseJsoncObject(filePath, current);
+    const serversValue = currentObject.servers;
+    if (serversValue !== undefined && (!serversValue || typeof serversValue !== "object" || Array.isArray(serversValue))) {
+        throw new CliError("E_USAGE", `Expected servers to be an object in ${filePath}.`, 2);
+    }
+    const existingEntry = (serversValue as Record<string, unknown> | undefined)?.satori;
+    if (existingEntry !== undefined && !isManagedClaudeEntry(existingEntry, runtimeCommand.args[0])) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove servers.satori manually or align it to the managed Satori form first.`,
+            2,
+        );
+    }
+    const existingSatori = objectValue(existingEntry);
+    const desiredServer: Record<string, unknown> = {
+        ...existingSatori,
+        ...buildClaudeServerConfig(runtimeCommand, existingSatori),
+    };
+    delete desiredServer.timeout;
+    const desiredEnv = desiredServer.env;
+    if (desiredEnv && typeof desiredEnv === "object" && !Array.isArray(desiredEnv) && Object.keys(desiredEnv).length === 0) {
+        delete desiredServer.env;
+    }
+    return mutateJsonc(filePath, current, ["servers", "satori"], desiredServer);
+}
+
 function prepareMcpServersJsonInstall(
     filePath: string,
     runtimeCommand: ManagedRuntimeCommand,
     buildServer: (runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>) => Record<string, unknown>,
+    containerKey: "mcpServers" | "servers" = "mcpServers",
 ): FileMutation {
     const currentObject = parseJsonObject(filePath);
     const currentSerialized = JSON.stringify(currentObject);
-    const existingSatori = objectValue((currentObject.mcpServers as Record<string, unknown> | undefined)?.satori);
+    const existingSatori = objectValue((currentObject[containerKey] as Record<string, unknown> | undefined)?.satori);
     const desiredServer = buildServer(runtimeCommand, existingSatori);
 
-    const mcpServersValue = currentObject.mcpServers;
+    const mcpServersValue = currentObject[containerKey];
     let mcpServers: Record<string, unknown>;
     if (mcpServersValue === undefined) {
         mcpServers = {};
     } else if (mcpServersValue && typeof mcpServersValue === "object" && !Array.isArray(mcpServersValue)) {
         mcpServers = { ...(mcpServersValue as Record<string, unknown>) };
     } else {
-        throw new CliError("E_USAGE", `Expected mcpServers to be an object in ${filePath}.`, 2);
+        throw new CliError("E_USAGE", `Expected ${containerKey} to be an object in ${filePath}.`, 2);
     }
 
     if (mcpServers.satori !== undefined && !isManagedClaudeEntry(mcpServers.satori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
-            `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove mcpServers.satori manually or align it to the managed Satori form first.`,
+            `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove ${containerKey}.satori manually or align it to the managed Satori form first.`,
             2
         );
     }
@@ -362,7 +392,7 @@ function prepareMcpServersJsonInstall(
     if (desiredEnv && typeof desiredEnv === "object" && !Array.isArray(desiredEnv) && Object.keys(desiredEnv).length === 0) {
         delete (mcpServers.satori as Record<string, unknown>).env;
     }
-    currentObject.mcpServers = mcpServers;
+    currentObject[containerKey] = mcpServers;
 
     const next = `${JSON.stringify(currentObject, null, 2)}\n`;
     return {
@@ -377,9 +407,40 @@ function prepareMcpServersJsonInstall(
     };
 }
 
-export function prepareClaudeUninstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+export function prepareVsCodeUninstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const current = readTextIfExists(filePath);
+    if (!current || current.trim().length === 0) {
+        return { changed: false, apply: () => {} };
+    }
+    const currentObject = parseJsoncObject(filePath, current);
+    const serversValue = currentObject.servers;
+    if (!serversValue || typeof serversValue !== "object" || Array.isArray(serversValue)) {
+        return { changed: false, apply: () => {} };
+    }
+    const servers = serversValue as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(servers, "satori")) {
+        return { changed: false, apply: () => {} };
+    }
+    if (!isManagedClaudeEntry(servers.satori, runtimeCommand.args[0])) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to remove unmanaged Satori config in ${filePath}. Remove servers.satori manually instead.`,
+            2,
+        );
+    }
+    if (Object.keys(servers).length === 1) {
+        return mutateJsonc(filePath, current, ["servers"], undefined);
+    }
+    return mutateJsonc(filePath, current, ["servers", "satori"], undefined);
+}
+
+export function prepareClaudeUninstall(
+    filePath: string,
+    runtimeCommand: ManagedRuntimeCommand,
+    containerKey: "mcpServers" | "servers" = "mcpServers",
+): FileMutation {
     const currentObject = parseJsonObject(filePath);
-    const mcpServersValue = currentObject.mcpServers;
+    const mcpServersValue = currentObject[containerKey];
     if (!mcpServersValue || typeof mcpServersValue !== "object" || Array.isArray(mcpServersValue)) {
         return { changed: false, apply: () => {} };
     }
@@ -391,16 +452,16 @@ export function prepareClaudeUninstall(filePath: string, runtimeCommand: Managed
     if (!isManagedClaudeEntry(mcpServers.satori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
-            `Refusing to remove unmanaged Satori config in ${filePath}. Remove mcpServers.satori manually instead.`,
+            `Refusing to remove unmanaged Satori config in ${filePath}. Remove ${containerKey}.satori manually instead.`,
             2
         );
     }
 
     delete mcpServers.satori;
     if (Object.keys(mcpServers).length === 0) {
-        delete currentObject.mcpServers;
+        delete currentObject[containerKey];
     } else {
-        currentObject.mcpServers = mcpServers;
+        currentObject[containerKey] = mcpServers;
     }
 
     const next = `${JSON.stringify(currentObject, null, 2)}\n`;
@@ -471,7 +532,8 @@ export function mutateJsonc(filePath: string, current: string, pathSegments: Arr
 }
 
 export function prepareOpenCodeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
-    const current = readTextIfExists(filePath) ?? "{}\n";
+    const raw = readTextIfExists(filePath);
+    const current = raw && raw.trim().length > 0 ? raw : "{}\n";
     const currentObject = parseJsoncObject(filePath, current);
     const mcpValue = currentObject.mcp;
     if (mcpValue !== undefined && (!mcpValue || typeof mcpValue !== "object" || Array.isArray(mcpValue))) {
@@ -783,8 +845,8 @@ export function prepareCompanionMutation(
     runtimeCommand: ManagedRuntimeCommand,
 ): CompanionMutation {
     const install = command.kind === "install";
-    // The skill is opt-in (--skill). Without the flag, install keeps an existing
-    // Satori-written skill current and linked, and never creates one.
+    // CLI `install` sets `skill: true` by default (opt-out via `--no-skill`).
+    // Programmatic callers without `skill: true` only refresh an existing Satori-written skill.
     const skillRequested = command.kind === "install" && command.skill === true;
     let mutation: FileMutation;
     switch (companion.kind) {
@@ -827,11 +889,15 @@ export function prepareConfigMutation(
         mutation = command.kind === "install"
             ? prepareCodexInstall(target.configPath, runtimeCommand)
             : prepareCodexUninstall(target.configPath, runtimeCommand);
-    } else if (target.client === "claude" || target.client === "agy") {
-        // Both keep Satori under mcpServers.satori; uninstall removal is identical.
+    } else if (target.client === "claude" || target.client === "agy" || target.client === "cursor" || target.client === "windsurf") {
+        // All four keep Satori under mcpServers.satori; uninstall removal is identical.
         mutation = command.kind === "install"
             ? (target.client === "agy" ? prepareAgyInstall : prepareClaudeInstall)(target.configPath, runtimeCommand)
             : prepareClaudeUninstall(target.configPath, runtimeCommand);
+    } else if (target.client === "vscode") {
+        mutation = command.kind === "install"
+            ? prepareVsCodeInstall(target.configPath, runtimeCommand)
+            : prepareVsCodeUninstall(target.configPath, runtimeCommand);
     } else {
         mutation = command.kind === "install"
             ? prepareOpenCodeInstall(target.configPath, runtimeCommand)

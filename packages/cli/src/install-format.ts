@@ -9,6 +9,9 @@ const CLIENT_LABELS = {
     claude: "Claude Code",
     opencode: "OpenCode",
     agy: "Antigravity",
+    cursor: "Cursor",
+    vscode: "VS Code",
+    windsurf: "Windsurf",
 } as const;
 
 const CHECK_LABELS: Record<InstallPostflightCheck["name"], string> = {
@@ -102,9 +105,14 @@ function verificationLines(postflight: InstallPostflightResult): string[] {
     ];
 }
 
+export interface InstallTextOptions {
+    omitManualIndexHint?: boolean;
+}
+
 export function formatInstallText(
     result: InstallCommandResult,
     postflight?: InstallPostflightResult,
+    options?: InstallTextOptions,
 ): string {
     const heading = result.dryRun
         ? `Satori ${result.action} preview`
@@ -143,8 +151,13 @@ export function formatInstallText(
     }
     const restart = restartInstruction(result);
     if (restart) lines.push("", restart);
-    if (restart && (!postflight || postflight.status === "ok")) {
-        lines.push("Then ask your agent: Index /absolute/path/to/repo with Satori.");
+    if (restart && (!postflight || postflight.status === "ok") && !options?.omitManualIndexHint) {
+        const profile = result.runtimeEnvironment?.SATORI_RUNTIME_PROFILE ?? result.runtime;
+        if (profile === "offline") {
+            lines.push("Git workspaces are indexed automatically in the background when your agent starts.");
+        } else {
+            lines.push("Your agent can index repositories in the background as needed.");
+        }
     }
     if (postflight?.status !== undefined && postflight.status !== "ok") {
         lines.push(`Run \`${satoriCliCommand("doctor --verbose")}\` for diagnostic details.`);
@@ -158,6 +171,7 @@ export function emitInstallText(
     writers: CliWriters,
     result: InstallCommandResult,
     postflight?: InstallPostflightResult,
+    options?: InstallTextOptions,
 ): void {
-    writers.writeStdout(formatInstallText(result, postflight));
+    writers.writeStdout(formatInstallText(result, postflight, options));
 }

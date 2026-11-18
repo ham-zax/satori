@@ -11,6 +11,9 @@ const CLIENT_LABELS: Record<ClientName, string> = {
     claude: "Claude Code",
     opencode: "OpenCode",
     agy: "Antigravity",
+    cursor: "Cursor",
+    vscode: "VS Code",
+    windsurf: "Windsurf",
 };
 
 export interface SatoriUpgradeResult extends ManagedRuntimeUpgradeResult {

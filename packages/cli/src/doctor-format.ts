@@ -30,10 +30,15 @@ function checkValue(result: DoctorResult, name: string): string | null {
 }
 
 function runtimeClientName(client: NonNullable<DoctorResult["runtimeConfigurations"]>[number]["client"]): string {
-    if (client === "codex") return "Codex";
-    if (client === "claude") return "Claude Code";
-    if (client === "agy") return "Antigravity";
-    return "OpenCode";
+    switch (client) {
+        case "codex": return "Codex";
+        case "claude": return "Claude Code";
+        case "opencode": return "OpenCode";
+        case "agy": return "Antigravity";
+        case "cursor": return "Cursor";
+        case "vscode": return "VS Code";
+        case "windsurf": return "Windsurf";
+    }
 }
 
 function terminalSafeCell(value: string): string {
@@ -133,6 +138,9 @@ function clientName(checkName: string): string | null {
     if (client === "opencode") return "OpenCode";
     if (client === "claude") return "Claude Code";
     if (client === "agy") return "Antigravity";
+    if (client === "cursor") return "Cursor";
+    if (client === "vscode") return "VS Code";
+    if (client === "windsurf") return "Windsurf";
     return client;
 }
 
@@ -141,8 +149,11 @@ function expandedHumanChecks(checks: DoctorCheck[]): DoctorCheck[] {
         if (check.name !== "managed_client_configuration" || check.status !== "error") {
             return [check];
         }
-        const clients = [...check.message.matchAll(/\b(codex|opencode|claude|agy) config\b/gi)]
-            .map((match) => match[1].toLowerCase())
+        const clients = [...check.message.matchAll(/\b(codex|opencode|claude|agy|cursor|vscode|windsurf|vs code) config\b/gi)]
+            .map((match) => {
+                const matched = match[1].toLowerCase();
+                return matched === "vs code" ? "vscode" : matched;
+            })
             .filter((client, index, values) => values.indexOf(client) === index);
         if (clients.length === 0) return [check];
         return clients.map((client) => ({
@@ -223,7 +234,7 @@ function visibleNextSteps(result: DoctorResult, checks: DoctorCheck[], verbose: 
         .map((check) => ({ id: check.name.replace("managed_client_configuration_", ""), name: clientName(check.name) }))
         .filter((client): client is { id: string; name: string } => Boolean(client.name));
     const specificRestartExists = staleClients.length > 0
-        || result.nextSteps.some((step) => /restart (Codex|OpenCode|Claude Code|Antigravity)/i.test(step));
+        || result.nextSteps.some((step) => /restart (Codex|OpenCode|Claude Code|Antigravity|Cursor|VS Code|Windsurf)/i.test(step));
     const steps = result.nextSteps.filter((step) => !(
         (specificRestartExists && step === "Restart your MCP client after changing Satori environment variables.")
         || (staleClients.length > 0 && step === `Rerun ${SATORI_CLI_NPX_COMMAND} install for each stale configured MCP client, then restart it.`)

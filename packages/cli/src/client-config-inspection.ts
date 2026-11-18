@@ -86,16 +86,31 @@ export function verifyManagedClientTarget(
                 && SATORI_RUNTIME_ENV_VARS.every((name) => (entry.env_vars as unknown[]).includes(name));
             usesManagedLauncher = entry?.url === undefined && isManagedCommandParts(entry?.command, entry?.args, expected.args[0]);
             runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
-        } else if (target.client === "claude" || target.client === "agy") {
-            const config = parseJsonObject(target.configPath);
-            const entry = objectValue(objectValue(config.mcpServers)?.satori);
+        } else if (
+            target.client === "claude"
+            || target.client === "agy"
+            || target.client === "cursor"
+            || target.client === "windsurf"
+            || target.client === "vscode"
+        ) {
+            const config = target.client === "vscode"
+                ? (() => {
+                    const content = readTextIfExists(target.configPath);
+                    return content && content.trim().length > 0
+                        ? parseJsoncObject(target.configPath, content)
+                        : {};
+                })()
+                : parseJsonObject(target.configPath);
+            const container = target.client === "vscode" ? config.servers : config.mcpServers;
+            const entry = objectValue(objectValue(container)?.satori);
             // agy skips entries flagged disabled, so the launcher wiring alone does not make it configured.
             disabled = target.client === "agy" && entry?.disabled === true;
             matches = commandMatchesExpected(entry?.command, entry?.args, expected) && !disabled;
             usesManagedLauncher = isManagedCommandParts(entry?.command, entry?.args, expected.args[0]);
             runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
         } else {
-            const content = readTextIfExists(target.configPath) ?? "";
+            const raw = readTextIfExists(target.configPath);
+            const content = raw && raw.trim().length > 0 ? raw : "{}";
             const config = parseJsoncObject(target.configPath, content);
             const entry = objectValue(objectValue(config.mcp)?.satori);
             matches = Array.isArray(entry?.command)
@@ -138,10 +153,20 @@ export function hasSatoriClientEntry(target: ClientTarget): boolean {
         if (target.client === "codex") {
             return parseCodexConfig(content, target.configPath).entry !== undefined;
         }
-        if (target.client === "claude" || target.client === "agy") {
-            return objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori) !== undefined;
+        if (
+            target.client === "claude"
+            || target.client === "agy"
+            || target.client === "cursor"
+            || target.client === "windsurf"
+            || target.client === "vscode"
+        ) {
+            const config = target.client === "vscode"
+                ? (content.trim().length > 0 ? parseJsoncObject(target.configPath, content) : {})
+                : parseJsonObject(target.configPath);
+            const container = target.client === "vscode" ? config.servers : config.mcpServers;
+            return objectValue(objectValue(container)?.satori) !== undefined;
         }
-        return objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori) !== undefined;
+        return objectValue(objectValue((content.trim().length > 0 ? parseJsoncObject(target.configPath, content) : {}).mcp)?.satori) !== undefined;
     } catch {
         // An invalid Codex document supplies no usable server settings. Selected
         // install/uninstall targets still parse it strictly before any mutation.
@@ -178,15 +203,31 @@ export function readClientVectorStore(target: ClientTarget): InstallVectorStore 
     if (target.client === "codex") {
         return readCodexVectorStore(target.configPath);
     }
-    if (target.client === "claude" || target.client === "agy") {
-        const entry = objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori);
+    if (
+        target.client === "claude"
+        || target.client === "agy"
+        || target.client === "cursor"
+        || target.client === "windsurf"
+        || target.client === "vscode"
+    ) {
+        const config = target.client === "vscode"
+            ? (() => {
+                const content = readTextIfExists(target.configPath);
+                return content && content.trim().length > 0
+                    ? parseJsoncObject(target.configPath, content)
+                    : {};
+            })()
+            : parseJsonObject(target.configPath);
+        const container = target.client === "vscode" ? config.servers : config.mcpServers;
+        const entry = objectValue(objectValue(container)?.satori);
+        const label = target.client === "agy" ? "Antigravity" : target.client === "vscode" ? "VS Code" : `${target.client[0].toUpperCase()}${target.client.slice(1)}`;
         return parseVectorStoreLiteral(
             objectValue(entry?.env)?.VECTOR_STORE_PROVIDER,
-            `${target.client === "agy" ? "Antigravity" : "Claude"} config '${target.configPath}'`,
+            `${label} config '${target.configPath}'`,
         );
     }
     const content = readTextIfExists(target.configPath);
-    if (content === null) {
+    if (content === null || content.trim().length === 0) {
         return undefined;
     }
     const entry = objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori);
@@ -267,7 +308,8 @@ export function inspectManagedClientConfigurations(
 export function verifyManagedClientConfigurations(
     installResult: InstallCommandResult,
     homeDir: string,
+    inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): ManagedClientConfigProof[] {
     const expected = resolveManagedClientCommand(homeDir);
-    return installResult.results.map((result) => verifyManagedClientTarget(result, expected));
+    return installResult.results.map((result) => verifyManagedClientTarget(result, expected, inheritedEnv));
 }

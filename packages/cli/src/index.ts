@@ -68,6 +68,7 @@ import {
     type TerminateOptions,
     type TerminateResult,
 } from "./terminate.js";
+import { sanitizeTerminalText } from "./terminal-sanitize.js";
 
 interface RunCliOptions {
     writeStdout?: (text: string) => void;
@@ -306,6 +307,83 @@ function formatVersionText(result: ReturnType<typeof buildVersionPayload>): stri
     return lines.join("\n");
 }
 
+function findGitRepositoryRoot(startDir: string): string | null {
+    let current = path.resolve(startDir);
+    while (true) {
+        if (fs.existsSync(path.join(current, ".git"))) {
+            return current;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return null;
+        }
+        current = parent;
+    }
+}
+
+function resolveCliSessionRootsEnv(
+    command: ParsedCommand,
+    env: NodeJS.ProcessEnv,
+    homeDir: string,
+    cwd: string | undefined,
+): Record<string, string> {
+    if (env.SATORI_SESSION_ROOTS_JSON !== undefined && env.SATORI_SESSION_ROOTS_JSON !== "") {
+        return {};
+    }
+    const candidates: string[] = [];
+    if (command.kind === "wrapper") {
+        for (let i = 0; i < command.wrapperArgs.length - 1; i += 1) {
+            const flag = command.wrapperArgs[i];
+            if (flag === "--path" || flag === "--codebase-root" || flag === "--codebaseRoot") {
+                candidates.push(command.wrapperArgs[i + 1]!);
+            }
+        }
+    }
+    if ((command.kind === "wrapper" || command.kind === "tool-call") && command.rawArgsMode.kind === "json") {
+        try {
+            const rawObj = JSON.parse(command.rawArgsMode.value) as Record<string, unknown>;
+            if (typeof rawObj?.path === "string") candidates.push(rawObj.path);
+            if (typeof rawObj?.codebaseRoot === "string") candidates.push(rawObj.codebaseRoot);
+        } catch {
+            // Leave raw JSON validation to resolveRawArguments.
+        }
+    }
+    if (candidates.length === 0) return {};
+
+    const resolvedHome = path.resolve(homeDir);
+    const resolvedStateRoot = path.resolve(env.SATORI_STATE_ROOT ?? path.join(homeDir, ".satori"));
+    const isBroad = (dir: string): boolean => {
+        const r = path.resolve(dir);
+        return r === path.sep || r === resolvedHome || r === resolvedStateRoot || r.startsWith(`${resolvedStateRoot}${path.sep}`);
+    };
+
+    const roots = new Set<string>();
+    for (const candidate of candidates) {
+        if (!path.isAbsolute(candidate)) continue;
+        try {
+            const stat = fs.statSync(candidate);
+            const dir = stat.isDirectory() ? candidate : path.dirname(candidate);
+            const targetRoot = findGitRepositoryRoot(dir) ?? dir;
+            if (!isBroad(targetRoot)) {
+                roots.add(targetRoot);
+            }
+        } catch {
+            // Non-existent path: leave error handling to the MCP tool.
+        }
+    }
+    if (roots.size === 0) return {};
+
+    const effectiveCwd = path.resolve(cwd ?? process.cwd());
+    try {
+        if (fs.statSync(effectiveCwd).isDirectory() && !isBroad(effectiveCwd)) {
+            roots.add(effectiveCwd);
+        }
+    } catch {
+        // Ignore missing cwd.
+    }
+    return { SATORI_SESSION_ROOTS_JSON: JSON.stringify([...roots].slice(0, 16)) };
+}
+
 function terminalWidth(): number {
     const columns = process.stdout.columns;
     return typeof columns === "number" && columns >= 40 ? columns : DEFAULT_TEXT_WIDTH;
@@ -327,12 +405,12 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64 and Linux ARM64 with glibc)",
+            "install [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--no-skill] [--index|--no-index] [--dry-run] (default: auto-detect Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64 and Linux ARM64 with glibc)",
             "version (-v, --version)",
             "upgrade",
             "terminate",
             "reranker use <provider> [--model <name>] [--no-verify]|enable|disable|status [--purge] (select and inspect the reranker for the installed runtime)",
-            "uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
+            "uninstall [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
@@ -464,15 +542,16 @@ async function invokeTool(
     session: CliSession,
     manageIndexPollIntervalMs: number,
     writers: { writeStdout: (text: string) => void; writeStderr: (text: string) => void; },
-    format: "json" | "text",
+    format: "json" | "text" | "silent",
     diagnostics: { path: string; nowMs: () => number } | null,
 ): Promise<number> {
+    const errorFormat = format === "silent" ? "json" : format;
     const startedAt = diagnostics?.nowMs() ?? 0;
     let result: CallToolResult;
     let initialErrorExit: number | null;
     try {
         result = await session.callTool(toolName, args);
-        initialErrorExit = evaluateToolResultForError(result, writers, format);
+        initialErrorExit = evaluateToolResultForError(result, writers, errorFormat);
         if (initialErrorExit === null && shouldAwaitManagedIndex(toolName, args)) {
             result = await waitForManageIndex(session, args.path as string, manageIndexPollIntervalMs);
         }
@@ -499,7 +578,7 @@ async function invokeTool(
     const awaitedManageIndex = initialErrorExit === null && shouldAwaitManagedIndex(toolName, args);
     const finalErrorExit = initialErrorExit
         ?? (awaitedManageIndex ? manageIndexOperationFailureExit(result, writers) : null)
-        ?? evaluateToolResultForError(result, writers, format);
+        ?? evaluateToolResultForError(result, writers, errorFormat);
 
     if (format === "text") {
         // The error state is decided first: stdout carries only successful output.
@@ -509,7 +588,7 @@ async function invokeTool(
             // Summarizers print only status lines; keep the readable result on stderr.
             writers.writeStderr(formatToolResultText(result));
         }
-    } else {
+    } else if (format === "json") {
         emitJson(writers, result);
     }
 
@@ -762,13 +841,25 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
             const wantsJson = parsed.globals.formatExplicit && parsed.globals.format === "json";
+            const targetWorkingDir = options.cwd ?? process.cwd();
+            const gitRepoRoot = parsed.command.kind === "install"
+                ? findGitRepositoryRoot(targetWorkingDir)
+                : null;
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
+                if (parsed.command.index === true && !gitRepoRoot) {
+                    throw new CliError(
+                        "E_USAGE",
+                        `Cannot run --index: '${sanitizeTerminalText(targetWorkingDir)}' is not inside a Git repository.`,
+                        2,
+                    );
+                }
                 assertAutoClientTargets(parsed.command.client, homeDir, effectiveEnv);
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
             const result = await executeInstallCommand(parsed.command, {
                 homeDir,
+                repoDir: gitRepoRoot ?? targetWorkingDir,
                 packageSpecifier,
                 runtimeCommand: options.installRuntimeCommand,
                 env: effectiveEnv,
@@ -803,9 +894,87 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     writeStderr: parsed.globals.debug ? writers.writeStderr : () => {},
                     connectSession: options.connectSession,
                 });
-                if (wantsJson) emitJson(writers, { ...result, postflight });
-                else emitInstallText(writers, result, postflight);
-                return postflight.status === "error" ? 1 : 0;
+                if (postflight.status === "error") {
+                    if (wantsJson) emitJson(writers, { ...result, postflight });
+                    else emitInstallText(writers, result, postflight);
+                    return 1;
+                }
+                const runInstallIndex = async (
+                    repoRoot: string,
+                    indexFormat: "text" | "silent",
+                ): Promise<number> => {
+                    const indexServer = options.serverCommand
+                        ? { command: options.serverCommand, args: options.serverArgs ?? [] }
+                        : resolveDefaultServerInvocation(homeDir);
+                    const indexSession = await (options.connectSession || connectCliMcpSession)({
+                        command: indexServer.command,
+                        args: options.serverArgs ?? indexServer.args,
+                        env: {
+                            ...effectiveEnv,
+                            ...options.serverEnv,
+                            SATORI_RUN_MODE: "cli",
+                        },
+                        cwd: repoRoot,
+                        startupTimeoutMs,
+                        callTimeoutMs,
+                        writeStderr: parsed.globals.debug ? writers.writeStderr : () => {},
+                    });
+                    try {
+                        const indexArgs: Record<string, unknown> = {
+                            action: "create",
+                            path: repoRoot,
+                            ...(parsed.command.kind === "install" && parsed.command.profile
+                                ? { profile: parsed.command.profile }
+                                : {}),
+                        };
+                        return await invokeTool(
+                            "manage_index",
+                            indexArgs,
+                            indexSession,
+                            DEFAULT_MANAGE_INDEX_POLL_INTERVAL_MS,
+                            writers,
+                            indexFormat,
+                            diagnostics,
+                        );
+                    } finally {
+                        await indexSession.close();
+                    }
+                };
+                if (wantsJson) {
+                    if (parsed.command.index === true && gitRepoRoot) {
+                        try {
+                            const indexExitCode = await runInstallIndex(gitRepoRoot, "silent");
+                            emitJson(writers, {
+                                ...result,
+                                postflight,
+                                indexStatus: indexExitCode === 0 ? "ok" : "error",
+                                indexedRepository: indexExitCode === 0 ? gitRepoRoot : null,
+                            });
+                            return indexExitCode;
+                        } catch (indexError) {
+                            const cliIndexError = asCliError(indexError);
+                            emitJson(writers, {
+                                ...result,
+                                postflight,
+                                indexStatus: "error",
+                                indexedRepository: null,
+                                indexError: cliIndexError.message,
+                            });
+                            emitError(writers, cliIndexError.token, cliIndexError.message);
+                            return cliIndexError.exitCode;
+                        }
+                    }
+                    emitJson(writers, { ...result, postflight });
+                    return 0;
+                }
+                const safeGitRepoRoot = gitRepoRoot ? sanitizeTerminalText(gitRepoRoot) : null;
+                if (parsed.command.index === true && gitRepoRoot) {
+                    emitInstallText(writers, result, postflight, { omitManualIndexHint: true });
+                    writers.writeStderr(`Indexing ${safeGitRepoRoot}...\n`);
+                    return await runInstallIndex(gitRepoRoot, "text");
+                }
+                emitInstallText(writers, result, postflight);
+                return 0;
             }
             if (wantsJson) emitJson(writers, result);
             else emitInstallText(writers, result);
@@ -815,11 +984,18 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         const defaultServer = options.serverCommand
             ? { command: options.serverCommand, args: options.serverArgs ?? [] }
             : resolveDefaultServerInvocation(homeDir);
+        const sessionRootsEnv = resolveCliSessionRootsEnv(
+            parsed.command,
+            { ...effectiveEnv, ...options.serverEnv },
+            homeDir,
+            options.cwd,
+        );
         const session = await (options.connectSession || connectCliMcpSession)({
             command: defaultServer.command,
             args: options.serverArgs ?? defaultServer.args,
             env: {
                 ...effectiveEnv,
+                ...sessionRootsEnv,
                 ...options.serverEnv,
                 SATORI_RUN_MODE: "cli",
             },

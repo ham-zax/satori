@@ -33,6 +33,9 @@ test("neutral install boundaries preserve configured targets and runtime paths",
             ["claude", path.join(homeDir, "claude-config", ".claude.json")],
             ["opencode", path.join(homeDir, "opencode", "config.json")],
             ["agy", path.join(homeDir, ".gemini", "config", "mcp_config.json")],
+            ["cursor", path.join(homeDir, ".cursor", "mcp.json")],
+            ["vscode", path.join(homeDir, ".config", "Code", "User", "mcp.json")],
+            ["windsurf", path.join(homeDir, ".codeium", "windsurf", "mcp_config.json")],
         ],
     );
     assert.deepEqual(detectClientTargets(homeDir, { PATH: "" }), []);

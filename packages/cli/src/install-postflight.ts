@@ -192,7 +192,7 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
     }
     checks.push({ name: "launcher", status: "ok", message: `Managed launcher exists at ${launcherPath}.` });
 
-    const configProof = verifyManagedClientConfigurations(options.installResult, options.homeDir);
+    const configProof = verifyManagedClientConfigurations(options.installResult, options.homeDir, options.env);
     const configFailures = configProof.filter((proof) => proof.status === "error");
     checks.push({
         name: "client_configuration",

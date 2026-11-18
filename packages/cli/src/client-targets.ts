@@ -28,6 +28,21 @@ export function resolveOpenCodeGlobalConfigDir(homeDir: string): string {
     return path.join(homeDir, ".config", "opencode");
 }
 
+export function resolveVsCodeMcpConfigPath(
+    homeDir: string,
+    env: NodeJS.ProcessEnv = process.env,
+    platform: NodeJS.Platform = process.platform,
+): string {
+    if (platform === "darwin") {
+        return path.join(homeDir, "Library", "Application Support", "Code", "User", "mcp.json");
+    }
+    if (platform === "win32") {
+        const appData = resolveConfiguredPath(env.APPDATA, homeDir) ?? path.join(homeDir, "AppData", "Roaming");
+        return path.join(appData, "Code", "User", "mcp.json");
+    }
+    return path.join(homeDir, ".config", "Code", "User", "mcp.json");
+}
+
 export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = process.env): ClientTarget[] {
     const codexHome = resolveConfiguredPath(env.CODEX_HOME, homeDir)
         ?? path.join(homeDir, ".codex");
@@ -85,6 +100,27 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
                     path: path.join(homeDir, ".gemini", "skills", SATORI_SKILL_NAME),
                     target: canonicalSkillPath,
                 },
+            ],
+        },
+        {
+            client: "cursor",
+            configPath: path.join(homeDir, ".cursor", "mcp.json"),
+            companions: [
+                skill,
+            ],
+        },
+        {
+            client: "vscode",
+            configPath: resolveVsCodeMcpConfigPath(homeDir, env),
+            companions: [
+                skill,
+            ],
+        },
+        {
+            client: "windsurf",
+            configPath: path.join(homeDir, ".codeium", "windsurf", "mcp_config.json"),
+            companions: [
+                skill,
             ],
         },
     ];
@@ -152,6 +188,15 @@ function isClientDetected(target: ClientTarget, homeDir: string, env: NodeJS.Pro
         case "agy":
             return configuredPathExists(path.dirname(target.configPath), homeDir, true)
                 || executableExists("agy", homeDir, env);
+        case "cursor":
+            return configuredPathExists(path.dirname(target.configPath), homeDir, true)
+                || executableExists("cursor", homeDir, env);
+        case "vscode":
+            return configuredPathExists(path.dirname(target.configPath), homeDir, true)
+                || executableExists("code", homeDir, env);
+        case "windsurf":
+            return configuredPathExists(path.dirname(target.configPath), homeDir, true)
+                || executableExists("windsurf", homeDir, env);
     }
 }
 
@@ -183,10 +228,13 @@ export function assertAutoClientTargets(
             "",
             "Detected clients: none",
             "",
-            "Install Codex, Claude Code, or OpenCode, or explicitly choose:",
+            "Install Codex, Claude Code, OpenCode, Cursor, VS Code, or Windsurf, or explicitly choose:",
             `  ${satoriCliCommand("install --client codex")}`,
             `  ${satoriCliCommand("install --client claude")}`,
             `  ${satoriCliCommand("install --client opencode")}`,
+            `  ${satoriCliCommand("install --client cursor")}`,
+            `  ${satoriCliCommand("install --client vscode")}`,
+            `  ${satoriCliCommand("install --client windsurf")}`,
             `  ${satoriCliCommand("install --client agy")}`,
             `  ${satoriCliCommand("install --client all")}`,
         ].join("\n"),

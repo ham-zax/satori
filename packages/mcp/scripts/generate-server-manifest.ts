@@ -34,6 +34,22 @@ function buildManifest(pkg: PackageJsonShape, cliPkg: PackageJsonShape) {
                 configPath: "~/.config/opencode/opencode.json",
                 configFormat: "jsonc",
             },
+            cursor: {
+                configPath: "~/.cursor/mcp.json",
+                configFormat: "json",
+            },
+            vscode: {
+                configPath: "~/.config/Code/User/mcp.json",
+                configFormat: "jsonc",
+            },
+            windsurf: {
+                configPath: "~/.codeium/windsurf/mcp_config.json",
+                configFormat: "json",
+            },
+            agy: {
+                configPath: "~/.gemini/config/mcp_config.json",
+                configFormat: "json",
+            },
         },
     };
 }

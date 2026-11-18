@@ -14,9 +14,9 @@ export { buildLauncherScript, DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS };
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
-const INSTALL_CLIENTS = new Set(['all', 'claude', 'codex', 'opencode']);
+const INSTALL_CLIENTS = new Set(['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy']);
 const INSTALL_RUNTIMES = new Set(['offline', 'voyage']);
-const OFFLINE_RERANKERS = new Set(['lateon', 'none']);
+const OFFLINE_RERANKERS = new Set(['lateon', 'voyage', 'none']);
 
 function usage() {
   return [
@@ -27,10 +27,12 @@ function usage() {
     'without installing or replacing the globally published Satori CLI.',
     '',
     'Options:',
-    '  --client <name>       all, claude, codex, or opencode (default: opencode).',
+    '  --client <name>       auto, all, claude, codex, opencode, cursor, vscode, windsurf, or agy (default: opencode).',
     '  --runtime <name>      offline or voyage (default: preserve managed selection).',
-    '  --reranker <name>     lateon or none for an offline runtime.',
+    '  --reranker <name>     lateon, voyage, or none for an offline runtime.',
     '  --vector-store <name> lancedb or milvus (milvus requires voyage runtime).',
+    '  --skill               Install the satori agent skill (default).',
+    '  --no-skill            Skip installing the satori agent skill.',
     '  --no-build            Reuse existing Core, MCP, and CLI build output.',
     '  --home <path>         Override HOME for testing or isolated installs.',
     '  --node <path>         Override the Node executable written into the launcher.',
@@ -55,6 +57,7 @@ export function parseArgs(argv) {
     runtime: undefined,
     reranker: undefined,
     vectorStore: undefined,
+    skill: true,
     help: false,
   };
 
@@ -71,10 +74,18 @@ export function parseArgs(argv) {
       options.noBuild = true;
       continue;
     }
+    if (arg === '--skill') {
+      options.skill = true;
+      continue;
+    }
+    if (arg === '--no-skill') {
+      options.skill = false;
+      continue;
+    }
     if (arg === '--client') {
       const value = readOptionValue(argv, i, arg);
       if (!INSTALL_CLIENTS.has(value)) {
-        throw new Error('--client must be one of: all, claude, codex, opencode.');
+        throw new Error('--client must be one of: auto, all, claude, codex, opencode, cursor, vscode, windsurf, agy.');
       }
       options.client = value;
       i += 1;
@@ -92,7 +103,7 @@ export function parseArgs(argv) {
     if (arg === '--reranker') {
       const value = readOptionValue(argv, i, arg);
       if (!OFFLINE_RERANKERS.has(value)) {
-        throw new Error('--reranker must be one of: lateon, none.');
+        throw new Error('--reranker must be one of: lateon, voyage, none.');
       }
       options.reranker = value;
       i += 1;
@@ -152,6 +163,7 @@ function resolveInstallRuntime(options, managedEnv) {
 
 function createLocalInstallCommand(options, managedEnv) {
   const runtime = resolveInstallRuntime(options, managedEnv);
+  const skill = options.skill !== false ? { skill: true } : {};
   if (runtime === 'voyage') {
     if (options.reranker !== undefined) {
       throw new Error('--reranker is supported only with --runtime offline.');
@@ -161,6 +173,7 @@ function createLocalInstallCommand(options, managedEnv) {
       client: options.client,
       runtime,
       ...(options.vectorStore ? { vectorStore: options.vectorStore } : {}),
+      ...skill,
       dryRun: false,
     };
   }
@@ -173,6 +186,7 @@ function createLocalInstallCommand(options, managedEnv) {
     runtime,
     ...(options.vectorStore ? { vectorStore: options.vectorStore } : {}),
     ...(options.reranker ? { reranker: options.reranker } : {}),
+    ...skill,
     dryRun: false,
   };
 }
@@ -240,6 +254,7 @@ export async function installLocalMcpRuntime(options = {}) {
     runtime: options.runtime,
     reranker: options.reranker,
     vectorStore: options.vectorStore,
+    skill: options.skill,
   }, managedEnv);
   const activationOwner = options.activationOwner || await loadActivationOwner(repoRoot);
   assertActivationOwner(activationOwner);
@@ -259,11 +274,12 @@ export async function installLocalMcpRuntime(options = {}) {
     });
     return result;
   };
+  const potionTargetDir = process.platform === 'linux' && process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
   const result = await activationOwner.executeInstallCommand(command, {
     homeDir,
     repoDir: repoRoot,
     runtimeCommand,
-    potionAssetsRoot: path.join(repoRoot, 'packages', 'mcp', 'assets', 'potion', 'linux-x64'),
+    potionAssetsRoot: path.join(repoRoot, 'packages', 'mcp', 'assets', 'potion', potionTargetDir),
     env: inheritedEnvironment,
     preflightDependencies,
     preflightRunner,
@@ -286,17 +302,23 @@ export async function installLocalMcpRuntime(options = {}) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  let options;
   try {
-    const options = parseArgs(process.argv.slice(2));
-    if (options.help) {
-      console.log(usage());
-      process.exit(0);
-    }
-    await installLocalMcpRuntime(options);
+    options = parseArgs(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error('');
     console.error(usage());
+    process.exit(2);
+  }
+  if (options.help) {
+    console.log(usage());
+    process.exit(0);
+  }
+  try {
+    await installLocalMcpRuntime(options);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }

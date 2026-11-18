@@ -60,6 +60,16 @@ test('parseArgs supports local install options', () => {
   assert.equal(parsed.vectorStore, 'LanceDB');
   assert.equal(parsed.homeDir, '/tmp/satori-home');
   assert.equal(parsed.nodePath, '/usr/bin/node');
+  assert.equal(parsed.skill, true);
+  assert.equal(parseArgs(['--no-skill']).skill, false);
+  assert.equal(parseArgs(['--no-skill', '--skill']).skill, true);
+
+  for (const client of ['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy']) {
+    assert.equal(parseArgs(['--client', client]).client, client);
+  }
+  for (const reranker of ['lateon', 'voyage', 'none']) {
+    assert.equal(parseArgs(['--reranker', reranker]).reranker, reranker);
+  }
 });
 
 test('buildLauncherScript forwards argv to the local runtime', () => {
@@ -269,12 +279,14 @@ test('installLocalMcpRuntime delegates exact local selection and preflights befo
     const execute = activationOwner.calls.find((call) => call.kind === 'execute');
     const probe = activationOwner.calls.find((call) => call.kind === 'probe');
 
+    const expectedPotionDir = process.platform === 'linux' && process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
     assert.equal(result.runtimeEntry, runtimeEntry);
     assert.deepEqual(execute.command, {
       kind: 'install',
       client: 'opencode',
       runtime: 'offline',
       reranker: 'none',
+      skill: true,
       dryRun: false,
     });
     assert.deepEqual(execute.options.runtimeCommand, {
@@ -283,7 +295,7 @@ test('installLocalMcpRuntime delegates exact local selection and preflights befo
     });
     assert.equal(
       execute.options.potionAssetsRoot,
-      path.join(repoRoot, 'packages', 'mcp', 'assets', 'potion', 'linux-x64'),
+      path.join(repoRoot, 'packages', 'mcp', 'assets', 'potion', expectedPotionDir),
     );
     assert.equal(probe.input.expectedVersion, '9.9.9');
     assert.deepEqual(probe.input.runtimeEnvironment, runtimeEnvironment);
@@ -324,6 +336,18 @@ test('installLocalMcpRuntime preserves the managed runtime family when no runtim
 
     assert.equal(result.command.runtime, 'voyage');
     assert.equal(result.command.client, 'opencode');
+    assert.equal(result.command.skill, true);
+
+    const noSkillResult = await installLocalMcpRuntime({
+      repoRoot,
+      homeDir,
+      nodePath: '/usr/bin/node',
+      noBuild: true,
+      skill: false,
+      activationOwner,
+      logger: { log: () => {} },
+    });
+    assert.equal('skill' in noSkillResult.command, false);
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });
     fs.rmSync(homeDir, { recursive: true, force: true });

@@ -220,6 +220,14 @@ test("runCli defaults to human help and preserves structured help on request", a
     assert.ok(help.commands.includes("version (-v, --version)"));
     assert.ok(help.commands.includes("terminate"));
     assert.ok(help.commands.some((command: string) => command.includes("reranker use") && command.includes("--no-verify")));
+    const installHelp = help.commands.find((command: string) => command.startsWith("install "));
+    assert.ok(installHelp);
+    assert.match(installHelp, /cursor\|vscode\|windsurf\|agy/);
+    assert.match(installHelp, /\[--no-skill\] \[--index\|--no-index\]/);
+    assert.match(installHelp, /Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf/);
+    const uninstallHelp = help.commands.find((command: string) => command.startsWith("uninstall "));
+    assert.ok(uninstallHelp);
+    assert.match(uninstallHelp, /cursor\|vscode\|windsurf\|agy/);
     assert.ok(help.globalFlags.includes("-v, --version"));
     assert.equal("legacyAlias" in help, false);
 });
@@ -628,7 +636,7 @@ test("runCli install reports progress and the first repository action", async ()
         assert.match(stdout, /Client: Codex/);
         assert.match(stdout, /Verification: passed \(1 check\)/);
         assert.match(stdout, /Restart Codex to load Satori/);
-        assert.match(stdout, /Then ask your agent: Index \/absolute\/path\/to\/repo with Satori/);
+        assert.match(stdout, /Git workspaces are indexed automatically in the background when your agent starts\./);
         assert.match(stdout, /Update later with `npx -y @satori-code\/cli@latest upgrade`/);
         assert.equal(stderr, "Configuring your coding agents...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
@@ -1794,6 +1802,345 @@ test("isExecutedDirectlyForPaths treats symlinked bin path as direct execution",
         const moduleUrl = pathToFileURL(realFilePath).href;
         assert.equal(isExecutedDirectlyForPaths(moduleUrl, symlinkPath), true);
         assert.equal(isExecutedDirectlyForPaths(moduleUrl, path.join(tempDir, "different.js")), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install --index indexes the target repository after postflight", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-index-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    try {
+        const code = await runCli(["install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: repoDir,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                status: "ok",
+                runtime: "offline",
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+                warnings: [],
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => ({
+                listTools: async () => ({ tools: [] }),
+                callTool: async (name: string, args: Record<string, unknown>) => {
+                    calls.push({ name, args });
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ status: "ok", phase: "completed", state: "indexed", codebasePath: repoDir }) }],
+                    };
+                },
+                close: async () => {},
+            }),
+        });
+        assert.equal(code, 0);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0]?.name, "manage_index");
+        assert.equal(calls[0]?.args.action, "create");
+        assert.equal(calls[0]?.args.path, repoDir);
+        assert.equal(calls[1]?.name, "manage_index");
+        assert.equal(calls[1]?.args.action, "status");
+        assert.doesNotMatch(stdout.join(""), /Then ask your agent: Index/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install --index detects Git root from a subdirectory and errors outside a Git repository", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-subdir-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    const subDir = path.join(repoDir, "packages", "app");
+    const outsideDir = path.join(tempDir, "not-a-repo");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    try {
+        const code = await runCli(["install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: subDir,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => ({
+                listTools: async () => ({ tools: [] }),
+                callTool: async (name: string, args: Record<string, unknown>) => {
+                    calls.push({ name, args });
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ status: "ok", phase: "completed", state: "indexed", codebasePath: repoDir }) }],
+                    };
+                },
+                close: async () => {},
+            }),
+        });
+        assert.equal(code, 0);
+        assert.equal(calls[0]?.args.path, repoDir);
+        assert.equal(calls[1]?.args.path, repoDir);
+        assert.match(stderr.join(""), new RegExp(`Indexing ${escapeRegExp(repoDir)}\\.\\.\\.`));
+        assert.doesNotMatch(stdout.join(""), /Then ask your agent: Index/);
+
+        const freshHome = path.join(tempDir, "fresh-home");
+        fs.mkdirSync(path.join(freshHome, ".codex"), { recursive: true });
+        const outsideStdout: string[] = [];
+        const outsideStderr: string[] = [];
+        const outsideCode = await runCli(["install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: freshHome, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(freshHome),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: outsideDir,
+            writeStdout: (text) => outsideStdout.push(text),
+            writeStderr: (text) => outsideStderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+        });
+        assert.equal(outsideCode, 2);
+        assert.equal(outsideStdout.join(""), "");
+        assert.match(outsideStderr.join(""), /Cannot run --index: .* is not inside a Git repository\./);
+        assert.equal(fs.existsSync(path.join(freshHome, ".codex", "config.toml")), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli --format json install --index executes manage_index silently and emits valid JSON", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-json-index-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, "gitdir-target"), "", "utf8");
+    fs.mkdirSync(repoDir, { recursive: true });
+    fs.writeFileSync(path.join(repoDir, ".git"), "gitdir: ../gitdir-target\n", "utf8");
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    try {
+        const code = await runCli(["--format", "json", "install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: repoDir,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => ({
+                listTools: async () => ({ tools: [] }),
+                callTool: async (name: string, args: Record<string, unknown>) => {
+                    calls.push({ name, args });
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ status: "ok", phase: "completed", state: "indexed", codebasePath: repoDir }) }],
+                    };
+                },
+                close: async () => {},
+            }),
+        });
+        assert.equal(code, 0);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0]?.args.path, repoDir);
+        const parsed = JSON.parse(stdout.join(""));
+        assert.equal(parsed.action, "install");
+        assert.equal(parsed.postflight.status, "ok");
+        assert.equal(parsed.indexStatus, "ok");
+        assert.equal(parsed.indexedRepository, repoDir);
+        assert.equal(stderr.join(""), "");
+
+        const failStdout: string[] = [];
+        const failStderr: string[] = [];
+        const failCode = await runCli(["--format", "json", "install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: repoDir,
+            writeStdout: (text) => failStdout.push(text),
+            writeStderr: (text) => failStderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => createMockSession("manage_terminal_failed"),
+        });
+        assert.equal(failCode, 1);
+        const failParsed = JSON.parse(failStdout.join(""));
+        assert.equal(failParsed.indexStatus, "error");
+        assert.equal(failParsed.indexedRepository, null);
+        assert.match(failStderr.join(""), /E_TOOL_ERROR manage_index operation phase=failed/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli interactive install never prompts for index confirmation and prints background auto-index guidance", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-prompt-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let sessionConnects = 0;
+    try {
+        const fakeStdin = { isTTY: true } as unknown as NodeJS.ReadStream;
+        const code = await runCli(["install", "--client", "codex", "--runtime", "voyage"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: repoDir,
+            stdin: fakeStdin,
+            stdoutIsTTY: true,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => {
+                sessionConnects += 1;
+                return createMockSession("normal");
+            },
+        });
+        assert.equal(code, 0);
+        assert.equal(sessionConnects, 0);
+        assert.doesNotMatch(stderr.join(""), /\[Y\/n\]/);
+        assert.match(stdout.join(""), /Git workspaces are indexed automatically in the background when your agent starts\./);
+        assert.doesNotMatch(stdout.join(""), /Then ask your agent: Index/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli --format json install --index emits valid JSON error envelope when session startup throws", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-json-throw-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    try {
+        const code = await runCli(["--format", "json", "install", "--client", "codex", "--runtime", "voyage", "--index"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: repoDir,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "offline", EMBEDDING_PROVIDER: "Potion", VECTOR_STORE_PROVIDER: "LanceDB", SATORI_RERANKER_PROVIDER: "lateon" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+            connectSession: async () => {
+                throw new CliError("E_STARTUP_TIMEOUT", "startup timed out", 3);
+            },
+        });
+        assert.equal(code, 3);
+        const parsed = JSON.parse(stdout.join(""));
+        assert.equal(parsed.action, "install");
+        assert.equal(parsed.postflight.status, "ok");
+        assert.equal(parsed.indexStatus, "error");
+        assert.equal(parsed.indexedRepository, null);
+        assert.equal(parsed.indexError, "startup timed out");
+        assert.match(stderr.join(""), /E_STARTUP_TIMEOUT startup timed out/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install --profile writes satori.toml at the enclosing Git root when invoked from a subdirectory", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-profile-subdir-"));
+    const homeDir = path.join(tempDir, "home");
+    const repoDir = path.join(tempDir, "repo");
+    const subDir = path.join(repoDir, "packages", "app");
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+    fs.mkdirSync(subDir, { recursive: true });
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    try {
+        const code = await runCli(["install", "--client", "codex", "--runtime", "voyage", "--profile", "minimal"], {
+            env: { ...process.env, HOME: homeDir, VOYAGEAI_API_KEY: "pa-test" },
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installLateOnAuthorityLoader: loadAcquisitionAuthority,
+            cwd: subDir,
+            writeStdout: (text) => stdout.push(text),
+            writeStderr: (text) => stderr.push(text),
+            installabilityVerifier: () => "@satori-code/mcp@0.12.0",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: { SATORI_RUNTIME_PROFILE: "connected", EMBEDDING_PROVIDER: "VoyageAI", VECTOR_STORE_PROVIDER: "LanceDB" },
+            } as never),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "ok" }],
+            } as never),
+        });
+        assert.equal(code, 0);
+        assert.equal(fs.existsSync(path.join(repoDir, "satori.toml")), true);
+        assert.equal(fs.existsSync(path.join(subDir, "satori.toml")), false);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

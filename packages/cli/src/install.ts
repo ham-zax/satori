@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { CliError } from "./errors.js";
 import { prepareMutation } from "./client-config-mutations.js";
+import { withVoyageApiKeyFallback } from "./voyage-api-key.js";
 import type {
 } from "./args.js";
 import {
@@ -143,10 +144,11 @@ export async function executeInstallCommand(
                 releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
             }
             const managedRuntimeEnvironment = readManagedRuntimeEnvironment(homeDir);
+            const envWithStoredSecrets = withVoyageApiKeyFallback(homeDir, env);
             const vectorStore = command.runtime === "voyage"
                 ? resolveConnectedVectorStoreForInstallOrThrow(command, homeDir, env, managedRuntimeEnvironment)
                 : "LanceDB";
-            const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedRuntimeEnvironment, env);
+            const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedRuntimeEnvironment, envWithStoredSecrets);
             if (command.runtime === "offline") {
                 assertOfflinePotionSelection(managedRuntimeEnvironment, env);
             }
@@ -154,11 +156,11 @@ export async function executeInstallCommand(
                 ? resolveOfflineReranker(
                     command,
                     managedRuntimeEnvironment,
-                    env,
+                    envWithStoredSecrets,
                     options.platform,
                     options.architecture,
                 )
-                : resolveConnectedReranker(command, managedRuntimeEnvironment, env);
+                : resolveConnectedReranker(command, managedRuntimeEnvironment, envWithStoredSecrets);
             const rerankerModel = resolveRerankerModel(
                 reranker,
                 command.rerankerModel,

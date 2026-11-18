@@ -165,3 +165,72 @@ test("Doctor table shortens model identity and verbose output keeps the full ide
     const verbose = formatDoctorText(result, { verbose: true });
     assert.match(verbose, /Potion \/ minishlab\/potion-code-16M@0123456789abcdef/);
 });
+
+test("Doctor renders Cursor, VS Code, and Windsurf in runtime table and expands their stale config checks", () => {
+    const result: DoctorResult = {
+        ...resultWithActiveRuntime(),
+        status: "error",
+        checks: [{
+            name: "managed_client_configuration",
+            status: "error",
+            message: "cursor config does not point exactly to launcher. vscode config does not point exactly to launcher. windsurf config does not point exactly to launcher.",
+        }],
+        nextSteps: [
+            "Run npx -y @satori-code/cli@latest install --client cursor, then restart Cursor.",
+            "Run npx -y @satori-code/cli@latest install --client vscode, then restart VS Code.",
+            "Run npx -y @satori-code/cli@latest install --client windsurf, then restart Windsurf.",
+            "Restart your MCP client after changing Satori environment variables.",
+        ],
+        runtimeConfigurations: [
+            {
+                client: "cursor",
+                status: "needs_repair",
+                source: "client_configuration",
+                profile: "offline",
+                embeddingProvider: "Potion",
+                embeddingModel: "potion-code",
+                embeddingDimension: "256",
+                rerankerProvider: "none",
+                rerankerProfile: null,
+                vectorStore: "LanceDB",
+            },
+            {
+                client: "vscode",
+                status: "configured",
+                source: "managed_launcher",
+                profile: "offline",
+                embeddingProvider: "Potion",
+                embeddingModel: "potion-code",
+                embeddingDimension: "256",
+                rerankerProvider: "lateon",
+                rerankerProfile: "lateon_offline_quality_projection_v6_d128_v1",
+                vectorStore: "LanceDB",
+            },
+            {
+                client: "windsurf",
+                status: "not_configured",
+                source: null,
+                profile: null,
+                embeddingProvider: null,
+                embeddingModel: null,
+                embeddingDimension: null,
+                rerankerProvider: null,
+                rerankerProfile: null,
+                vectorStore: null,
+            },
+        ],
+    };
+
+    const text = formatDoctorText(result, { verbose: false });
+    assert.match(text, /3 problems/);
+    assert.match(text, /Cursor\s+\| Needs repair/);
+    assert.match(text, /VS Code\s+\| Configured/);
+    assert.match(text, /Windsurf\s+\| Not configured/);
+    assert.match(text, /Cursor configuration/);
+    assert.match(text, /VS Code configuration/);
+    assert.match(text, /Windsurf configuration/);
+    assert.match(text, /Cursor is not using the managed Satori launcher\./);
+    assert.match(text, /VS Code is not using the managed Satori launcher\./);
+    assert.match(text, /Windsurf is not using the managed Satori launcher\./);
+    assert.doesNotMatch(text, /Restart your MCP client after changing Satori environment variables\./);
+});

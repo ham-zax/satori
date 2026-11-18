@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCliArgs } from "./args.js";
+import { parseCliArgs, parseWrapperArgumentsFromSchema } from "./args.js";
 
 test("parseCliArgs consumes leading --debug as a global flag", () => {
     const parsed = parseCliArgs(["--debug", "tools", "list"]);
@@ -236,14 +236,28 @@ test("parseCliArgs scopes --no-verify to Voyage reranker use and install", () =>
     assert.throws(() => parseCliArgs(["doctor", "--no-verify"]), /Unknown argument for doctor/);
 });
 
-test("parseCliArgs makes the skill opt-in for install only", () => {
+test("parseCliArgs enables the skill by default for install and supports --no-skill", () => {
     const plain = parseCliArgs(["install"]).command;
     if (plain.kind !== "install") assert.fail("Expected install command parsing");
-    assert.equal("skill" in plain, false);
+    assert.equal(plain.skill, true);
+    const withoutSkill = parseCliArgs(["install", "--runtime", "voyage", "--no-skill"]).command;
+    if (withoutSkill.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal("skill" in withoutSkill, false);
     const withSkill = parseCliArgs(["install", "--runtime", "voyage", "--skill"]).command;
     if (withSkill.kind !== "install") assert.fail("Expected install command parsing");
     assert.equal(withSkill.skill, true);
     assert.throws(() => parseCliArgs(["uninstall", "--skill"]), /Unknown arguments for uninstall/);
+    assert.throws(() => parseCliArgs(["uninstall", "--no-skill"]), /Unknown arguments for uninstall/);
+});
+
+test("parseCliArgs supports --index and --no-index for install only", () => {
+    const withIndex = parseCliArgs(["install", "--index"]).command;
+    if (withIndex.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(withIndex.index, true);
+    const withoutIndex = parseCliArgs(["install", "--no-index"]).command;
+    if (withoutIndex.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(withoutIndex.index, false);
+    assert.throws(() => parseCliArgs(["uninstall", "--index"]), /Unknown arguments for uninstall/);
 });
 
 test("parseCliArgs accepts an explicit connected Milvus backend", () => {
@@ -351,9 +365,50 @@ test("parseCliArgs rejects guidance hook flag for uninstall", () => {
     );
 });
 
-test("parseCliArgs rejects unsupported install clients", () => {
+test("parseCliArgs accepts cursor, vscode, windsurf and rejects unsupported install clients", () => {
+    for (const client of ["cursor", "vscode", "windsurf"] as const) {
+        const parsed = parseCliArgs(["install", "--client", client]).command;
+        if (parsed.kind !== "install") assert.fail("Expected install command parsing");
+        assert.equal(parsed.client, client);
+    }
     assert.throws(
-        () => parseCliArgs(["install", "--client", "cursor"]),
-        /--client must be one of: auto, all, claude, codex, opencode, agy/
+        () => parseCliArgs(["install", "--client", "unsupported-client"]),
+        /--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf/
     );
+});
+
+test("parseWrapperArgumentsFromSchema supports array, anyOf, kebab-case camelCase flags, and ignores unused complex properties", () => {
+    const schema = {
+        type: "object",
+        required: ["path", "query"],
+        properties: {
+            path: { type: "string" },
+            query: { type: "string" },
+            disclosureLimit: { type: "integer" },
+            customExtensions: { type: "array", items: { type: "string" } },
+            alt_terms: {
+                anyOf: [
+                    { type: "array", items: { type: "string" } },
+                    { type: "string" },
+                ],
+            },
+            unusedOneOf: { oneOf: [{ type: "string" }] },
+        },
+    };
+    const parsed = parseWrapperArgumentsFromSchema("search_codebase", schema, [
+        "--path", "/repo",
+        "--query", "worker steering",
+        "--disclosure-limit", "3",
+        "--custom-extensions", ".vue",
+        "--custom-extensions", ".svelte",
+        "--alt-terms", "steer",
+        "--alt-terms", "worker",
+    ]);
+    assert.deepEqual(parsed, {
+        path: "/repo",
+        query: "worker steering",
+        disclosureLimit: 3,
+        customExtensions: [".vue", ".svelte"],
+        alt_terms: ["steer", "worker"],
+    });
 });

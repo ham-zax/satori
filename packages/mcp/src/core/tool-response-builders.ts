@@ -317,14 +317,14 @@ export class ToolResponseBuilders {
             resultMode: searchContext.resultMode,
             limit: searchContext.limit,
             message: isAuto
-                ? `Codebase '${codebasePath}' is auto-indexing in the background. Continue with native read/grep tools or wait briefly and retry.`
-                : `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
+                ? `Codebase '${codebasePath}' is auto-indexing in the background. Do not sleep or poll in a loop: read entry files (for example with read_file) or search with rg/grep while indexing runs, then retry.`
+                : `Codebase '${codebasePath}' is currently indexing. Do not sleep or poll in a loop: read entry files (for example with read_file) or search with rg/grep while indexing runs in the background, then retry.`,
             recommendedNextAction: this.host.buildManageIndexRecommendedAction(
                 "status",
                 codebasePath,
                 isAuto
-                    ? "Auto-indexing is running in the background; check status or retry after a moment."
-                    : "Check indexing progress before retrying search.",
+                    ? "Auto-indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then check status or retry."
+                    : "Indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then check progress before retrying search.",
             ),
             hints: {
                 status: this.host.buildStatusHint(codebasePath),

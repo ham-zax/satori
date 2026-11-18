@@ -29,28 +29,40 @@ test("manage response explains unknown preflight without changing its machine-re
     assert.deepEqual(envelope.preflight, { outcome: "unknown", confidence: "low", probeFailed: false });
 });
 
-test("not-ready search payload carries the deterministic indexing retry hint", () => {
-    const host = {
-        buildManageIndexRecommendedAction: () => ({
+test("not-ready search payload tells agents to keep working instead of sleeping or polling", () => {
+    const hostFor = (autoIndexing: boolean) => ({
+        buildManageIndexRecommendedAction: (_action: string, _codebasePath: string, rationale: string) => ({
             tool: "manage_index",
             args: { action: "status", path: "/repo" },
-            reason: "Check indexing progress before retrying search.",
+            reason: rationale,
         }),
         buildStatusHint: () => ({ tool: "manage_index", args: { action: "status", path: "/repo" } }),
-        buildIndexingMetadata: () => ({ progressPct: null, lastUpdated: null, phase: null }),
-    } as unknown as ToolResponseBuildersHost;
-    const builders = new ToolResponseBuilders(host);
-    const envelope = builders.buildNotReadySearchPayload("/repo", {
+        buildIndexingMetadata: () => ({ progressPct: null, lastUpdated: null, phase: null, autoIndexing }),
+    } as unknown as ToolResponseBuildersHost);
+    const searchContext = {
         path: "/repo",
         query: "owner",
-        scope: "runtime",
-        groupBy: "symbol",
-        resultMode: "grouped",
+        scope: "runtime" as const,
+        groupBy: "symbol" as const,
+        resultMode: "grouped" as const,
         limit: 5,
-    });
-    assert.equal(envelope.status, "not_ready");
-    assert.equal(envelope.reason, "indexing");
-    assert.equal(envelope.retryAfterMs, DEFAULT_MANAGE_RETRY_AFTER_MS);
+    };
+
+    for (const autoIndexing of [false, true]) {
+        const builders = new ToolResponseBuilders(hostFor(autoIndexing));
+        const envelope = builders.buildNotReadySearchPayload("/repo", searchContext);
+        assert.equal(envelope.status, "not_ready");
+        assert.equal(envelope.reason, "indexing");
+        assert.equal(envelope.retryAfterMs, DEFAULT_MANAGE_RETRY_AFTER_MS);
+        const message = envelope.message ?? "";
+        assert.match(message, autoIndexing ? /auto-indexing/ : /currently indexing/);
+        assert.match(message, /Do not sleep or poll in a loop/);
+        assert.match(message, /read entry files \(for example with read_file\)/);
+        assert.match(message, /search with rg\/grep/);
+        assert.match(envelope.recommendedNextAction?.reason ?? "", /Do not sleep or poll in a loop/);
+        assert.match(envelope.recommendedNextAction?.reason ?? "", /read entry files \(for example with read_file\)/);
+        assert.match(envelope.recommendedNextAction?.reason ?? "", /search with rg\/grep/);
+    }
 });
 
 test("manage response includes the supplied process-lifetime mutation operation", () => {

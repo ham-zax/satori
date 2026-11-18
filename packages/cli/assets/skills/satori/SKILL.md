@@ -65,9 +65,10 @@ those files directly before relying on missing symbols or callers.
   - Never ask the user whether to index or migrate within these automatic
     budgets.
 - **`not_ready` / `auto_indexing`:** Check `indexing.mode` (`"auto_indexing"` or
-  `"indexing"`). Keep working immediately with native read/grep tools (or wait
-  briefly on small repos and retry after `retryAfterMs`). Do not start a
-  duplicate mutation.
+  `"indexing"`). Indexing runs in the background, so keep working instead of
+  running `sleep` or polling in a loop: read the entry files named in the
+  question (for example with `read_file`) or search with `rg`/grep, then retry
+  after `retryAfterMs`. Do not start a duplicate mutation.
 - **When to ask the user (`not_indexed` / `requires_reindex`):** Satori only
   skips automatic indexing when a repository exceeds the **paid API budget
   (`> 8 MiB` on Voyage)** or **massive monorepo limits (`> 150 MiB` or

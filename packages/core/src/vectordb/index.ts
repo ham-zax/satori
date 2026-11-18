@@ -37,6 +37,12 @@ export {
     VerifiedCollectionDeleteResult
 } from './remote-delete';
 export {
+    DELETED_ID_BATCH_SIZE,
+    DELETED_PATH_BATCH_SIZE,
+    deleteIndexedChunksForRelativePaths,
+    type DeleteIndexedChunksOptions,
+} from './path-chunk-delete';
+export {
     ClusterManager,
     ZillizConfig,
     Project,

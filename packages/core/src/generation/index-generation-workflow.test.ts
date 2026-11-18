@@ -542,3 +542,152 @@ test('stageSymbolRegistryForCompletedIndex skips semantic source reads when size
     assert.deepEqual(sizesSeen, [[4096]]);
     assert.ok(warnings.some((message) => message.includes("for 'cpp'") && message.includes('session exceeds native source limit')));
 });
+
+test('batched delta deletion matches per-file deletion while issuing one count and one delete', async (t) => {
+    const canonicalRoot = '/mock/repo';
+    const sourceTotalChunks = 100;
+    const chunksPerFile = 2;
+    const deltaFiles = ['src/a.ts', 'src/b.ts', 'src/c.ts'];
+
+    const runDelta = async (
+        batched: boolean,
+        files: readonly string[] = deltaFiles,
+        sourceChunks: number = sourceTotalChunks,
+    ) => {
+        const publicationId = batched ? 'delta-batched' : 'delta-per-file';
+        const candidateCollectionName = 'candidate-collection';
+        const lease = { canonicalRoot, operationId: publicationId };
+        const deletedPaths: string[] = [];
+        const pathFilterCalls: Array<{ kind: string; values: readonly string[] }> = [];
+        let batchedDeleteCalls = 0;
+        let perFileDeleteCalls = 0;
+        const sourcePublication = {
+            id: 'source',
+            publication: { navigation: {}, vector: { totalChunks: sourceChunks } },
+        };
+        const ports: Partial<IndexGenerationWorkflowPorts> = {
+            getCurrentPublicationSourceCheckpoint: () => ({ ref: sourcePublication }) as ReturnType<IndexGenerationWorkflowPorts['getCurrentPublicationSourceCheckpoint']>,
+            getPublicationNavigation: () => ({ navigationRoot: '/mock/navigation' }) as ReturnType<IndexGenerationWorkflowPorts['getPublicationNavigation']>,
+            resolvePublicationCollectionName: () => candidateCollectionName,
+            reserveIndexCandidate: () => undefined,
+            markIndexCandidateCollectionCreated: () => undefined,
+            clearIndexCandidate: () => undefined,
+            vectorDatabase: {
+                forkCollection: async () => undefined,
+                dropCollection: async () => undefined,
+            } as unknown as IndexGenerationWorkflowPorts['vectorDatabase'],
+            countIndexedPayloadExactly: async (_collection, filter, expectedMaximum) => {
+                if (!filter) return expectedMaximum ?? 0;
+                if (filter.kind === 'comparison') {
+                    pathFilterCalls.push({ kind: filter.kind, values: [filter.value] });
+                    return chunksPerFile;
+                }
+                if (filter.kind === 'in') {
+                    pathFilterCalls.push({ kind: filter.kind, values: filter.values });
+                    return chunksPerFile * filter.values.length;
+                }
+                throw new Error('unexpected payload filter');
+            },
+            deleteFileChunks: async (_collection, relativePath) => {
+                perFileDeleteCalls += 1;
+                deletedPaths.push(relativePath);
+            },
+            ...(batched
+                ? {
+                    deleteFilesChunks: async (_collection, relativePaths) => {
+                        batchedDeleteCalls += 1;
+                        deletedPaths.push(...relativePaths);
+                    },
+                }
+                : {}),
+            preparePublicationNavigationRoot: () => '/mock/candidate-navigation',
+            stagePublicationPackageOwnership: () => undefined,
+            stagePublicationSourceCheckpoint: () => undefined,
+            isObservedIndexPolicyControlSignatureCurrent: async () => true,
+            activatePublication: () => ({ id: publicationId }) as ReturnType<IndexGenerationWorkflowPorts['activatePublication']>,
+            resolveNavigationObservationToken: () => null,
+            registerSynchronizerForPublication: () => undefined,
+            collectPublicationGarbage: async () => [],
+            discardUnpublishedPublication: () => undefined,
+        };
+        const workflow = new IndexGenerationWorkflow(ports as IndexGenerationWorkflowPorts);
+        const internals = workflow as unknown as {
+            performAtomicDeltaPublication(input: unknown): Promise<{ totalChunks: number }>;
+            resolveReusableNavigationDeltaState(): unknown;
+            rebuildNavigationArtifactsForSyncDelta(): Promise<unknown>;
+            verifyPreparedSyncPublication(): Promise<void>;
+            buildTask2Publication(): unknown;
+        };
+        t.mock.method(internals, 'resolveReusableNavigationDeltaState', () => ({
+            registry: { manifest: { files: files.map((filePath) => ({ path: filePath })) } },
+        }));
+        t.mock.method(internals, 'rebuildNavigationArtifactsForSyncDelta', async () => ({ candidate: {}, state: {} }));
+        t.mock.method(internals, 'verifyPreparedSyncPublication', async () => undefined);
+        t.mock.method(internals, 'buildTask2Publication', () => ({ id: publicationId }));
+        const result = await internals.performAtomicDeltaPublication({
+            codebasePath: canonicalRoot,
+            canonicalRoot,
+            sourcePublication,
+            sourceCollectionName: 'source-collection',
+            sealedPolicy: {},
+            synchronizerKey: 'source-collection',
+            synchronizer: {},
+            preparedChanges: {
+                changes: { added: [], modified: [], removed: [...files] },
+                fileHashes: new Map(),
+                sourceCheckpoint: { fileStats: [] },
+                assertSourceObservationCurrent: async () => undefined,
+                commit: async () => undefined,
+            },
+            resolutionSourceControls: new Set(),
+            packageOwnershipSourceControls: new Set(),
+            options: { rootMutationLease: lease },
+            resourcePlan: {},
+        });
+        return { result, deletedPaths, pathFilterCalls, batchedDeleteCalls, perFileDeleteCalls };
+    };
+
+    const batched = await runDelta(true);
+    const perFile = await runDelta(false);
+
+    // Same replaced payload count: totalChunks = source - replaced + indexedDelta.
+    assert.equal(batched.result.totalChunks, sourceTotalChunks - chunksPerFile * deltaFiles.length);
+    assert.equal(perFile.result.totalChunks, batched.result.totalChunks);
+
+    // Same deleted paths.
+    assert.deepEqual([...batched.deletedPaths].sort(), [...deltaFiles].sort());
+    assert.deepEqual([...perFile.deletedPaths].sort(), [...batched.deletedPaths].sort());
+
+    // One batched count and one batched delete instead of one per changed file.
+    assert.equal(batched.batchedDeleteCalls, 1);
+    assert.equal(batched.perFileDeleteCalls, 0);
+    assert.equal(batched.pathFilterCalls.length, 1);
+    assert.equal(batched.pathFilterCalls[0].kind, 'in');
+    assert.deepEqual([...batched.pathFilterCalls[0].values], deltaFiles);
+
+    // The per-file fallback still runs when the batched port is absent.
+    assert.equal(perFile.batchedDeleteCalls, 0);
+    assert.equal(perFile.perFileDeleteCalls, deltaFiles.length);
+    assert.equal(perFile.pathFilterCalls.length, deltaFiles.length);
+    assert.ok(perFile.pathFilterCalls.every((call) => call.kind === 'comparison'));
+
+    // A single changed file uses an equality filter and one delete.
+    const single = await runDelta(true, ['src/only.ts']);
+    assert.equal(single.batchedDeleteCalls, 1);
+    assert.equal(single.pathFilterCalls.length, 1);
+    assert.equal(single.pathFilterCalls[0].kind, 'comparison');
+    assert.deepEqual([...single.pathFilterCalls[0].values], ['src/only.ts']);
+    assert.deepEqual(single.deletedPaths, ['src/only.ts']);
+
+    // 201 changed files split into 200 + 1 so no single filter carries the
+    // whole delta.
+    const manyFiles = Array.from({ length: 201 }, (_, index) => `src/file-${index}.ts`);
+    const many = await runDelta(true, manyFiles, chunksPerFile * manyFiles.length + 100);
+    assert.equal(many.batchedDeleteCalls, 2);
+    assert.equal(many.pathFilterCalls.length, 2);
+    assert.equal(many.pathFilterCalls[0].kind, 'in');
+    assert.equal(many.pathFilterCalls[0].values.length, 200);
+    assert.equal(many.pathFilterCalls[1].kind, 'comparison');
+    assert.deepEqual([...many.pathFilterCalls[1].values], [manyFiles[200]]);
+    assert.deepEqual([...many.deletedPaths].sort(), [...manyFiles].sort());
+});

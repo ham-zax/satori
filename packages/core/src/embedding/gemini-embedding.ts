@@ -1,7 +1,14 @@
 import type { ContentEmbedding, GoogleGenAI as GoogleGenAIClient } from '@google/genai' with { "resolution-mode": "require" };
 import { Embedding, EmbeddingVector, type EmbeddingIdentity } from './base-embedding';
 
-const { GoogleGenAI } = require('@google/genai') as typeof import('@google/genai', { with: { "resolution-mode": "require" } });
+type GoogleGenAIModule = typeof import('@google/genai', { with: { "resolution-mode": "require" } });
+
+let loadedGoogleGenAI: GoogleGenAIModule | undefined;
+/** The SDK is only needed once a Gemini provider is constructed. */
+function googleGenAIModule(): GoogleGenAIModule {
+    loadedGoogleGenAI ??= require('@google/genai') as GoogleGenAIModule;
+    return loadedGoogleGenAI;
+}
 
 export interface GeminiEmbeddingConfig {
     model: string;
@@ -19,6 +26,7 @@ export class GeminiEmbedding extends Embedding {
     constructor(config: GeminiEmbeddingConfig) {
         super();
         this.config = config;
+        const { GoogleGenAI } = googleGenAIModule();
         this.client = new GoogleGenAI({
             apiKey: config.apiKey,
             ...(config.baseURL && {

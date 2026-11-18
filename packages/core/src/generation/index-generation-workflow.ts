@@ -174,6 +174,12 @@ type CachedNavigationDeltaState = {
 // so an idle process does not keep a whole graph resident.
 const NAVIGATION_DELTA_STATE_IDLE_MS = 2 * 60_000;
 
+// Delta deletion batches changed paths so the backend commits one delete
+// version per batch. Kept small because the backend plans every filter literal
+// in the generated SQL, so a huge `relativePath IN (...)` costs more to plan
+// than the delete itself.
+const DELTA_DELETED_PATH_BATCH_SIZE = 200;
+
 // ---- Narrow dependency ports ----
 export interface IndexGenerationWorkflowPorts {
     indexingResourcePlanner?: Pick<IndexingResourcePlanner, 'createPlan'>;
@@ -242,6 +248,15 @@ export interface IndexGenerationWorkflowPorts {
     deleteFileChunks(
             collectionName: string,
             relativePath: string,
+            assertMutationCurrent?: () => void,
+        ): Promise<void>;
+    /**
+     * Batched form of `deleteFileChunks`. Optional so narrow test doubles that
+     * only model the per-file port keep working through the fallback loop.
+     */
+    deleteFilesChunks?(
+            collectionName: string,
+            relativePaths: readonly string[],
             assertMutationCurrent?: () => void,
         ): Promise<void>;
     getActiveIgnorePatterns(codebasePath?: string): string[];
@@ -1441,17 +1456,53 @@ export class IndexGenerationWorkflow {
                 'publication_payload_delta',
                 async () => {
                     let replacedPayloadCount = 0;
-                    for (const relativePath of searchableChangedFiles) {
-                        const pathCount = await this.ports.countIndexedPayloadExactly(
-                            candidateCollectionName,
-                            { kind: 'comparison', field: 'relativePath', operator: 'eq', value: relativePath },
-                            input.sourcePublication.publication.vector.totalChunks,
-                        );
-                        if (pathCount === null) {
-                            throw new Error(`Atomic delta publication could not count existing payload for '${relativePath}'.`);
+                    const deleteFilesChunks = this.ports.deleteFilesChunks;
+                    if (deleteFilesChunks && searchableChangedFiles.length > 0) {
+                        // One count and one delete per path batch keeps the
+                        // backend at a single delete version per batch instead
+                        // of one per changed file.
+                        for (
+                            let offset = 0;
+                            offset < searchableChangedFiles.length;
+                            offset += DELTA_DELETED_PATH_BATCH_SIZE
+                        ) {
+                            const batch = searchableChangedFiles.slice(
+                                offset,
+                                offset + DELTA_DELETED_PATH_BATCH_SIZE,
+                            );
+                            const filter: VectorFilter = batch.length === 1
+                                ? { kind: 'comparison', field: 'relativePath', operator: 'eq', value: batch[0] }
+                                : { kind: 'in', field: 'relativePath', values: batch };
+                            const batchCount = await this.ports.countIndexedPayloadExactly(
+                                candidateCollectionName,
+                                filter,
+                                input.sourcePublication.publication.vector.totalChunks,
+                            );
+                            if (batchCount === null) {
+                                throw new Error(
+                                    `Atomic delta publication could not count existing payload for ${batch.length} changed file(s).`,
+                                );
+                            }
+                            replacedPayloadCount += batchCount;
+                            await deleteFilesChunks(
+                                candidateCollectionName,
+                                batch,
+                                input.options.assertMutationCurrent,
+                            );
                         }
-                        replacedPayloadCount += pathCount;
-                        await this.ports.deleteFileChunks(candidateCollectionName, relativePath, input.options.assertMutationCurrent);
+                    } else {
+                        for (const relativePath of searchableChangedFiles) {
+                            const pathCount = await this.ports.countIndexedPayloadExactly(
+                                candidateCollectionName,
+                                { kind: 'comparison', field: 'relativePath', operator: 'eq', value: relativePath },
+                                input.sourcePublication.publication.vector.totalChunks,
+                            );
+                            if (pathCount === null) {
+                                throw new Error(`Atomic delta publication could not count existing payload for '${relativePath}'.`);
+                            }
+                            replacedPayloadCount += pathCount;
+                            await this.ports.deleteFileChunks(candidateCollectionName, relativePath, input.options.assertMutationCurrent);
+                        }
                     }
 
                     let processedChanges = 0;

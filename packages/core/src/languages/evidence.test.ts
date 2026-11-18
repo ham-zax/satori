@@ -308,3 +308,103 @@ test('resolveLanguageCapabilityEvidence binds relationship evidence to the compa
         fs.rmSync(stateRoot, { recursive: true, force: true });
     }
 });
+
+test('resolveLanguageCapabilityEvidence reuses pre-read relationship state without reading relationship shards', async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-language-evidence-preread-'));
+    const normalizedRootPath = '/repo';
+    const common = {
+        language: 'typescript',
+        file: 'src/run.ts',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v1',
+        parentQualifiedNamePath: [],
+    };
+    const symbols: SymbolRecord[] = [{
+        ...common,
+        symbolKey: 'file-key',
+        symbolInstanceId: 'file-instance',
+        kind: 'file',
+        name: 'run.ts',
+        qualifiedName: 'src/run.ts',
+        label: 'src/run.ts',
+        span: { startLine: 1, endLine: 3 },
+    }, {
+        ...common,
+        symbolKey: 'run-key',
+        symbolInstanceId: 'run-instance',
+        kind: 'function',
+        name: 'run',
+        qualifiedName: 'run',
+        label: 'function run',
+        span: { startLine: 1, endLine: 3 },
+    }];
+    const files = [{
+        path: 'src/run.ts',
+        hash: 'file-hash',
+        language: 'typescript',
+        symbolCount: 2,
+        definitionStatus: 'definitions_present' as const,
+    }];
+    const registry = buildSymbolRegistry({
+        manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath,
+            rootFingerprint: 'root-fingerprint',
+            indexPolicyHash: 'policy-hash',
+            languageRouterVersion: 'router-v1',
+            extractorVersion: 'extractor-v1',
+            relationshipVersion: 'relationships-v1',
+            builtAt: '2026-07-11T00:00:00.000Z',
+            files,
+        },
+        symbols,
+    });
+
+    try {
+        const publicationId = 'publication-preread';
+        const navigationRoot = path.join(stateRoot, publicationId, 'navigation');
+        const written = await writeSymbolRegistrySidecar({ navigationRoot, registry });
+        await writeRelationshipSidecar({
+            navigationRoot,
+            normalizedRootPath,
+            symbolRegistryManifestHash: written.manifestHash,
+            relationshipVersion: 'relationships-v1',
+            builtAt: '2026-07-11T00:00:00.000Z',
+            files,
+            records: [],
+        });
+
+        const fromDisk = await resolveLanguageCapabilityEvidence({
+            normalizedRootPath,
+            publicationId,
+            navigationRoot,
+            searchable: true,
+        });
+        assert.equal(fromDisk.relationshipEvidence, 'compatible');
+        assert.equal(fromDisk.languages[0].capabilities.callGraph, 'ready');
+
+        // With the relationship sidecar gone, only a caller-supplied read can
+        // still report compatible relationship evidence.
+        fs.rmSync(path.join(navigationRoot, 'relationships'), { recursive: true, force: true });
+
+        const withoutPreRead = await resolveLanguageCapabilityEvidence({
+            normalizedRootPath,
+            publicationId,
+            navigationRoot,
+            searchable: true,
+        });
+        assert.equal(withoutPreRead.relationshipEvidence, 'missing');
+        assert.equal(withoutPreRead.languages[0].capabilities.callGraph, 'unavailable');
+
+        const fromPreRead = await resolveLanguageCapabilityEvidence({
+            normalizedRootPath,
+            publicationId,
+            navigationRoot,
+            searchable: true,
+            relationshipsRead: { status: 'ok', manifest: { providerCoverage: [] } },
+        });
+        assert.deepEqual(fromPreRead, fromDisk);
+    } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+});

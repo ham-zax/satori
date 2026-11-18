@@ -1,8 +1,4 @@
-import {
-    VoyageAIClient,
-    VoyageAIError,
-    VoyageAITimeoutError,
-} from 'voyageai';
+import type { VoyageAIClient } from 'voyageai';
 import {
     Embedding,
     type EmbeddingBatchPolicy,
@@ -12,6 +8,15 @@ import {
     type EmbeddingProviderErrorCode,
     type EmbeddingVector,
 } from './base-embedding';
+
+type VoyageAIModule = typeof import('voyageai');
+
+let loadedVoyageAI: VoyageAIModule | undefined;
+/** The SDK is only needed once a VoyageAI provider is constructed. */
+function voyageAIModule(): VoyageAIModule {
+    loadedVoyageAI ??= require('voyageai') as VoyageAIModule;
+    return loadedVoyageAI;
+}
 
 const VOYAGE_CODE_3_MAX_BATCH_ITEMS = 1_000;
 const VOYAGE_CODE_3_HARD_BATCH_TOKENS = 120_000;
@@ -63,6 +68,7 @@ function decodeVoyageEmbedding(value: unknown, expectedDimension: number): numbe
 }
 
 function isRetryableVoyageError(error: unknown): boolean {
+    const { VoyageAIError, VoyageAITimeoutError } = voyageAIModule();
     if (error instanceof VoyageAITimeoutError) return true;
     if (error instanceof VoyageAIError) {
         const statusCode = error.statusCode;
@@ -75,6 +81,7 @@ function isRetryableVoyageError(error: unknown): boolean {
 }
 
 function isExplicitVoyageBatchLimitError(error: unknown): boolean {
+    const { VoyageAIError } = voyageAIModule();
     if (error instanceof VoyageAIError) {
         if (![400, 413, 422].includes(error.statusCode ?? 0)) return false;
         // The API reports an over-limit batch as a structured code; its prose
@@ -89,6 +96,7 @@ function isExplicitVoyageBatchLimitError(error: unknown): boolean {
 function classifyVoyageProviderError(error: unknown): EmbeddingProviderError {
     if (error instanceof EmbeddingProviderError) return error;
 
+    const { VoyageAIError, VoyageAITimeoutError } = voyageAIModule();
     const statusCode = error instanceof VoyageAIError ? error.statusCode ?? null : null;
     let code: EmbeddingProviderErrorCode = 'EMBEDDING_PROVIDER_ERROR';
     let retryable = false;
@@ -161,6 +169,7 @@ export class VoyageAIEmbedding extends Embedding {
     constructor(config: VoyageAIEmbeddingConfig) {
         super();
         this.config = config;
+        const { VoyageAIClient } = voyageAIModule();
         this.client = new VoyageAIClient({
             apiKey: config.apiKey,
         });

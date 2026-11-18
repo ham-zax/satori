@@ -363,6 +363,38 @@ test('readFileHandleExactly rejects a short descriptor read', async () => {
     }
 });
 
+test('readFileHandleExactly returns an empty buffer for a zero-length observation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-empty-read-'));
+    const filePath = path.join(root, 'empty.ts');
+    fs.writeFileSync(filePath, '', 'utf8');
+    const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+    try {
+        const bytes = await readFileHandleExactly(handle, 0);
+        assert.equal(bytes.length, 0);
+        assert.deepEqual(bytes, Buffer.alloc(0));
+    } finally {
+        await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('readFileHandleExactly rejects growth from a zero-length observation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-empty-growth-'));
+    const filePath = path.join(root, 'empty.ts');
+    fs.writeFileSync(filePath, '', 'utf8');
+    const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+    try {
+        fs.appendFileSync(filePath, 'x', 'utf8');
+        await assert.rejects(
+            () => readFileHandleExactly(handle, 0),
+            /grew beyond the observed size/,
+        );
+    } finally {
+        await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('openRegularFileInsideRootSync rejects intermediate and final-component symlink escapes', async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-sync-root-'));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-sync-out-'));

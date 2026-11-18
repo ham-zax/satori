@@ -1,5 +1,14 @@
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { Embedding, EmbeddingVector, type EmbeddingIdentity } from './base-embedding';
+
+type OpenAIModule = typeof import('openai');
+
+let loadedOpenAI: OpenAIModule | undefined;
+/** The SDK is only needed once an OpenAI provider is constructed. */
+function openAIModule(): OpenAIModule {
+    loadedOpenAI ??= require('openai') as OpenAIModule;
+    return loadedOpenAI;
+}
 
 export interface OpenAIEmbeddingConfig {
     model: string;
@@ -16,7 +25,8 @@ export class OpenAIEmbedding extends Embedding {
     constructor(config: OpenAIEmbeddingConfig) {
         super();
         this.config = config;
-        this.client = new OpenAI({
+        const OpenAIClient = openAIModule().default;
+        this.client = new OpenAIClient({
             apiKey: config.apiKey,
             baseURL: config.baseURL,
         });

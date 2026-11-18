@@ -11,6 +11,7 @@ import {
     VectorDatabase,
     VectorFilter,
     deleteCollectionWithVerification,
+    deleteIndexedChunksForRelativePaths,
     type VectorWriteMetricsSnapshot,
     type VectorStoreProviderIdentity,
 } from '../vectordb';
@@ -41,6 +42,7 @@ import { RepositoryVocabularyService } from '../vocabulary/service';
 import type { RepositoryVocabularyResult, RepositoryVocabularyFilter } from '../vocabulary/contracts';
 import type {
     ReadSymbolRegistrySidecarResult,
+    RelationshipManifest,
     SymbolRecord,
     SymbolRegistryManifestFile,
 } from '../symbols';
@@ -156,6 +158,7 @@ import {
 } from '../policy/index-policy-runtime-service';
 import type { ResolvedIndexPolicy } from '../policy/index-policy-runtime-service';
 export type { ResolvedIndexPolicy } from '../policy/index-policy-runtime-service';
+
 function subtractEmbeddingMetrics(
     after: EmbeddingOperationMetricsSnapshot | null,
     before: EmbeddingOperationMetricsSnapshot | null,
@@ -530,6 +533,9 @@ export class Context {
             ),
             deleteFileChunks: (collectionName, relativePath, assertMutationCurrent) => (
                 this.deleteFileChunks(collectionName, relativePath, assertMutationCurrent)
+            ),
+            deleteFilesChunks: (collectionName, relativePaths, assertMutationCurrent) => (
+                this.deleteFilesChunks(collectionName, relativePaths, assertMutationCurrent)
             ),
             embedding: this.embedding,
             getActiveIgnorePatterns: (codebasePath) => this.getActiveIgnorePatterns(codebasePath),
@@ -954,14 +960,11 @@ export class Context {
                 throw new Error(`Cannot delete indexed paths for '${codebasePath}' without a current Publication.`);
             }
             const uniquePaths = Array.from(new Set(this.normalizeRelativePathsForCodebase(codebasePath, relativePaths)));
-
-            for (const relativePath of uniquePaths) {
-                await this.deleteFileChunks(
-                    collectionName,
-                    relativePath,
-                    () => this.rootMutationRuntime.assertCurrent(codebasePath),
-                );
-            }
+            await this.deleteFilesChunks(
+                collectionName,
+                uniquePaths,
+                () => this.rootMutationRuntime.assertCurrent(codebasePath),
+            );
             return uniquePaths.length;
         });
     }
@@ -1200,6 +1203,32 @@ export class Context {
         });
     }
 
+    /**
+     * Read the relationship sidecar for a Publication already validated against
+     * `expectedSymbolRegistryManifestHash`, so callers that hold a registry read
+     * do not re-parse the relationship manifest from disk.
+     */
+    public async readPublicationRelationshipManifest(
+        publication: PublicationRef,
+        expectedSymbolRegistryManifestHash: string,
+    ): Promise<
+        | { status: 'ok'; manifest: Pick<RelationshipManifest, 'providerCoverage'> }
+        | { status: 'missing' | 'incompatible' | 'corrupt' }
+        | undefined
+    > {
+        const navigation = this.getPublicationNavigationAddress(publication);
+        if (!navigation) return undefined;
+        const state = await this.navigationStore.getRelationships({
+            normalizedRootPath: publication.publication.canonicalRoot,
+            publicationId: navigation.publicationId,
+            navigationRoot: navigation.navigationRoot,
+            expectedSymbolRegistryManifestHash,
+        });
+        return state.status === 'ok'
+            ? { status: 'ok', manifest: { providerCoverage: state.manifest.providerCoverage } }
+            : { status: state.sourceStatus ?? state.status };
+    }
+
     public async getPublicationNavigationStatus(publication: PublicationRef): Promise<PublicationNavigationStatus> {
         if (!publication.publication.navigation) return 'not_bound';
         const navigation = this.getPublicationNavigationAddress(publication);
@@ -1247,7 +1276,14 @@ export class Context {
         if (this.indexPolicyRuntimeService.getPolicyRuntimeCompatibility(canonicalRoot) !== true) {
             return { status: 'runtime_policy_incompatible' };
         }
-        if (!await this.isPublicationReadAdmitted(publication)) {
+        // `isPublicationFormatCurrent` and `hasValidPublicationPackageOwnership`
+        // were already proven for this immutable `publication` above, so only the
+        // remaining admission predicates are re-checked here.
+        const admitted = canonicalRoot === publication.publication.canonicalRoot
+            && publication.id === publication.publication.id
+            && await computeIndexPolicyControlSignature(canonicalRoot)
+                === publication.publication.policy.controlSignature;
+        if (!admitted) {
             return { status: 'runtime_policy_incompatible' };
         }
         return {
@@ -1304,19 +1340,35 @@ export class Context {
         relativePath: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
-        const results = await this.vectorDatabase.queryDocuments(collectionName, {
-            filter: { kind: 'comparison', field: 'relativePath', operator: 'eq', value: relativePath },
-            fields: ['id'],
-        });
+        await deleteIndexedChunksForRelativePaths(
+            this.vectorDatabase,
+            collectionName,
+            [relativePath],
+            {
+                assertMutationCurrent,
+                onBatchDeleted: (deletedCount) => {
+                    console.log(`[Context] Deleted ${deletedCount} chunks for file ${relativePath}`);
+                },
+            },
+        );
+    }
 
-        if (results.length > 0) {
-            const ids = results.map(r => r.id as string).filter(id => id);
-            if (ids.length > 0) {
-                assertMutationCurrent?.();
-                await this.vectorDatabase.deleteDocuments(collectionName, ids);
-                console.log(`[Context] Deleted ${ids.length} chunks for file ${relativePath}`);
-            }
-        }
+    private async deleteFilesChunks(
+        collectionName: string,
+        relativePaths: readonly string[],
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
+        await deleteIndexedChunksForRelativePaths(
+            this.vectorDatabase,
+            collectionName,
+            relativePaths,
+            {
+                assertMutationCurrent,
+                onBatchDeleted: (deletedCount, pathCount) => {
+                    console.log(`[Context] Deleted ${deletedCount} chunks for ${pathCount} file(s)`);
+                },
+            },
+        );
     }
     async semanticSearch(request: SemanticSearchRequest): Promise<SemanticSearchResult[]>;
     async semanticSearch(codebasePath: string, query: string, topK?: number, threshold?: number, filter?: VectorFilter): Promise<SemanticSearchResult[]>;

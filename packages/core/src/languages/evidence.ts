@@ -1,6 +1,7 @@
 import { readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols/sidecar';
 import type { ReadSymbolRegistrySidecarResult } from '../symbols/sidecar';
 import type { StructuralDefinitionStatus } from '../symbols/contracts';
+import type { RelationshipManifest } from '../symbols/contracts';
 import type { SemanticProviderCoverage } from '../semantic/contracts';
 import type { PublicLanguageClaim } from './types';
 import { getLanguageCapabilityDeclaration } from './capabilities';
@@ -208,6 +209,13 @@ export async function resolveLanguageCapabilityEvidence(input: {
     publicationId: string;
     navigationRoot: string;
     registryRead?: ReadSymbolRegistrySidecarResult;
+    /**
+     * Relationship state a caller already validated for this Publication.
+     * Supplying it skips re-parsing the relationship sidecar from disk.
+     */
+    relationshipsRead?:
+        | { status: 'ok'; manifest: Pick<RelationshipManifest, 'providerCoverage'> }
+        | { status: 'missing' | 'incompatible' | 'corrupt' };
 }): Promise<LanguageCapabilityEvidenceSummary> {
     const registry = input.registryRead ?? await readSymbolRegistrySidecar(input);
     if (registry.status !== 'ok' || !registry.registry) {
@@ -220,7 +228,7 @@ export async function resolveLanguageCapabilityEvidence(input: {
         });
     }
 
-    const relationships = await readRelationshipSidecar({
+    const relationships = input.relationshipsRead ?? await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
         expectedSymbolRegistryManifestHash: registry.manifestHash,
         publicationId: input.publicationId,

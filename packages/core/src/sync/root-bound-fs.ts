@@ -489,8 +489,17 @@ export async function verifyStableFileObservation(
 }
 
 /**
+ * Read window for readFileHandleExactly. It matches the highWaterMark of the
+ * ReadStream this replaced, so the measurement ledger keeps the same maximum
+ * window while the read itself stays a plain descriptor read. A descriptor
+ * read may return fewer bytes than the window, so per-chunk read boundaries
+ * are not guaranteed to be identical to the stream's.
+ */
+const EXACT_READ_WINDOW_BYTES = 64 * 1024;
+
+/**
  * Read exactly the byte length already observed from an open descriptor.
- * The stream is capped at one byte beyond that length so concurrent growth is
+ * The read is capped at one byte beyond that length so concurrent growth is
  * detected without allowing an unbounded read-to-EOF allocation.
  */
 export async function readFileHandleExactly(
@@ -499,21 +508,25 @@ export async function readFileHandleExactly(
     measurementObservation?: SourceMeasurementObservation,
     options: { deferSuccessfulObservationOutcome?: boolean } = {},
 ): Promise<Buffer> {
-    const chunks: Buffer[] = [];
     let totalBytes = 0;
     try {
         if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
             throw new Error(`Observed file size is invalid: ${expectedSize}`);
         }
-        const stream = handle.createReadStream({
-            autoClose: false,
-            start: 0,
-            end: expectedSize,
-        });
-        for await (const chunk of stream) {
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        // The extra byte is the growth probe: reading it proves the file did
+        // not grow past the observed length. For a zero-length observation the
+        // probe is the whole read, so an empty file still costs one read.
+        const buffer = Buffer.allocUnsafe(expectedSize + 1);
+        while (totalBytes < buffer.length) {
+            const { bytesRead } = await handle.read(
+                buffer,
+                totalBytes,
+                Math.min(EXACT_READ_WINDOW_BYTES, buffer.length - totalBytes),
+                totalBytes,
+            );
+            if (bytesRead === 0) break;
             const startByte = totalBytes;
-            totalBytes += buffer.length;
+            totalBytes += bytesRead;
             recordSourceIo({
                 observation: measurementObservation,
                 startByte,
@@ -526,7 +539,6 @@ export async function readFileHandleExactly(
                     'File grew beyond the observed size while being read.',
                 );
             }
-            chunks.push(buffer);
         }
         if (totalBytes !== expectedSize) {
             throw new RootBoundFileError(
@@ -540,7 +552,7 @@ export async function readFileHandleExactly(
                 status: 'completed',
             });
         }
-        return Buffer.concat(chunks, totalBytes);
+        return totalBytes === 0 ? Buffer.alloc(0) : buffer.subarray(0, totalBytes);
     } catch (error) {
         finishSourceMeasurementObservation({
             observation: measurementObservation,

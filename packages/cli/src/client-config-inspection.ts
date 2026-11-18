@@ -91,6 +91,7 @@ export function verifyManagedClientTarget(
             || target.client === "agy"
             || target.client === "cursor"
             || target.client === "windsurf"
+            || target.client === "pi"
             || target.client === "vscode"
         ) {
             const config = target.client === "vscode"
@@ -158,6 +159,7 @@ export function hasSatoriClientEntry(target: ClientTarget): boolean {
             || target.client === "agy"
             || target.client === "cursor"
             || target.client === "windsurf"
+            || target.client === "pi"
             || target.client === "vscode"
         ) {
             const config = target.client === "vscode"
@@ -208,6 +210,7 @@ export function readClientVectorStore(target: ClientTarget): InstallVectorStore 
         || target.client === "agy"
         || target.client === "cursor"
         || target.client === "windsurf"
+        || target.client === "pi"
         || target.client === "vscode"
     ) {
         const config = target.client === "vscode"

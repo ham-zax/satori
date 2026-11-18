@@ -8,6 +8,7 @@ import type {
     ClientName,
     InstallCommandResult,
     ManagedRuntimeCommand,
+    ManagedRuntimeStep,
     PlannedChangeKind,
 } from "./install-contracts.js";
 import {
@@ -154,6 +155,7 @@ export function installManagedRuntimeCandidate(
     execImpl: ExecFileSyncLike,
     expectedCoreVersion: string | undefined,
     closure: ManagedRuntimeClosure,
+    onRuntimeStep?: (step: ManagedRuntimeStep) => void,
 ): ManagedRuntimeCandidate {
     const stableRuntimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
     const reusable = findReusableManagedRuntime(homeDir, packageSpecifier, expectedCoreVersion, closure);
@@ -181,6 +183,7 @@ export function installManagedRuntimeCandidate(
         }
     }
     try {
+        onRuntimeStep?.("npm-install");
         execImpl("npm", [
             "install",
             "--prefix",
@@ -224,6 +227,7 @@ export function installManagedRuntimeCandidate(
     }
     // Prune before the closure manifest is recorded so preflight and candidate
     // probing exercise the exact tree the user launches.
+    onRuntimeStep?.("prune");
     pruneManagedRuntimeDeadWeight(runtimeRoot, {
         platform: closure.platform,
         architecture: closure.architecture,
@@ -437,6 +441,7 @@ export function applyInstallPlan(
                             architecture: options.architecture,
                             libc: options.libc,
                         },
+                        options.onRuntimeStep,
                     );
                     installedManagedRuntimeCandidate = installedRuntime;
                     profileMutation.assertUnchanged?.();
@@ -529,6 +534,8 @@ export function applyInstallPlan(
             pruneManagedRuntimeAfterActivation(
                 homeDir,
                 installedManagedRuntimeCandidate.runtimeRoot,
+                process.env,
+                options.onRuntimeStep,
             );
         }
     } finally {
@@ -624,7 +631,9 @@ export function pruneManagedRuntimeAfterActivation(
     homeDir: string,
     currentRuntimeRoot: string,
     env: NodeJS.ProcessEnv = process.env,
+    onRuntimeStep?: (step: ManagedRuntimeStep) => void,
 ): void {
+    onRuntimeStep?.("prune");
     const result = pruneManagedRuntimeStore({
         homeDir,
         currentRuntimeRoot,

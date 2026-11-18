@@ -889,8 +889,8 @@ export function prepareConfigMutation(
         mutation = command.kind === "install"
             ? prepareCodexInstall(target.configPath, runtimeCommand)
             : prepareCodexUninstall(target.configPath, runtimeCommand);
-    } else if (target.client === "claude" || target.client === "agy" || target.client === "cursor" || target.client === "windsurf") {
-        // All four keep Satori under mcpServers.satori; uninstall removal is identical.
+    } else if (target.client === "claude" || target.client === "agy" || target.client === "cursor" || target.client === "windsurf" || target.client === "pi") {
+        // All five keep Satori under mcpServers.satori; uninstall removal is identical.
         mutation = command.kind === "install"
             ? (target.client === "agy" ? prepareAgyInstall : prepareClaudeInstall)(target.configPath, runtimeCommand)
             : prepareClaudeUninstall(target.configPath, runtimeCommand);

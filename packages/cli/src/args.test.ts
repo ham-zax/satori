@@ -365,15 +365,15 @@ test("parseCliArgs rejects guidance hook flag for uninstall", () => {
     );
 });
 
-test("parseCliArgs accepts cursor, vscode, windsurf and rejects unsupported install clients", () => {
-    for (const client of ["cursor", "vscode", "windsurf"] as const) {
+test("parseCliArgs accepts cursor, vscode, windsurf, pi and rejects unsupported install clients", () => {
+    for (const client of ["cursor", "vscode", "windsurf", "pi"] as const) {
         const parsed = parseCliArgs(["install", "--client", client]).command;
         if (parsed.kind !== "install") assert.fail("Expected install command parsing");
         assert.equal(parsed.client, client);
     }
     assert.throws(
         () => parseCliArgs(["install", "--client", "unsupported-client"]),
-        /--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf/
+        /--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf, pi/
     );
 });
 

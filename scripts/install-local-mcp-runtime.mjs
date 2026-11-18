@@ -14,7 +14,7 @@ export { buildLauncherScript, DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS };
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
-const INSTALL_CLIENTS = new Set(['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy']);
+const INSTALL_CLIENTS = new Set(['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy', 'pi']);
 const INSTALL_RUNTIMES = new Set(['offline', 'voyage']);
 const OFFLINE_RERANKERS = new Set(['lateon', 'voyage', 'none']);
 
@@ -27,7 +27,7 @@ function usage() {
     'without installing or replacing the globally published Satori CLI.',
     '',
     'Options:',
-    '  --client <name>       auto, all, claude, codex, opencode, cursor, vscode, windsurf, or agy (default: opencode).',
+    '  --client <name>       auto, all, claude, codex, opencode, cursor, vscode, windsurf, agy, or pi (default: opencode).',
     '  --runtime <name>      offline or voyage (default: preserve managed selection).',
     '  --reranker <name>     lateon, voyage, or none for an offline runtime.',
     '  --vector-store <name> lancedb or milvus (milvus requires voyage runtime).',
@@ -85,7 +85,7 @@ export function parseArgs(argv) {
     if (arg === '--client') {
       const value = readOptionValue(argv, i, arg);
       if (!INSTALL_CLIENTS.has(value)) {
-        throw new Error('--client must be one of: auto, all, claude, codex, opencode, cursor, vscode, windsurf, agy.');
+        throw new Error('--client must be one of: auto, all, claude, codex, opencode, cursor, vscode, windsurf, agy, pi.');
       }
       options.client = value;
       i += 1;

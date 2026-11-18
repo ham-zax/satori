@@ -12,6 +12,7 @@ const CLIENT_LABELS = {
     cursor: "Cursor",
     vscode: "VS Code",
     windsurf: "Windsurf",
+    pi: "Pi",
 } as const;
 
 const CHECK_LABELS: Record<InstallPostflightCheck["name"], string> = {

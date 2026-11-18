@@ -21,7 +21,7 @@ import {
 export type InstallPlanOptions = Readonly<
     Pick<
         InstallCommandOptions,
-        'runtimeCommand' | 'execFileSyncImpl' | 'platform' | 'architecture' | 'libc'
+        'runtimeCommand' | 'execFileSyncImpl' | 'platform' | 'architecture' | 'libc' | 'onRuntimeStep'
     >
 >;
 

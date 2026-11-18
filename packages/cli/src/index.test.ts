@@ -9,6 +9,7 @@ import type { CallToolResult, ListToolsResult } from "./client.js";
 import type { DoctorResult, RuntimeVersionState } from "./doctor.js";
 import { CliError } from "./errors.js";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
+import { installManagedRuntimeCandidate } from "./install-application.js";
 import { CliUpgradeDelegationStartError } from "./upgrade.js";
 import {
     writeLateOnAcquisitionFixture,
@@ -185,6 +186,40 @@ function fakeInstallRuntimeCommand(homeDir: string) {
         command: process.execPath,
         args: [path.join(packageRoot, "dist", "index.js")],
     };
+}
+
+const FAKE_MANAGED_RUNTIME_SPECIFIER = "@satori-code/mcp@4.4.1";
+
+function writeFakeManagedRuntimePackage(runtimeRoot: string): void {
+    const packageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
+    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+        name: "@satori-code/mcp",
+        version: FAKE_MANAGED_RUNTIME_SPECIFIER.slice(FAKE_MANAGED_RUNTIME_SPECIFIER.lastIndexOf("@") + 1),
+        bin: { satori: "dist/index.js" },
+    }), "utf8");
+    fs.writeFileSync(path.join(packageRoot, "dist", "index.js"), "", "utf8");
+}
+
+function fakeManagedRuntimeInstaller(onNpmInstall?: () => void) {
+    return ((command: string, args: string[]) => {
+        assert.equal(command, "npm");
+        onNpmInstall?.();
+        const prefixIndex = args.indexOf("--prefix");
+        assert.notEqual(prefixIndex, -1);
+        writeFakeManagedRuntimePackage(args[prefixIndex + 1]!);
+        return "";
+    }) as never;
+}
+
+function prepareReusableManagedRuntime(homeDir: string): void {
+    installManagedRuntimeCandidate(
+        homeDir,
+        FAKE_MANAGED_RUNTIME_SPECIFIER,
+        fakeManagedRuntimeInstaller(),
+        undefined,
+        { vectorStore: "LanceDB", lateOn: false },
+    );
 }
 
 test("runCli defaults to human help and preserves structured help on request", async () => {
@@ -643,6 +678,70 @@ test("runCli install reports progress and the first repository action", async ()
         assert.equal(stderr, "Configuring your coding agents...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("managed runtime install reports npm and prune progress before each step", () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-runtime-step-home-"));
+    const events: string[] = [];
+
+    try {
+        const candidate = installManagedRuntimeCandidate(
+            homeDir,
+            FAKE_MANAGED_RUNTIME_SPECIFIER,
+            fakeManagedRuntimeInstaller(() => events.push("ran:npm")),
+            undefined,
+            { vectorStore: "LanceDB", lateOn: false },
+            (step) => events.push(`step:${step}`),
+        );
+
+        assert.equal(candidate.newlyInstalled, true);
+        assert.deepEqual(events, ["step:npm-install", "ran:npm", "step:prune"]);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install prints the first-install runtime estimate and prune progress", async () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-estimate-home-"));
+    const io = captureIo();
+
+    try {
+        prepareReusableManagedRuntime(homeDir);
+        const exitCode = await runCli([
+            "install",
+            "--client", "codex",
+            "--runtime", "offline",
+            "--reranker", "none",
+        ], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { ...process.env, HOME: homeDir },
+            installabilityVerifier: () => FAKE_MANAGED_RUNTIME_SPECIFIER,
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: Object.freeze({
+                    SATORI_RUNTIME_PROFILE: "offline",
+                    VECTOR_STORE_PROVIDER: "LanceDB",
+                    EMBEDDING_PROVIDER: "Potion",
+                    SATORI_RERANKER_PROVIDER: "none",
+                }),
+            }),
+            installPreflightDependencies: { probeCandidateRuntime: async () => {} },
+            installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "verified" }],
+            }),
+        });
+
+        const { stderr } = io.read();
+        assert.equal(exitCode, 0);
+        assert.match(stderr, /Installing the Satori runtime \(about 1-3 minutes on first install on slower hosts\)\.\.\./);
+        assert.match(stderr, /Pruning unused runtime files\.\.\./);
+        assert.doesNotMatch(stderr, /about 30 seconds/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }

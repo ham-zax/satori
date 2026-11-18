@@ -64,7 +64,7 @@ test('parseArgs supports local install options', () => {
   assert.equal(parseArgs(['--no-skill']).skill, false);
   assert.equal(parseArgs(['--no-skill', '--skill']).skill, true);
 
-  for (const client of ['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy']) {
+  for (const client of ['auto', 'all', 'claude', 'codex', 'opencode', 'cursor', 'vscode', 'windsurf', 'agy', 'pi']) {
     assert.equal(parseArgs(['--client', client]).client, client);
   }
   for (const reranker of ['lateon', 'voyage', 'none']) {

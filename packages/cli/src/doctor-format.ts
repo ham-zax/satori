@@ -38,6 +38,7 @@ function runtimeClientName(client: NonNullable<DoctorResult["runtimeConfiguratio
         case "cursor": return "Cursor";
         case "vscode": return "VS Code";
         case "windsurf": return "Windsurf";
+        case "pi": return "Pi";
     }
 }
 
@@ -141,6 +142,7 @@ function clientName(checkName: string): string | null {
     if (client === "cursor") return "Cursor";
     if (client === "vscode") return "VS Code";
     if (client === "windsurf") return "Windsurf";
+    if (client === "pi") return "Pi";
     return client;
 }
 
@@ -149,7 +151,7 @@ function expandedHumanChecks(checks: DoctorCheck[]): DoctorCheck[] {
         if (check.name !== "managed_client_configuration" || check.status !== "error") {
             return [check];
         }
-        const clients = [...check.message.matchAll(/\b(codex|opencode|claude|agy|cursor|vscode|windsurf|vs code) config\b/gi)]
+        const clients = [...check.message.matchAll(/\b(codex|opencode|claude|agy|cursor|vscode|windsurf|pi|vs code) config\b/gi)]
             .map((match) => {
                 const matched = match[1].toLowerCase();
                 return matched === "vs code" ? "vscode" : matched;

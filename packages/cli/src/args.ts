@@ -75,7 +75,7 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "agy" | "cursor" | "vscode" | "windsurf";
+export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "agy" | "cursor" | "vscode" | "windsurf" | "pi";
 export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
@@ -96,12 +96,12 @@ export const GLOBAL_OPTION_SPECS: readonly CommandOptionSpec[] = [
     { flag: "--call-timeout-ms", value: "n", description: "MCP call timeout in milliseconds (default: 600000)" },
 ];
 
-const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy|cursor|vscode|windsurf";
+const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy|cursor|vscode|windsurf|pi";
 
 /** The flags each command's parser below accepts; per-command help renders exactly this table. */
 export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOptionSpec[]>> = {
     install: [
-        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf; agy is opt-in)" },
+        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, Pi; agy is opt-in)" },
         { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
         { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
         { flag: "--reranker", value: Object.keys(RERANKER_PROVIDERS).join("|"), description: "Select the reranker provider (LateOn is offline only)" },
@@ -356,8 +356,8 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         const token = args[i];
         if (token === "--client") {
             const next = args[i + 1];
-            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode" && next !== "agy" && next !== "cursor" && next !== "vscode" && next !== "windsurf") {
-                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf.", 2);
+            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode" && next !== "agy" && next !== "cursor" && next !== "vscode" && next !== "windsurf" && next !== "pi") {
+                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode, agy, cursor, vscode, windsurf, pi.", 2);
             }
             client = next;
             i += 1;

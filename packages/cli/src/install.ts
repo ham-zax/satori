@@ -38,6 +38,7 @@ export type {
     InstallCommandResult,
     ManagedClientConfigProof,
     ManagedRuntimeCommand,
+    ManagedRuntimeStep,
     ManagedRuntimeUpgradePhase,
     ManagedRuntimeUpgradeResult,
     PlannedChange,
@@ -244,6 +245,7 @@ export async function executeInstallCommand(
                             architecture: options.architecture,
                             libc: options.libc,
                         },
+                        options.onRuntimeStep,
                     );
                     installedRuntimeCommand = managedRuntimeCandidate.command;
                     potionAssetsRoot = options.potionAssetsRoot
@@ -411,6 +413,7 @@ export async function executeInstallCommand(
                 homeDir,
                 managedRuntimeCandidate.runtimeRoot,
                 { ...env, ...preflight?.runtimeEnvironment },
+                options.onRuntimeStep,
             );
         }
         if (command.kind === "uninstall" && command.purge) {

@@ -123,6 +123,13 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
                 skill,
             ],
         },
+        {
+            client: "pi",
+            configPath: path.join(homeDir, ".pi", "agent", "mcp.json"),
+            companions: [
+                skill,
+            ],
+        },
     ];
 }
 
@@ -197,6 +204,10 @@ function isClientDetected(target: ClientTarget, homeDir: string, env: NodeJS.Pro
         case "windsurf":
             return configuredPathExists(path.dirname(target.configPath), homeDir, true)
                 || executableExists("windsurf", homeDir, env);
+        case "pi":
+            return configuredPathExists(path.dirname(target.configPath), homeDir, true)
+                || configuredPathExists(target.configPath, homeDir, false)
+                || executableExists("pi", homeDir, env);
     }
 }
 
@@ -228,13 +239,14 @@ export function assertAutoClientTargets(
             "",
             "Detected clients: none",
             "",
-            "Install Codex, Claude Code, OpenCode, Cursor, VS Code, or Windsurf, or explicitly choose:",
+            "Install Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, or Pi, or explicitly choose:",
             `  ${satoriCliCommand("install --client codex")}`,
             `  ${satoriCliCommand("install --client claude")}`,
             `  ${satoriCliCommand("install --client opencode")}`,
             `  ${satoriCliCommand("install --client cursor")}`,
             `  ${satoriCliCommand("install --client vscode")}`,
             `  ${satoriCliCommand("install --client windsurf")}`,
+            `  ${satoriCliCommand("install --client pi")}`,
             `  ${satoriCliCommand("install --client agy")}`,
             `  ${satoriCliCommand("install --client all")}`,
         ].join("\n"),

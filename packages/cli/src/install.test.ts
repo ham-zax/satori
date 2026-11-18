@@ -3479,7 +3479,7 @@ test("install all smoke writes launcher-backed config for every supported client
             dryRun: false,
         }, installOptions(homeDir));
 
-        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf"]);
+        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf", "pi"]);
         assert.equal(result.results.every((entry) => entry.status === "updated"), true);
 
         const launcher = readFile(launcherPath(homeDir));
@@ -3831,7 +3831,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
             VOYAGEAI_API_KEY: "pa-client-owned",
             MILVUS_ADDRESS: "localhost:19530",
         });
-        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf"]);
+        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode", "agy", "cursor", "vscode", "windsurf", "pi"]);
         assert.equal(healthy.every((proof) => proof.status === "ok"), true);
         assert.equal(healthy.every((proof) => proof.usesManagedLauncher === true), true);
         assert.equal(
@@ -3848,7 +3848,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
 
         const stale = inspectManagedClientConfigurations(homeDir);
         assert.equal(stale.find((proof) => proof.client === "claude")?.status, "error");
-        assert.equal(stale.filter((proof) => proof.status === "ok").length, 6);
+        assert.equal(stale.filter((proof) => proof.status === "ok").length, 7);
     });
 });
 
@@ -4094,7 +4094,7 @@ test("dry-run reports install actions without writing files", async () => {
             dryRun: true,
         }, installOptions(homeDir));
 
-        assert.equal(result.results.length, 7);
+        assert.equal(result.results.length, 8);
         assert.equal(result.results.every((entry) => entry.dryRun), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".gemini", "config", "mcp_config.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
@@ -4529,10 +4529,11 @@ test("managed runtime upgrade retains the active candidate when post-activation 
     });
 });
 
-test("cursor, vscode, and windsurf auto-detect, configure, inspect, and uninstall cleanly", async () => {
+test("cursor, vscode, windsurf, and pi auto-detect, configure, inspect, and uninstall cleanly", async () => {
     await withTempHome(async (homeDir) => {
         fs.mkdirSync(path.join(homeDir, ".cursor"), { recursive: true });
         fs.mkdirSync(path.join(homeDir, ".codeium", "windsurf"), { recursive: true });
+        fs.mkdirSync(path.join(homeDir, ".pi", "agent"), { recursive: true });
         const vscodeDir = path.join(homeDir, ".config", "Code", "User");
         if (process.platform !== "darwin" && process.platform !== "win32") {
             fs.mkdirSync(vscodeDir, { recursive: true });
@@ -4541,6 +4542,7 @@ test("cursor, vscode, and windsurf auto-detect, configure, inspect, and uninstal
         const detected = detectClientTargets(homeDir, {});
         assert.equal(detected.includes("cursor"), true);
         assert.equal(detected.includes("windsurf"), true);
+        assert.equal(detected.includes("pi"), true);
 
         const installed = await executeInstallCommand({
             kind: "install",
@@ -4551,18 +4553,21 @@ test("cursor, vscode, and windsurf auto-detect, configure, inspect, and uninstal
         assert.equal(installed.results.some((r) => r.client === "cursor" && r.status === "updated"), true);
         assert.equal(installed.results.some((r) => r.client === "vscode" && r.status === "updated"), true);
         assert.equal(installed.results.some((r) => r.client === "windsurf" && r.status === "updated"), true);
+        assert.equal(installed.results.some((r) => r.client === "pi" && r.status === "updated"), true);
 
         const cursorCfg = JSON.parse(readFile(path.join(homeDir, ".cursor", "mcp.json"))) as { mcpServers?: { satori?: { command?: string } } };
         assert.equal(typeof cursorCfg.mcpServers?.satori?.command, "string");
         const windsurfCfg = JSON.parse(readFile(path.join(homeDir, ".codeium", "windsurf", "mcp_config.json"))) as { mcpServers?: { satori?: { command?: string } } };
         assert.equal(typeof windsurfCfg.mcpServers?.satori?.command, "string");
+        const piCfg = JSON.parse(readFile(path.join(homeDir, ".pi", "agent", "mcp.json"))) as { mcpServers?: { satori?: { command?: string } } };
+        assert.equal(typeof piCfg.mcpServers?.satori?.command, "string");
         const vscodePath = installed.results.find((r) => r.client === "vscode")!.configPath;
         const vscodeCfg = JSON.parse(readFile(vscodePath)) as { servers?: { satori?: { type?: string; command?: string } } };
         assert.equal(vscodeCfg.servers?.satori?.type, "stdio");
         assert.equal(typeof vscodeCfg.servers?.satori?.command, "string");
 
         const proofs = inspectManagedClientConfigurations(homeDir);
-        for (const client of ["cursor", "vscode", "windsurf"] as const) {
+        for (const client of ["cursor", "vscode", "windsurf", "pi"] as const) {
             assert.equal(proofs.find((p) => p.client === client)?.status, "ok");
         }
 
@@ -4575,6 +4580,8 @@ test("cursor, vscode, and windsurf auto-detect, configure, inspect, and uninstal
         assert.equal(afterCursor.mcpServers, undefined);
         const afterVscode = JSON.parse(readFile(vscodePath)) as { servers?: unknown };
         assert.equal(afterVscode.servers, undefined);
+        const afterPi = JSON.parse(readFile(path.join(homeDir, ".pi", "agent", "mcp.json"))) as { mcpServers?: unknown };
+        assert.equal(afterPi.mcpServers, undefined);
     });
 });
 

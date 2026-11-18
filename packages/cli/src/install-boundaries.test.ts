@@ -36,6 +36,7 @@ test("neutral install boundaries preserve configured targets and runtime paths",
             ["cursor", path.join(homeDir, ".cursor", "mcp.json")],
             ["vscode", path.join(homeDir, ".config", "Code", "User", "mcp.json")],
             ["windsurf", path.join(homeDir, ".codeium", "windsurf", "mcp_config.json")],
+            ["pi", path.join(homeDir, ".pi", "agent", "mcp.json")],
         ],
     );
     assert.deepEqual(detectClientTargets(homeDir, { PATH: "" }), []);

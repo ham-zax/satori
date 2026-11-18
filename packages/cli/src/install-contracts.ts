@@ -79,6 +79,8 @@ export interface ManagedRuntimeCommand {
 
 export type ManagedRuntimeUpgradePhase = "installing" | "verifying" | "activating";
 
+export type ManagedRuntimeStep = "npm-install" | "prune";
+
 type InstallCommandBase = {
     kind: "install";
     client: InstallClient;
@@ -138,6 +140,8 @@ export interface InstallCommandOptions {
     modelProgress?: ModelProgressReporter;
     /** Announces the slow install phases that have no byte-level progress. */
     onInstallProgress?: (phase: "runtime" | "configure") => void;
+    /** Announces the slow runtime steps that have no byte-level progress. */
+    onRuntimeStep?: (step: ManagedRuntimeStep) => void;
     /** Test seam: backoff before each model download retry. */
     modelRetryDelaysMs?: readonly number[];
     installRetryCommand?: string;

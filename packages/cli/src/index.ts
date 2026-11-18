@@ -25,6 +25,7 @@ import {
     executeInstallCommand,
     executeManagedRuntimeUpgrade,
     type ManagedRuntimeCommand,
+    type ManagedRuntimeStep,
     type ManagedRuntimeUpgradePhase,
     type ManagedRuntimeUpgradeResult,
 } from "./install.js";
@@ -873,8 +874,15 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 onInstallWarning: (message) => writers.writeStderr(`Warning: ${message}\n`),
                 onInstallProgress: wantsJson ? undefined : (phase) => {
                     writers.writeStderr(phase === "runtime"
-                        ? "Installing the Satori runtime (about 30 seconds on first install)...\n"
+                        ? "Installing the Satori runtime (about 1-3 minutes on first install on slower hosts)...\n"
                         : "Configuring your coding agents...\n");
+                },
+                onRuntimeStep: wantsJson ? undefined : (step: ManagedRuntimeStep) => {
+                    const messages: Record<ManagedRuntimeStep, string> = {
+                        "npm-install": "Installing runtime packages with npm...\n",
+                        prune: "Pruning unused runtime files...\n",
+                    };
+                    writers.writeStderr(messages[step]);
                 },
                 modelProgress: wantsJson ? undefined : createModelProgressReporter(writers),
                 installRetryCommand: parsed.command.kind === "install" && parsed.command.runtime === "offline"

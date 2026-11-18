@@ -1,4 +1,17 @@
 export {
+    DEFAULT_IGNORE_PATTERNS,
+    getSupportedExtensionsForIndexProfile,
+} from './config/defaults';
+export {
+    MAX_INDEXED_SOURCE_FILE_BYTES,
+    classifyFilePathByPolicy,
+    isIndexableFileByPolicySync,
+    normalizeSupportedExtensions,
+} from './config/index-policy';
+export {
+    loadSatoriRepoConfig,
+} from './config/repo-config';
+export {
     assertNetworkPolicyAllowsEndpoint,
     resolveExecutionPolicy,
 } from './config/execution-profile';
@@ -16,6 +29,14 @@ export type {
     ContextConfig,
     ResolvedIndexPolicy,
 } from './core/context';
+export {
+    parseIgnorePatterns,
+    translateNestedGitignorePatterns,
+} from './core/ignore-file-inputs';
+export {
+    getCustomExtensionsFromEnvironment,
+    getCustomIgnorePatternsFromEnvironment,
+} from './core/ignore-rule-service';
 export {
     createIndexIgnoreMatcher,
 } from './core/ignore-matcher';

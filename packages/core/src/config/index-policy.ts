@@ -57,6 +57,24 @@ function isAllowedExactFilename(relativePath: string, extensionSet: ReadonlySet<
     return getIndexableExactFilenames(extensionSet).some((filename) => filename.toLowerCase() === basename);
 }
 
+function isUtf8TextBufferUnderLimit(size: number, view: Buffer): boolean {
+    if (size > getAllTextMaxBytes()) {
+        return false;
+    }
+    if (size === 0) {
+        return true;
+    }
+    try {
+        if (view.includes(0)) {
+            return false;
+        }
+        utf8Decoder.decode(view);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function isUtf8TextObservationUnderLimit(
     size: number,
     readProbe: () => Promise<Buffer>,
@@ -69,15 +87,18 @@ async function isUtf8TextObservationUnderLimit(
     }
 
     try {
-        const view = await readProbe();
-        if (view.includes(0)) {
-            return false;
-        }
-        utf8Decoder.decode(view);
-        return true;
+        return isUtf8TextBufferUnderLimit(size, await readProbe());
     } catch {
         return false;
     }
+}
+
+function hasSearchableShebangBuffer(extension: string, size: number, view: Buffer): boolean {
+    if (size < 2 || getLanguageAdapterByExtension(extension)) return false;
+    if (view[0] !== 0x23 || view[1] !== 0x21) return false;
+    if (!isUtf8TextBufferUnderLimit(size, view)) return false;
+    const language = detectLanguageFromShebang(view.toString('utf8'));
+    return language !== undefined && isLanguageCapabilitySupportedForLanguage(language, 'search');
 }
 
 // Scripts whose extension the language registry does not recognize are
@@ -89,10 +110,18 @@ async function hasSearchableShebang(
 ): Promise<boolean> {
     if (size < 2 || getLanguageAdapterByExtension(extension)) return false;
     const view = await readProbe();
-    if (view[0] !== 0x23 || view[1] !== 0x21) return false;
-    if (!(await isUtf8TextObservationUnderLimit(size, readProbe))) return false;
-    const language = detectLanguageFromShebang(view.toString('utf8'));
-    return language !== undefined && isLanguageCapabilitySupportedForLanguage(language, 'search');
+    return hasSearchableShebangBuffer(extension, size, view);
+}
+
+function shouldProbeGeneratedSingleLineWebAsset(relativePath: string, size: number): boolean {
+    if (size < GENERATED_SINGLE_LINE_WEB_ASSET_MIN_BYTES) return false;
+    const extension = path.extname(relativePath).toLowerCase();
+    return GENERATED_SINGLE_LINE_WEB_EXTENSIONS.has(extension);
+}
+
+function isLikelyGeneratedSingleLineWebAssetBuffer(view: Buffer): boolean {
+    if (view.length === 0) return false;
+    return !view.includes(0x0a) && !view.includes(0x0d);
 }
 
 async function isLikelyGeneratedSingleLineWebAsset(
@@ -100,12 +129,8 @@ async function isLikelyGeneratedSingleLineWebAsset(
     size: number,
     readProbe: () => Promise<Buffer>,
 ): Promise<boolean> {
-    if (size < GENERATED_SINGLE_LINE_WEB_ASSET_MIN_BYTES) return false;
-    const extension = path.extname(relativePath).toLowerCase();
-    if (!GENERATED_SINGLE_LINE_WEB_EXTENSIONS.has(extension)) return false;
-    const view = await readProbe();
-    if (view.length === 0) return false;
-    return !view.includes(0x0a) && !view.includes(0x0d);
+    if (!shouldProbeGeneratedSingleLineWebAsset(relativePath, size)) return false;
+    return isLikelyGeneratedSingleLineWebAssetBuffer(await readProbe());
 }
 
 /**
@@ -118,6 +143,74 @@ function toExtensionSet(supportedExtensions: SupportedExtensionsInput): Readonly
     return supportedExtensions instanceof Set
         ? supportedExtensions
         : new Set(normalizeSupportedExtensions(supportedExtensions as readonly string[]));
+}
+
+export function isIndexableFileObservationByPolicySync(
+    relativePath: string,
+    size: number,
+    supportedExtensions: SupportedExtensionsInput,
+    readProbe: () => Buffer,
+): boolean {
+    if (isSemanticAuxiliaryFilename(relativePath)) return false;
+    if (size > MAX_INDEXED_SOURCE_FILE_BYTES) return false;
+    if (
+        shouldProbeGeneratedSingleLineWebAsset(relativePath, size)
+        && isLikelyGeneratedSingleLineWebAssetBuffer(readProbe())
+    ) {
+        return false;
+    }
+
+    const extensionSet = toExtensionSet(supportedExtensions);
+    const extension = path.extname(relativePath).toLowerCase();
+
+    if (extension && extensionSet.has(extension)) {
+        return true;
+    }
+    if (isAllowedExactFilename(relativePath, extensionSet)) {
+        return true;
+    }
+    if (size >= 2 && !getLanguageAdapterByExtension(extension) && hasSearchableShebangBuffer(extension, size, readProbe())) {
+        return true;
+    }
+    if (!extensionSet.has(ALL_TEXT_INDEX_MARKER)) {
+        return false;
+    }
+
+    if (size > getAllTextMaxBytes()) {
+        return false;
+    }
+    if (size === 0) {
+        return true;
+    }
+    try {
+        return isUtf8TextBufferUnderLimit(size, readProbe());
+    } catch {
+        return false;
+    }
+}
+
+export function isIndexableFileByPolicySync(
+    relativePath: string,
+    absolutePath: string,
+    size: number,
+    supportedExtensions: SupportedExtensionsInput,
+): boolean {
+    let descriptor: number | undefined;
+    try {
+        return isIndexableFileObservationByPolicySync(
+            relativePath,
+            size,
+            supportedExtensions,
+            () => {
+                descriptor ??= fsSync.openSync(absolutePath, 'r');
+                const buffer = Buffer.alloc(Math.min(size, TEXT_PROBE_BYTES));
+                const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, 0);
+                return buffer.subarray(0, bytesRead);
+            },
+        );
+    } finally {
+        if (descriptor !== undefined) fsSync.closeSync(descriptor);
+    }
 }
 
 export async function isIndexableFileObservationByPolicy(

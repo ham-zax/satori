@@ -9,6 +9,7 @@ import {
     MAX_INDEXED_SOURCE_FILE_BYTES,
     classifyFilePathByPolicy,
     isIndexableFileByPolicy,
+    isIndexableFileByPolicySync,
     isIndexableFileObservationByPolicy,
 } from './index-policy';
 import { ALL_TEXT_INDEX_MARKER, DEFAULT_SUPPORTED_EXTENSIONS } from './defaults';
@@ -130,6 +131,11 @@ test('the synchronous file probe admits exactly what the promise probe admits', 
                 await outcome(() => isIndexableFileByPolicy(relativePath, absolutePath, size, supportedExtensions)),
                 await outcome(() => referenceIsIndexableFileByPolicy(relativePath, absolutePath, size, supportedExtensions)),
                 `${relativePath} with ${supportedExtensions.slice(0, 2).join(',')}`,
+            );
+            assert.deepEqual(
+                await outcome(async () => isIndexableFileByPolicySync(relativePath, absolutePath, size, supportedExtensions)),
+                await outcome(() => referenceIsIndexableFileByPolicy(relativePath, absolutePath, size, supportedExtensions)),
+                `sync ${relativePath} with ${supportedExtensions.slice(0, 2).join(',')}`,
             );
         }
     }

@@ -370,25 +370,62 @@ test("denies paths through a dangling symlink inside an authorized root", (t) =>
     }
 });
 
-test("allowImplicitBroadContainerRoot permits descendant repos under HOME while blocking HOME and stateRoot", () => {
-    const home = makeTempDir("satori-workspace-policy-home-");
+test("allowImplicitBroadContainerRoot permits descendant Git repos under HOME or / while blocking non-Git paths, HOME, /, and stateRoot", () => {
+    const base = makeTempDir("satori-workspace-policy-container-");
+    const home = path.join(base, "home");
     const stateRoot = path.join(home, ".satori");
     const repo = path.join(home, "repo", "satori");
+    const nonRepoUnderHome = path.join(home, "Documents");
+    const nonRepoSibling = path.join(base, "plain-outside");
     fs.mkdirSync(path.join(stateRoot, "models"), { recursive: true });
-    fs.mkdirSync(repo, { recursive: true });
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "src", "app.ts"), "export const x = 1;\n");
+    fs.mkdirSync(nonRepoUnderHome, { recursive: true });
+    fs.writeFileSync(path.join(nonRepoUnderHome, "notes.txt"), "private\n");
+    fs.mkdirSync(nonRepoSibling, { recursive: true });
+    fs.writeFileSync(path.join(nonRepoSibling, "secret.txt"), "secret\n");
     try {
-        const policy = createSessionWorkspacePolicy({
+        const homePolicy = createSessionWorkspacePolicy({
             roots: [home],
             homeDirectory: home,
             stateRoot,
             allowImplicitBroadContainerRoot: true,
         });
-        assert.equal(policy.authorizeRoot(repo).canonicalPath, fs.realpathSync.native(repo));
-        expectCode(() => policy.authorizeRoot(home), "BROAD_ROOT_NOT_ALLOWED");
-        expectCode(() => policy.authorizePath(home), "BROAD_ROOT_NOT_ALLOWED");
-        expectCode(() => policy.authorizeRoot(stateRoot), "BROAD_ROOT_NOT_ALLOWED");
-        expectCode(() => policy.authorizePath(path.join(stateRoot, "models")), "BROAD_ROOT_NOT_ALLOWED");
+        const canonicalRepo = fs.realpathSync.native(repo);
+        const repoAuth = homePolicy.authorizeRoot(repo);
+        assert.equal(repoAuth.workspaceRoot, canonicalRepo);
+        assert.equal(repoAuth.canonicalPath, canonicalRepo);
+        assert.equal(repoAuth.relativePath, "");
+        const fileAuth = homePolicy.authorizePath(path.join(repo, "src", "app.ts"));
+        assert.equal(fileAuth.workspaceRoot, canonicalRepo);
+        assert.equal(fileAuth.relativePath, "src/app.ts");
+
+        // Non-Git directories under HOME are rejected.
+        expectCode(() => homePolicy.authorizeRoot(nonRepoUnderHome), "ROOT_NOT_AUTHORIZED");
+        expectCode(() => homePolicy.authorizePath(path.join(nonRepoUnderHome, "notes.txt")), "ROOT_NOT_AUTHORIZED");
+        expectCode(() => homePolicy.authorizeRoot(home), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => homePolicy.authorizePath(home), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => homePolicy.authorizeRoot(stateRoot), "BROAD_ROOT_NOT_ALLOWED");
+        expectCode(() => homePolicy.authorizePath(path.join(stateRoot, "models")), "BROAD_ROOT_NOT_ALLOWED");
+
+        // Even if HOME itself has a dotfiles `.git`, it cannot turn arbitrary HOME files into an authorized project.
+        fs.mkdirSync(path.join(home, ".git"), { recursive: true });
+        expectCode(() => homePolicy.authorizePath(path.join(nonRepoUnderHome, "notes.txt")), "ROOT_NOT_AUTHORIZED");
+
+        // Implicit "/" container must reject /etc, /etc/hosts, and unrelated non-Git paths.
+        const slashPolicy = createSessionWorkspacePolicy({
+            roots: ["/"],
+            homeDirectory: home,
+            stateRoot,
+            allowImplicitBroadContainerRoot: true,
+        });
+        expectCode(() => slashPolicy.authorizeRoot("/etc"), "ROOT_NOT_AUTHORIZED");
+        expectCode(() => slashPolicy.authorizePath("/etc/hosts"), "ROOT_NOT_AUTHORIZED");
+        expectCode(() => slashPolicy.authorizeRoot(nonRepoSibling), "ROOT_NOT_AUTHORIZED");
+        expectCode(() => slashPolicy.authorizePath(path.join(nonRepoSibling, "secret.txt")), "ROOT_NOT_AUTHORIZED");
+        assert.equal(slashPolicy.authorizeRoot(repo).workspaceRoot, canonicalRepo);
     } finally {
-        fs.rmSync(home, { recursive: true, force: true });
+        fs.rmSync(base, { recursive: true, force: true });
     }
 });

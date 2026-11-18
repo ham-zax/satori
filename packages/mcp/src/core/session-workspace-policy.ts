@@ -133,6 +133,13 @@ function normalizeRelativePath(value: string): string {
     return value.replace(/\\/g, "/");
 }
 
+function isGitProjectDirectory(candidateDir: string): boolean {
+    const dirStat = fs.lstatSync(candidateDir, { throwIfNoEntry: false });
+    if (!dirStat || !dirStat.isDirectory()) return false;
+    const dotGitStat = fs.lstatSync(path.join(candidateDir, ".git"), { throwIfNoEntry: false });
+    return dotGitStat !== undefined && (dotGitStat.isDirectory() || dotGitStat.isFile());
+}
+
 export function createSessionWorkspacePolicy(input: {
     roots: readonly string[];
     homeDirectory: string;
@@ -142,9 +149,9 @@ export function createSessionWorkspacePolicy(input: {
      * Set only when `roots` fell back to `[process.cwd()]` because no explicit
      * `SATORI_SESSION_ROOTS_JSON` was supplied (e.g. global IDE hosts such as
      * Cursor, VS Code, Windsurf, or Antigravity spawning MCP servers in `$HOME`
-     * or `/`). Allows `$HOME` or `/` to act as a container for descendant
-     * project paths while still rejecting `$HOME`, `/`, and `stateRoot` (plus
-     * all `stateRoot` descendants) as direct index/read targets.
+     * or `/`). Allows `$HOME` or `/` to act as a container only for descendant
+     * Git project paths while rejecting `$HOME`, `/`, `stateRoot`, and any path
+     * outside a Git repository.
      */
     allowImplicitBroadContainerRoot?: boolean;
 }): SessionWorkspacePolicy {
@@ -200,6 +207,32 @@ export function createSessionWorkspacePolicy(input: {
     const hasExplicitChildUnderStateRoot = roots.some(
         (root) => root !== canonicalStateRoot && isPathInsideRoot(root, canonicalStateRoot),
     );
+    const implicitContainerRoots = new Set(
+        !allowBroadRoots
+            ? roots.filter((root) => isAllowedImplicitContainer(root))
+            : [],
+    );
+
+    const resolveImplicitGitProjectRoot = (canonicalPath: string, containerRoot: string): string | null => {
+        let cursor = canonicalPath;
+        for (;;) {
+            if (
+                cursor === containerRoot
+                || cursor === path.sep
+                || cursor === canonicalHome
+                || isPathInsideRoot(cursor, canonicalStateRoot)
+                || !isPathInsideRoot(cursor, containerRoot)
+            ) {
+                return null;
+            }
+            if (isGitProjectDirectory(cursor)) {
+                return cursor;
+            }
+            const parent = path.dirname(cursor);
+            if (parent === cursor) return null;
+            cursor = parent;
+        }
+    };
 
     const authorize = (candidate: string): AuthorizedWorkspacePath => {
         if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
@@ -218,11 +251,23 @@ export function createSessionWorkspacePolicy(input: {
             );
         }
         for (const root of roots) {
+            if (implicitContainerRoots.has(root)) continue;
             if (isPathInsideRoot(canonicalPath, root)) {
                 return Object.freeze({
                     workspaceRoot: root,
                     canonicalPath,
                     relativePath: normalizeRelativePath(path.relative(root, canonicalPath)),
+                });
+            }
+        }
+        for (const containerRoot of implicitContainerRoots) {
+            if (!isPathInsideRoot(canonicalPath, containerRoot)) continue;
+            const projectRoot = resolveImplicitGitProjectRoot(canonicalPath, containerRoot);
+            if (projectRoot) {
+                return Object.freeze({
+                    workspaceRoot: projectRoot,
+                    canonicalPath,
+                    relativePath: normalizeRelativePath(path.relative(projectRoot, canonicalPath)),
                 });
             }
         }

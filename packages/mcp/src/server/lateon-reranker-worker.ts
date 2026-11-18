@@ -16,9 +16,72 @@ type Encoder = Readonly<{
     terminate: () => Promise<number>;
 }>;
 
+type QueryEncoding = Readonly<{
+    vectors: Float64Array;
+    dimensions: number;
+    tokenCount: number;
+}>;
+
+type DocumentScore = Readonly<{
+    relevanceScore: number;
+    tokenCount: number;
+}>;
+
+// Both caches live on the worker runtime, so a worker restart discards them and
+// a stale projection can never outlive the process that produced it.
+export const QUERY_CACHE_LIMIT = 64;
+export const SCORE_CACHE_LIMIT = 4096;
+
+// Insertion-ordered bounded cache. A hit re-inserts the key, so the first entry
+// is always the least recently used one.
+export class BoundedCache<Value> {
+    private readonly entries = new Map<string, Value>();
+    private readonly limit: number;
+
+    constructor(limit: number) {
+        if (!Number.isSafeInteger(limit) || limit < 1) {
+            throw new Error("LateOn cache limit must be a positive integer.");
+        }
+        this.limit = limit;
+    }
+
+    get size(): number {
+        return this.entries.size;
+    }
+
+    get(key: string): Value | undefined {
+        const value = this.entries.get(key);
+        if (value === undefined) return undefined;
+        this.entries.delete(key);
+        this.entries.set(key, value);
+        return value;
+    }
+
+    set(key: string, value: Value): void {
+        this.entries.delete(key);
+        this.entries.set(key, value);
+        while (this.entries.size > this.limit) {
+            const oldest = this.entries.keys().next();
+            if (oldest.done) return;
+            this.entries.delete(oldest.value);
+        }
+    }
+}
+
+// The query is length-prefixed before the NUL separator, so a query that
+// contains a NUL byte cannot shift the boundary: `("a\0b", "c")` and
+// `("a", "b\0c")` hash different inputs.
+export function createScoreCacheKey(query: string, documentText: string): string {
+    return crypto.createHash("sha256")
+        .update(`${query.length}:${query}\0${documentText}`)
+        .digest("hex");
+}
+
 type RuntimeState = Readonly<{
     profile: LateOnRuntimeProfile;
     encoders: readonly Encoder[];
+    queryCache: BoundedCache<QueryEncoding>;
+    scoreCache: BoundedCache<DocumentScore>;
 }>;
 
 let runtime: RuntimeState | null = null;
@@ -133,7 +196,12 @@ async function initialize(
         if (outcome.status === "rejected") throw outcome.reason;
         if (outcome.value.type !== "ready") throw new Error("LateOn encoder emitted an unexpected response.");
     }
-    runtime = { profile: request.profile, encoders };
+    runtime = {
+        profile: request.profile,
+        encoders,
+        queryCache: new BoundedCache(QUERY_CACHE_LIMIT),
+        scoreCache: new BoundedCache(SCORE_CACHE_LIMIT),
+    };
     send({
         type: "ready",
         modelRevision: request.profile.identity.revision,
@@ -142,44 +210,78 @@ async function initialize(
     });
 }
 
-async function encodeQuery(
-    state: RuntimeState,
-    query: string,
-): Promise<Extract<LateOnEncoderResponse, { type: "query" }>> {
+async function encodeQuery(state: RuntimeState, query: string): Promise<QueryEncoding> {
+    const cached = state.queryCache.get(query);
+    if (cached) return cached;
     const response = await state.encoders[0].request({ type: "encode_query", text: query });
     if (response.type !== "query") throw new Error("LateOn encoder emitted an unexpected response.");
-    return response;
+    const encoding: QueryEncoding = {
+        vectors: response.vectors,
+        dimensions: response.dimensions,
+        tokenCount: response.tokenCount,
+    };
+    state.queryCache.set(query, encoding);
+    return encoding;
 }
 
 async function scoreDocuments(
     state: RuntimeState,
+    query: string,
     documents: readonly string[],
-    queryVectors: readonly number[][],
+    queryEncoding: QueryEncoding,
 ): Promise<Readonly<{ scores: readonly number[]; tokenCount: number }>> {
-    // Longest documents first, so the last job to finish is a short one.
-    const order = documents
-        .map((_, index) => index)
-        .sort((left, right) => documents[right].length - documents[left].length || left - right);
     const scores = new Array<number>(documents.length);
+    const cacheKeys = documents.map((document) => createScoreCacheKey(query, document));
+    // Cached documents still contribute their token count, so the aggregate
+    // request budget is enforced exactly as it was before caching existed.
     let tokenCount = 0;
+    const pending: number[] = [];
+    for (let index = 0; index < documents.length; index++) {
+        const cached = state.scoreCache.get(cacheKeys[index]);
+        if (!cached) {
+            pending.push(index);
+            continue;
+        }
+        scores[index] = cached.relevanceScore;
+        tokenCount += cached.tokenCount;
+    }
+    // Every document was already scored for this query: no encoder work at all.
+    if (pending.length === 0) return { scores, tokenCount };
+    // Longest documents first, so the last job to finish is a short one.
+    pending.sort((left, right) => documents[right].length - documents[left].length || left - right);
+    // Each encoder scores against its own resident query projection, so the
+    // query is installed once per lane before any document is dispatched.
+    const installed = await Promise.all(state.encoders.map((encoder) => encoder.request({
+        type: "set_query",
+        vectors: queryEncoding.vectors,
+        dimensions: queryEncoding.dimensions,
+    })));
+    for (const response of installed) {
+        if (response.type !== "query_set") {
+            throw new Error("LateOn encoder emitted an unexpected response.");
+        }
+    }
     let next = 0;
     let failure: { error: unknown } | null = null;
     // Each encoder takes the next document when it finishes one. After a failure
     // no new jobs start, and every lane settles before this returns or throws.
     await Promise.all(state.encoders.map(async (encoder) => {
-        while (!failure && next < order.length) {
-            const index = order[next++];
+        while (!failure && next < pending.length) {
+            const index = pending[next++];
             try {
                 const response = await encoder.request({
                     type: "score_document",
                     text: documents[index],
-                    queryVectors,
                 });
                 if (response.type !== "scored") {
                     throw new Error("LateOn encoder emitted an unexpected response.");
                 }
                 scores[index] = response.relevanceScore;
                 tokenCount += response.tokenCount;
+                state.scoreCache.set(cacheKeys[index], {
+                    relevanceScore: response.relevanceScore,
+                    tokenCount: response.tokenCount,
+                });
             } catch (error) {
                 failure ??= { error };
             }
@@ -200,7 +302,12 @@ async function rerank(
         throw new Error("LateOn rerank request violates the candidate contract.");
     }
     const queryEncoding = await encodeQuery(runtime, request.query);
-    const documentScores = await scoreDocuments(runtime, request.documents, queryEncoding.vectors);
+    const documentScores = await scoreDocuments(
+        runtime,
+        request.query,
+        request.documents,
+        queryEncoding,
+    );
     if (
         queryEncoding.tokenCount + documentScores.tokenCount
         > runtime.profile.execution.aggregateRequestTokenLimit
@@ -223,30 +330,34 @@ async function rerank(
     });
 }
 
-process.on("message", (message: LateOnWorkerRequest) => {
-    operation = operation.then(async () => {
-        try {
-            if (message.type === "initialize") {
-                await initialize(message);
-            } else {
-                await rerank(message);
+// The worker is only ever forked with an IPC channel, so `process.send` is
+// present in production. Guarding it keeps the cache helpers importable.
+if (process.send) {
+    process.on("message", (message: LateOnWorkerRequest) => {
+        operation = operation.then(async () => {
+            try {
+                if (message.type === "initialize") {
+                    await initialize(message);
+                } else {
+                    await rerank(message);
+                }
+            } catch (error) {
+                send({
+                    type: "error",
+                    ...(message.type === "rerank" ? { requestId: message.requestId } : {}),
+                    message: error instanceof Error ? error.message : String(error),
+                });
             }
-        } catch (error) {
-            send({
-                type: "error",
-                ...(message.type === "rerank" ? { requestId: message.requestId } : {}),
-                message: error instanceof Error ? error.message : String(error),
-            });
-        }
+        });
     });
-});
 
-process.once("disconnect", () => {
-    void operation
-        .catch(() => undefined)
-        .then(() => {
-            shuttingDown = true;
-            return Promise.all(encoders.map((encoder) => encoder.terminate()));
-        })
-        .finally(() => process.exit(0));
-});
+    process.once("disconnect", () => {
+        void operation
+            .catch(() => undefined)
+            .then(() => {
+                shuttingDown = true;
+                return Promise.all(encoders.map((encoder) => encoder.terminate()));
+            })
+            .finally(() => process.exit(0));
+    });
+}

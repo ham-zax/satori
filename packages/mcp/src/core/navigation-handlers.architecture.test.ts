@@ -15,11 +15,11 @@ import { createSessionWorkspacePolicy } from "./session-workspace-policy.js";
 type NavigationHandlersHost = ConstructorParameters<typeof NavigationHandlers>[0];
 type PreparedNavigationState = Awaited<ReturnType<NavigationHandlersHost["prepareNavigationRead"]>>;
 
-function fakeLease(): PublicationLease {
+function fakeLease(id = "publication-1"): PublicationLease {
     return {
-        id: "publication-1",
+        id,
         publication: {
-            id: "publication-1",
+            id,
             canonicalRoot: "/repo",
         },
         release: () => undefined,
@@ -237,4 +237,110 @@ test("architecture overview limits ancestor Publication evidence to the authoriz
     assert.deepEqual(nestedPayload.packageArchitecture.packages.map((pkg: { packageRoot: string }) => pkg.packageRoot), ["allowed"]);
     assert.doesNotMatch(JSON.stringify(nestedPayload), /private|secret|allowed-extra|prefix-sibling|pnpm-workspace/);
     assert.equal(releases, 4);
+});
+
+/**
+ * A minimal but complete Publication navigation fixture: two owned files, one
+ * cross-file call, and a resolution-claim loader that counts its own calls so a
+ * test can prove the warm path skipped the full-disk shard scan.
+ */
+function architectureCacheFixture() {
+    const symbols = [
+        ["entry", "src/entry.ts"],
+        ["helper", "src/helper.ts"],
+    ].map(([id, file]) => ({
+        symbolKey: id,
+        symbolInstanceId: id,
+        language: "typescript",
+        kind: "function",
+        name: id,
+        label: `function ${id}()`,
+        file,
+        span: { startLine: 1, endLine: 3 },
+    } as SymbolRecord));
+    const relationships = [{
+        type: "CALLS",
+        sourceInstanceId: "entry",
+        targetInstanceId: "helper",
+        file: "src/entry.ts",
+        targetPath: "src/helper.ts",
+        confidence: "high",
+    } as RelationshipRecord];
+    const ownership: PublicationPackageOwnership = {
+        schemaVersion: "package_ownership_v2",
+        canonicalRoot: "/repo",
+        workspace: null,
+        cargoWorkspaces: [],
+        packages: [{
+            ecosystem: "node",
+            root: "src",
+            manifestPath: "src/package.json",
+            name: "src",
+            workspaceMember: false,
+        }],
+        files: symbols.map((symbol) => ({ path: symbol.file, packageRoot: "src" })),
+        controlFiles: [],
+    };
+    let publicationId = "publication-1";
+    let manifestHash = "manifest-1";
+    let resolutionClaimLoads = 0;
+    const handler = new NavigationHandlers({
+        prepareNavigationRead: async () => readyState(),
+        acquirePublicationLease: () => fakeLease(publicationId),
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        getPublicationPackageOwnership: () => ownership,
+        loadPreparedNavigationManifest: async () => ({
+            status: "ok",
+            manifestHash,
+            registry: { manifest: { files: symbols.map((symbol) => ({ path: symbol.file })) }, symbols },
+        }),
+        loadPreparedNavigationCompatibility: async () => ({
+            relationships: { status: "ok", manifestHash: "relationships-1", records: relationships },
+        }),
+        loadPreparedNavigationResolutionClaims: async () => {
+            resolutionClaimLoads += 1;
+            return { status: "ok", claims: [] };
+        },
+        stringifyToolJson: JSON.stringify,
+    } as unknown as NavigationHandlersHost);
+    return {
+        handler,
+        resolutionClaimLoads: () => resolutionClaimLoads,
+        setPublicationId: (id: string) => { publicationId = id; },
+        setManifestHash: (hash: string) => { manifestHash = hash; },
+    };
+}
+
+test("architecture overview reuses the Publication-witnessed overview and skips the claim scan", async () => {
+    const fixture = architectureCacheFixture();
+    const first = await fixture.handler.handleArchitectureOverview({ path: "/repo", scope: "all", limit: 10 });
+    const second = await fixture.handler.handleArchitectureOverview({ path: "/repo", scope: "all", limit: 10 });
+
+    assert.equal(fixture.resolutionClaimLoads(), 1);
+    const firstPayload = JSON.parse(first.content[0]!.text);
+    assert.equal(firstPayload.status, "ok");
+    assert.equal(firstPayload.coverage.publishedFileCount, 2);
+    assert.deepEqual(JSON.parse(second.content[0]!.text), firstPayload);
+});
+
+test("architecture overview cache misses when the Publication or manifest witness changes", async () => {
+    const fixture = architectureCacheFixture();
+    const request = { path: "/repo", scope: "all", limit: 10 };
+    await fixture.handler.handleArchitectureOverview(request);
+    assert.equal(fixture.resolutionClaimLoads(), 1);
+
+    fixture.setPublicationId("publication-2");
+    await fixture.handler.handleArchitectureOverview(request);
+    assert.equal(fixture.resolutionClaimLoads(), 2);
+
+    fixture.setManifestHash("manifest-2");
+    await fixture.handler.handleArchitectureOverview(request);
+    assert.equal(fixture.resolutionClaimLoads(), 3);
+
+    // The original witness is still cached, so returning to it stays warm.
+    fixture.setPublicationId("publication-1");
+    fixture.setManifestHash("manifest-1");
+    await fixture.handler.handleArchitectureOverview(request);
+    assert.equal(fixture.resolutionClaimLoads(), 3);
 });

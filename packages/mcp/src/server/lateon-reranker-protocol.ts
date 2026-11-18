@@ -121,6 +121,11 @@ export type LateOnWorkerResponse =
 
 // Messages between the worker process and its encoder threads. Each encoder
 // thread owns one model session and runs one job at a time.
+//
+// Token projections travel as one flat Float64Array plus the stride between
+// token vectors, so a document never crosses the thread boundary as a boxed
+// array per token. `set_query` installs the query projection an encoder scores
+// against, which keeps the query out of every `score_document` message.
 export type LateOnEncoderRequest =
     | Readonly<{
         type: "initialize";
@@ -133,13 +138,23 @@ export type LateOnEncoderRequest =
         text: string;
     }>
     | Readonly<{
+        type: "set_query";
+        vectors: Float64Array;
+        dimensions: number;
+    }>
+    | Readonly<{
         type: "score_document";
         text: string;
-        queryVectors: readonly number[][];
     }>;
 
 export type LateOnEncoderResponse =
     | Readonly<{ type: "ready" }>
-    | Readonly<{ type: "query"; vectors: number[][]; tokenCount: number }>
+    | Readonly<{
+        type: "query";
+        vectors: Float64Array;
+        dimensions: number;
+        tokenCount: number;
+    }>
+    | Readonly<{ type: "query_set" }>
     | Readonly<{ type: "scored"; relevanceScore: number; tokenCount: number }>
     | Readonly<{ type: "error"; message: string }>;

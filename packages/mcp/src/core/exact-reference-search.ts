@@ -262,6 +262,11 @@ export async function findExactPublishedSourceReferences(input: {
                 }
             }
             inspectedFileCount += 1;
+            // The matcher only ever matches the literal identifier, so a file
+            // whose text does not contain it cannot contribute an occurrence.
+            // Skipping here avoids the line split and the Unicode regex scan
+            // while leaving inspectedFileCount and reasons unchanged.
+            if (!source.text.includes(identifier)) continue;
             const lines = source.text.split(/\r?\n/);
             for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
                 const lineText = lines[lineIndex] ?? "";

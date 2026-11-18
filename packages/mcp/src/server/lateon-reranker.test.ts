@@ -11,6 +11,13 @@ import {
     LateOnReranker,
     loadLateOnRuntimeProfile,
 } from "./lateon-reranker.js";
+import { encodeTokenVectors, maxSimScore } from "./lateon-reranker-encoder.js";
+import {
+    BoundedCache,
+    createScoreCacheKey,
+    QUERY_CACHE_LIMIT,
+    SCORE_CACHE_LIMIT,
+} from "./lateon-reranker-worker.js";
 import { resolveSearchRerankQuery } from "../core/search-rerank-query-routing.js";
 import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
 import { buildSearchRerankDocument } from "../core/search-rerank-document.js";
@@ -167,6 +174,138 @@ async function assertOperationalReason(
         error instanceof LateOnOperationalError && error.reason === reason
     ));
 }
+
+// The boxed `number[][]` implementation the flat Float64Array path replaced,
+// kept verbatim as the bit-identity reference.
+function referenceNormalizeVector(vector: readonly number[]): number[] {
+    let squaredNorm = 0;
+    for (const value of vector) squaredNorm += value * value;
+    const norm = Math.sqrt(squaredNorm);
+    if (!Number.isFinite(norm) || norm === 0) {
+        throw new Error("LateOn emitted a non-normalizable token vector.");
+    }
+    return vector.map((value) => value / norm);
+}
+
+function referenceMaxSimScore(
+    queryVectors: readonly number[][],
+    documentVectors: readonly number[][],
+): number {
+    if (queryVectors.length === 0 || documentVectors.length === 0) return 0;
+    let score = 0;
+    for (const queryVector of queryVectors) {
+        let maximum = Number.NEGATIVE_INFINITY;
+        for (const documentVector of documentVectors) {
+            let dotProduct = 0;
+            for (let dimension = 0; dimension < queryVector.length; dimension++) {
+                dotProduct += queryVector[dimension] * documentVector[dimension];
+            }
+            maximum = Math.max(maximum, dotProduct);
+        }
+        score += maximum;
+    }
+    return score;
+}
+
+// Deterministic float32 tensor data, so the comparison never depends on timing.
+function createDeterministicTensor(length: number, seed: number): Float32Array {
+    const data = new Float32Array(length);
+    let state = seed;
+    for (let index = 0; index < length; index++) {
+        state = (state * 48271) % 2147483647;
+        data[index] = Math.fround((state / 2147483647) * 2 - 1);
+    }
+    return data;
+}
+
+test("LateOn flat Float64Array projections reproduce the boxed number[][] scores bit for bit", () => {
+    const dimensions = 48;
+    const sequenceLength = 37;
+    const data = createDeterministicTensor(sequenceLength * dimensions, 7);
+    // Skip a few rows so kept-token compaction is part of the comparison.
+    const isKept = (tokenIndex: number): boolean => tokenIndex % 7 !== 3;
+    const flat = encodeTokenVectors(data, sequenceLength, dimensions, isKept);
+    const reference: number[][] = [];
+    for (let tokenIndex = 0; tokenIndex < sequenceLength; tokenIndex++) {
+        if (!isKept(tokenIndex)) continue;
+        const offset = tokenIndex * dimensions;
+        reference.push(referenceNormalizeVector(
+            Array.from(data.slice(offset, offset + dimensions)),
+        ));
+    }
+
+    assert.equal(flat.length, reference.length * dimensions);
+    for (let tokenIndex = 0; tokenIndex < reference.length; tokenIndex++) {
+        for (let dimension = 0; dimension < dimensions; dimension++) {
+            assert.strictEqual(
+                flat[tokenIndex * dimensions + dimension],
+                reference[tokenIndex][dimension],
+                `token ${tokenIndex} dimension ${dimension} must stay bit-identical`,
+            );
+        }
+    }
+
+    const queryLength = 11;
+    const queryData = createDeterministicTensor(queryLength * dimensions, 11);
+    const queryFlat = encodeTokenVectors(queryData, queryLength, dimensions, () => true);
+    const queryReference = Array.from({ length: queryLength }, (_, tokenIndex) => (
+        referenceNormalizeVector(Array.from(
+            queryData.slice(tokenIndex * dimensions, (tokenIndex + 1) * dimensions),
+        ))
+    ));
+    assert.strictEqual(
+        maxSimScore(queryFlat, dimensions, flat, dimensions),
+        referenceMaxSimScore(queryReference, reference),
+        "max-sim over flat projections must match the boxed reference exactly",
+    );
+    assert.strictEqual(maxSimScore(new Float64Array(0), dimensions, flat, dimensions), 0);
+    assert.strictEqual(maxSimScore(queryFlat, dimensions, new Float64Array(0), dimensions), 0);
+});
+
+test("LateOn flat projection rejects a non-normalizable token row", () => {
+    const data = new Float32Array(2 * 4);
+    data.set([1, 0, 0, 0], 0);
+    assert.throws(
+        () => encodeTokenVectors(data, 2, 4, () => true),
+        /non-normalizable token vector/,
+    );
+});
+
+test("LateOn rerank caches are bounded, LRU-ordered, and keyed on query plus document text", () => {
+    assert.equal(QUERY_CACHE_LIMIT, 64);
+    assert.equal(SCORE_CACHE_LIMIT, 4096);
+
+    const cache = new BoundedCache<number>(2);
+    cache.set("first", 1);
+    cache.set("second", 2);
+    assert.strictEqual(cache.get("first"), 1, "a hit must be served");
+    cache.set("third", 3);
+    assert.equal(cache.size, 2);
+    assert.strictEqual(cache.get("second"), undefined, "the least recently used entry is evicted");
+    assert.strictEqual(cache.get("first"), 1);
+    assert.strictEqual(cache.get("third"), 3);
+    assert.throws(() => new BoundedCache<number>(0), /positive integer/);
+
+    // A cached score keeps its token count, so the aggregate request budget is
+    // still charged for documents served from cache.
+    const scores = new BoundedCache<{ relevanceScore: number; tokenCount: number }>(4);
+    scores.set("key", { relevanceScore: 1.5, tokenCount: 9 });
+    assert.deepEqual(scores.get("key"), { relevanceScore: 1.5, tokenCount: 9 });
+
+    assert.equal(createScoreCacheKey("query", "document"), createScoreCacheKey("query", "document"));
+    assert.notEqual(createScoreCacheKey("query", "document"), createScoreCacheKey("other", "document"));
+    assert.notEqual(createScoreCacheKey("query", "document"), createScoreCacheKey("query", "other"));
+    assert.notEqual(
+        createScoreCacheKey("ab", "c"),
+        createScoreCacheKey("a", "bc"),
+        "the separator must keep concatenation boundaries distinct",
+    );
+    assert.notEqual(
+        createScoreCacheKey("a\0b", "c"),
+        createScoreCacheKey("a", "b\0c"),
+        "a NUL byte inside the query must not collide with the separator",
+    );
+});
 
 test("LateOn runtime profile loading defaults to the V6 D128 context profile and rejects any other profile id", () => {
     const defaultProfile = loadLateOnRuntimeProfile();
@@ -903,4 +1042,65 @@ test("LateOn encoder pools return the single-session ranking and scores exactly"
     assert.equal(serial.length, documents.length);
     assert.deepEqual(await rankWith(3, 1), serial);
     assert.deepEqual(await rankWith(4, 2), serial);
+});
+
+test("LateOn rerank serves repeated query and document pairs from cache without changing scores", {
+    skip: !realLateOnModelDirectory || !fs.existsSync(path.join(realLateOnModelDirectory, "model.onnx")),
+}, async (t) => {
+    const reranker = new LateOnReranker({
+        modelDirectory: realLateOnModelDirectory as string,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+    });
+    t.after(async () => reranker.close());
+    const semanticQuery = "where are effect cleanups run when a component unmounts";
+    const query = buildSearchRerankQuery({ semanticQuery, answerFocus: "implementation" });
+    const sources = [
+        "function commitHookEffectListUnmount(flags, finishedWork) {\n    const destroy = effect.destroy;\n    if (destroy !== undefined) safelyCallDestroy(finishedWork, destroy);\n}",
+        "export function useEffect(create, deps) {\n    return mountEffect(create, deps);\n}",
+        "test(\"runs cleanup on unmount\", () => {\n    root.unmount();\n    expect(log).toEqual([\"cleanup\"]);\n});",
+        "const NoFlags = 0;",
+    ];
+    const documents = sources.map((content, index) => buildSearchRerankDocument({
+        relativePath: `src/cache-${index}.js`,
+        language: "javascript",
+        candidateRole: index === 2 ? "test" : "implementation",
+        symbolKind: "function",
+        canonicalSymbolLabel: `cache_symbol_${index}`,
+        symbolSpan: { startLine: 1, endLine: content.split("\n").length },
+        content,
+        query: semanticQuery,
+    }).text);
+
+    const cold = await reranker.rerank(query, documents);
+    const warm = await reranker.rerank(query, documents);
+    assert.deepEqual(warm, cold, "a fully cached rerank must return the identical ranking and scores");
+
+    // A different query must not reuse the cached document scores.
+    const otherQuery = buildSearchRerankQuery({
+        semanticQuery: "how is scheduler lane bookkeeping reset after work finishes",
+        answerFocus: "implementation",
+    });
+    const requery = await reranker.rerank(otherQuery, documents);
+    assert.notDeepEqual(
+        requery.map((row) => row.relevanceScore),
+        cold.map((row) => row.relevanceScore),
+    );
+
+    // A different document text must not reuse the cached score for that slot.
+    const mutated = [...documents];
+    mutated[0] = buildSearchRerankDocument({
+        relativePath: "src/cache-0.js",
+        language: "javascript",
+        candidateRole: "implementation",
+        symbolKind: "function",
+        canonicalSymbolLabel: "cache_symbol_0",
+        symbolSpan: { startLine: 1, endLine: 1 },
+        content: "const NoFlags = 0;",
+        query: semanticQuery,
+    }).text;
+    const remutated = await reranker.rerank(query, mutated);
+    assert.notStrictEqual(
+        remutated.find((row) => row.index === 0)?.relevanceScore,
+        cold.find((row) => row.index === 0)?.relevanceScore,
+    );
 });

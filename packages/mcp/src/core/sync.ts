@@ -1401,12 +1401,14 @@ export class SyncManager {
             } finally {
                 if (this.activeSyncs.get(codebasePath) === syncPromise) {
                     this.activeSyncs.delete(codebasePath);
+                    this.onLifecycleActivityChanged?.();
                     this.bumpFreshnessEpoch(codebasePath);
                 }
             }
         });
 
         this.activeSyncs.set(codebasePath, syncPromise);
+        this.onLifecycleActivityChanged?.();
         const outcome = await syncPromise;
         const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
         const decision: FreshnessDecision = {
@@ -1527,6 +1529,7 @@ export class SyncManager {
                         executionRequest,
                     );
                     this.activeIgnoreReconciles.set(reconcileKey, promise);
+                    this.onLifecycleActivityChanged?.();
                     const decision = await promise;
                     const phase = decision.mode === "ignore_reload_failed"
                         ? "failed"
@@ -1552,7 +1555,9 @@ export class SyncManager {
                     }
                     throw new SyncOperationError(errorMessage(error), lastOperation, { cause: error });
                 } finally {
-                    this.activeIgnoreReconciles.delete(reconcileKey);
+                    if (this.activeIgnoreReconciles.delete(reconcileKey)) {
+                        this.onLifecycleActivityChanged?.();
+                    }
                 }
             });
         } catch (error) {
@@ -1621,17 +1626,17 @@ export class SyncManager {
             );
             this.mutationRuntime.assertCurrent(codebasePath);
 
-            // Self-healing delete rule: remove anything currently indexed that new matcher ignores.
+            // Report-only: newly ignored paths are removed inside
+            // `candidateCollectionName` by `recreateSynchronizerForCodebase` +
+            // `ensureFreshness` (`reindexByChange`) during atomic delta publication.
+            // Deleting them from the live published collection here would mutate the
+            // immutable live publication before the candidate fork, breaking snapshot
+            // isolation and the chunk-count proof.
             const toDelete = indexedPathsBeforeReload.filter((relativePath) => this.matcherIgnoresRelativePath(matcher, relativePath));
 
-            if (toDelete.length > 0) {
-                this.mutationRuntime.assertCurrent(codebasePath);
-                await this.context.deleteIndexedPathsByRelativePaths(codebasePath, toDelete);
-            }
-
-            // Deleting newly ignored payload invalidates ordinary live proof.
-            // Carry the pre-delete receipt so Core can revalidate that exact
-            // source generation after the mutation lease is held.
+            // `preparedPublication` carries the pre-reconcile publication into
+            // `ensureFreshness`, so Core validates and forks from that exact
+            // source generation once it holds the mutation lease.
             const syncDecision = await this.ensureFreshness(codebasePath, 0, {
                 skipIgnoreControlCheck: true,
                 preparedPublication,
@@ -1652,7 +1657,7 @@ export class SyncManager {
                 ageMs: lastSyncMs !== undefined ? Math.max(0, this.now() - lastSyncMs) : undefined,
                 stats: syncDecision.stats,
                 ignoreRulesVersion: version,
-                deletedFiles: toDelete.length,
+                deletedFiles: syncDecision.mode === 'synced' ? toDelete.length : 0,
                 addedFiles: syncDecision.stats?.added ?? 0,
                 pendingAdds: 0,
                 coalescedEdits: Math.max(1, coalescedEdits),
@@ -2056,7 +2061,9 @@ export class SyncManager {
     }
 
     public getActiveLifecycleOperationCount(): number {
-        return this.backgroundSyncFlight ? 1 : 0;
+        return (this.backgroundSyncFlight ? 1 : 0)
+            + this.activeSyncs.size
+            + this.activeIgnoreReconciles.size;
     }
 
     private canObserveRoot(codebasePath: string): boolean {

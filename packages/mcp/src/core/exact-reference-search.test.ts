@@ -338,6 +338,57 @@ test("Unicode identifier continuations do not create false exact references", as
     assert.equal(result.references[0]?.matchedText, "foo");
 });
 
+test("identifier fast path equals the full scan for files without the identifier", async () => {
+    // Both fixtures contribute zero occurrences from src/ignored/caller.ts:
+    // one omits the identifier entirely (fast path), the other contains it only
+    // inside a longer identifier (full scan). Identical output proves the fast
+    // path skips exactly the files the scan would have found nothing in.
+    const nav = registry();
+    const target = nav.symbolsByInstanceId.get("target")!;
+    const run = (text: string) => findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        scope: { includePaths: ["src/caller.ts", "src/ignored/caller.ts"] },
+        readPublishedSource: async (file) => ({
+            status: "ok" as const,
+            text: file === "src/ignored/caller.ts" ? text : sources.get(file)!,
+        }),
+    });
+
+    const fastPath = await run("export const unrelated = 1;\n");
+    const fullScan = await run("export const requestUnrelated = 1;\n");
+
+    assert.deepEqual(fastPath, fullScan);
+    assert.equal(fastPath.coverage.status, "complete");
+    assert.equal(fastPath.coverage.inspectedFileCount, 2);
+    assert.equal(fastPath.coverage.skippedFileCount, 0);
+    assert.equal(fastPath.coverage.matchedOccurrenceCount, 1);
+    assert.deepEqual(fastPath.coverage.reasons, []);
+    assert.deepEqual(fastPath.references.map((reference) => reference.file), ["src/caller.ts"]);
+});
+
+test("identifier fast path keeps source_changed coverage for edited files without the identifier", async () => {
+    const nav = withPublishedHashes(registry());
+    const target = nav.symbolsByInstanceId.get("target")!;
+    const run = (text: string) => findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        scope: { includePaths: ["src/ignored/caller.ts"] },
+        readPublishedSource: async () => ({ status: "ok" as const, text, sourceSha256: sha256(text) }),
+    });
+
+    const fastPath = await run("export const unrelated = 1;\n");
+    const fullScan = await run("export const requestUnrelated = 1;\n");
+
+    assert.deepEqual(fastPath, fullScan);
+    assert.equal(fastPath.coverage.status, "partial");
+    assert.equal(fastPath.coverage.inspectedFileCount, 1);
+    assert.equal(fastPath.coverage.skippedFileCount, 0);
+    assert.equal(fastPath.coverage.matchedOccurrenceCount, 0);
+    assert.deepEqual(fastPath.references, []);
+    assert.deepEqual(fastPath.coverage.reasons.map((reason) => reason.code), ["source_changed"]);
+});
+
 test("exact reference reads overlap but results keep path order", async () => {
     const nav = registry();
     const target = nav.symbolsByInstanceId.get("target")!;

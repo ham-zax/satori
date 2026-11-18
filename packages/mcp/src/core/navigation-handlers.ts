@@ -25,6 +25,7 @@ import {
 import {
     ArchitecturePackageOwnershipError,
     buildArchitectureOverview,
+    type ArchitectureOverviewResult,
     type ArchitectureOverviewScope,
 } from "./architecture-overview.js";
 import {
@@ -33,6 +34,7 @@ import {
 import {
     AuthorizedSourceReadError,
     readAuthorizedPublishedSource,
+    type AuthorizedSourceRead,
 } from "./published-source-reader.js";
 import {
     findExactPublishedSourceReferences,
@@ -493,7 +495,74 @@ function formatUnknownError(error: unknown): string {
     }
 }
 
+/**
+ * Bounded LRU read. A hit refreshes recency; a miss returns undefined.
+ * Map iteration order is insertion order, so the first key is the coldest.
+ */
+function readBoundedLru<T>(cache: Map<string, T>, key: string): T | undefined {
+    const value = cache.get(key);
+    if (value === undefined) return undefined;
+    cache.delete(key);
+    cache.set(key, value);
+    return value;
+}
+
+function writeBoundedLru<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number): void {
+    cache.delete(key);
+    cache.set(key, value);
+    while (cache.size > maxEntries) {
+        const coldest = cache.keys().next();
+        if (coldest.done) break;
+        cache.delete(coldest.value);
+    }
+}
+
+/** One digest per published file; a large repository still fits in a few MiB. */
+const SOURCE_DIGEST_CACHE_MAX_ENTRIES = 16_384;
+/**
+ * A stat observed this close to the moment its bytes are hashed cannot prove
+ * anything: a same-size in-place write inside the same filesystem timestamp
+ * tick leaves the witness identical while the content changed. Mirrors the
+ * racy-index rule in index-policy-input-observer.ts.
+ */
+const RACY_SOURCE_DIGEST_MARGIN_MS = 2_000;
+/** Overviews are large, so only the most recent distinct request scopes are kept. */
+const ARCHITECTURE_OVERVIEW_CACHE_MAX_ENTRIES = 16;
+
+/**
+ * Freeze a cached overview body and every nested array and object, so a later
+ * request that reads the entry back cannot mutate what another request sees.
+ */
+function deepFreezeArchitectureOverview<T>(value: T): T {
+    if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+    Object.freeze(value);
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+        deepFreezeArchitectureOverview(nested);
+    }
+    return value;
+}
+
 export class NavigationHandlers {
+    /**
+     * SHA-256 digests of authorized source bytes, witnessed by the descriptor
+     * stat that produced them. find_references re-reads every eligible file on
+     * each page, so an unchanged file must not be re-hashed. Entries are keyed
+     * by codebase root plus repo-relative path, and only aged stats are stored.
+     */
+    private readonly sourceDigestCache = new Map<string, { signature: string; sha256: string }>();
+    /**
+     * Immutable architecture overviews, witnessed by the Publication identity,
+     * the symbol-registry and relationship-navigation manifest hashes, the
+     * package-ownership root, and the request scope. A warm call therefore
+     * skips the full-disk resolution-claim scan and the aggregation.
+     *
+     * Lease admission plus the immutable Publication navigation guarantee is
+     * what makes a hit sound: an admitted publication's navigation inputs
+     * cannot change, so a cached body still claims presence for exactly the
+     * files that publication published. Bodies are deep-frozen on write.
+     */
+    private readonly architectureOverviewCache = new Map<string, ArchitectureOverviewResult>();
+
     constructor(private readonly host: NavigationHandlersHost) {}
 
     public async handleTracePath(args: ToolArgs): Promise<ToolTextResponse> {
@@ -747,6 +816,36 @@ export class NavigationHandlers {
                 };
             }
 
+            const requestedSubdirectory = resolveRequestedSearchSubdirectory({
+                indexedRoot: leasedRootState.root.path,
+                requestedPath: requestedRoot,
+            });
+            const effectiveSubtree = subtree ?? requestedSubdirectory?.relativePrefix;
+            // The overview is a pure function of the immutable Publication
+            // navigation inputs and the request scope, so the witness is the
+            // Publication identity plus every manifest hash it was built from.
+            // Missing or incompatible navigation already failed closed above.
+            const overviewCacheKey = JSON.stringify({
+                publicationId: lease.id,
+                manifestHash: manifest.manifestHash,
+                relationshipManifestHash: compatibility.relationships.manifestHash,
+                ownershipCanonicalRoot: packageOwnership.canonicalRoot,
+                requestedRoot,
+                scope,
+                limit,
+                effectiveSubtree: effectiveSubtree ?? null,
+                excludePaths: excludePaths ? [...excludePaths].sort() : [],
+            });
+            const cachedOverview = readBoundedLru(this.architectureOverviewCache, overviewCacheKey);
+            if (cachedOverview) {
+                return this.architectureOverviewResponse({
+                    overview: cachedOverview,
+                    requestedRoot,
+                    publicationId: lease.id,
+                    freshnessDecision: leasedRootState.freshnessDecision,
+                });
+            }
+
             const resolutionClaims = await this.host.loadPreparedNavigationResolutionClaims(
                 leasedRootState,
                 manifest.manifestHash,
@@ -767,10 +866,6 @@ export class NavigationHandlers {
                 };
             }
 
-            const requestedSubdirectory = resolveRequestedSearchSubdirectory({
-                indexedRoot: leasedRootState.root.path,
-                requestedPath: requestedRoot,
-            });
             let architectureManifest = manifest.registry.manifest;
             let architectureSymbols = manifest.registry.symbols;
             let architectureRelationships = compatibility.relationships.records;
@@ -805,7 +900,6 @@ export class NavigationHandlers {
                     files,
                 };
             }
-            const effectiveSubtree = subtree ?? requestedSubdirectory?.relativePrefix;
             let overview;
             try {
                 overview = buildArchitectureOverview({
@@ -833,25 +927,18 @@ export class NavigationHandlers {
                     }],
                 };
             }
-            const freshnessDecision = leasedRootState.freshnessDecision;
-            const warnings = freshnessDecision
-                ? buildFreshnessWarningCodes(freshnessDecision)
-                : [];
-            return {
-                content: [{
-                    type: "text",
-                    text: this.host.stringifyToolJson({
-                        status: "ok",
-                        path: requestedRoot,
-                        publicationId: lease.id,
-                        ...overview,
-                        ...(freshnessDecision?.sourceFreshness
-                            ? { sourceFreshness: freshnessDecision.sourceFreshness }
-                            : {}),
-                        ...(warnings.length > 0 ? { warnings } : {}),
-                    }),
-                }],
-            };
+            writeBoundedLru(
+                this.architectureOverviewCache,
+                overviewCacheKey,
+                deepFreezeArchitectureOverview(overview),
+                ARCHITECTURE_OVERVIEW_CACHE_MAX_ENTRIES,
+            );
+            return this.architectureOverviewResponse({
+                overview,
+                requestedRoot,
+                publicationId: lease.id,
+                freshnessDecision: leasedRootState.freshnessDecision,
+            });
         });
 
         return outcome.status === "stale"
@@ -1017,6 +1104,13 @@ export class NavigationHandlers {
             const publishedRelativePaths = new Set(
                 manifest.registry.manifest.files.map((file) => file.path),
             );
+            // The matcher only matches the literal identifier, so bytes without
+            // it cannot contribute an occurrence. Searching the raw bytes keeps
+            // the UTF-8 decode off the path for every non-matching file.
+            const targetIdentifier = exactSymbols[0]!.name.trim();
+            const identifierBytes = targetIdentifier.length > 0
+                ? Buffer.from(targetIdentifier, "utf8")
+                : null;
             const readPublishedSource = async (relativeFilePath: string): Promise<ExactReferenceSourceRead> => {
                 signal?.throwIfAborted();
                 try {
@@ -1028,10 +1122,21 @@ export class NavigationHandlers {
                         maxBytes: this.host.readFileMaxBytes,
                     });
                     signal?.throwIfAborted();
+                    const sourceSha256 = this.sourceDigestFor(
+                        leasedRootState.root.path,
+                        relativeFilePath,
+                        sourceRead,
+                    );
+                    if (identifierBytes && sourceRead.bytes.indexOf(identifierBytes) === -1) {
+                        // An empty text still carries the digest, so the caller
+                        // validates the Publication hash and counts the file as
+                        // inspected exactly as it does for a scanned file.
+                        return { status: "ok", text: "", sourceSha256 };
+                    }
                     return {
                         status: "ok",
                         text: sourceRead.bytes.toString("utf8"),
-                        sourceSha256: crypto.createHash("sha256").update(sourceRead.bytes).digest("hex"),
+                        sourceSha256,
                     };
                 } catch (error) {
                     if (error instanceof AuthorizedSourceReadError) {
@@ -2217,6 +2322,82 @@ export class NavigationHandlers {
                 isError: true,
             };
         }
+    }
+
+    /**
+     * SHA-256 of authorized source bytes, reused while the descriptor stat
+     * witness proves the same content. find_references re-reads every eligible
+     * file on each page, so re-hashing unchanged bytes is pure cost.
+     *
+     * The cache key is the codebase root plus the repo-relative path: the same
+     * relative path under two roots is two different files, and a filesystem
+     * with unstable inodes must never let one root's digest answer for another.
+     */
+    private sourceDigestFor(
+        codebaseRoot: string,
+        relativeFilePath: string,
+        sourceRead: AuthorizedSourceRead,
+        nowMs: number = Date.now(),
+    ): string {
+        // A digest may only be reused when the bytes it was computed from are
+        // provably the same: an exact length plus the same dev/ino/size/mtime/
+        // ctime witness the reader already trusts to prove a file did not change.
+        const witnessed = sourceRead.bytes.length === sourceRead.observedStat.size;
+        // A stat observed within the racy margin of the moment it is hashed
+        // proves nothing, because a same-size in-place write inside the same
+        // filesystem timestamp tick would leave the witness identical while the
+        // bytes changed. Such a digest is computed but never stored, and a
+        // stored digest is only trusted while its stat is aged.
+        const aged = nowMs - Math.max(sourceRead.observedStat.mtimeMs, sourceRead.observedStat.ctimeMs)
+            > RACY_SOURCE_DIGEST_MARGIN_MS;
+        const cacheable = witnessed && aged;
+        const cacheKey = `${codebaseRoot}\0${relativeFilePath}`;
+        const signature = `${sourceRead.observedStat.dev}:${sourceRead.observedStat.ino}:${sourceRead.observedStat.size}:${sourceRead.observedStat.mtimeMs}:${sourceRead.observedStat.ctimeMs}`;
+        if (cacheable) {
+            const cached = readBoundedLru(this.sourceDigestCache, cacheKey);
+            if (cached?.signature === signature) return cached.sha256;
+        }
+        const sha256 = crypto.createHash("sha256").update(sourceRead.bytes).digest("hex");
+        if (cacheable) {
+            writeBoundedLru(
+                this.sourceDigestCache,
+                cacheKey,
+                { signature, sha256 },
+                SOURCE_DIGEST_CACHE_MAX_ENTRIES,
+            );
+        }
+        return sha256;
+    }
+
+    /**
+     * Build the architecture_overview success envelope. Freshness and warnings
+     * are request-time facts, so they are attached here rather than cached with
+     * the immutable overview body.
+     */
+    private architectureOverviewResponse(input: {
+        overview: ArchitectureOverviewResult;
+        requestedRoot: string;
+        publicationId: string;
+        freshnessDecision: FreshnessDecision | undefined;
+    }): ToolTextResponse {
+        const warnings = input.freshnessDecision
+            ? buildFreshnessWarningCodes(input.freshnessDecision)
+            : [];
+        return {
+            content: [{
+                type: "text",
+                text: this.host.stringifyToolJson({
+                    status: "ok",
+                    path: input.requestedRoot,
+                    publicationId: input.publicationId,
+                    ...input.overview,
+                    ...(input.freshnessDecision?.sourceFreshness
+                        ? { sourceFreshness: input.freshnessDecision.sourceFreshness }
+                        : {}),
+                    ...(warnings.length > 0 ? { warnings } : {}),
+                }),
+            }],
+        };
     }
 
     /**

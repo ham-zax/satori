@@ -31,6 +31,7 @@ async function createFixture(t: TestContext, options: {
     prepare?: () => Promise<void>;
     execute?: (root: string, call: number) => Promise<{ mode: string; errorMessage?: string }>;
     mutationRuntime?: RootMutationRuntime;
+    onLifecycleActivityChanged?: () => void;
 } = {}) {
     t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
     const roots = options.roots ?? ["/repo"];
@@ -52,6 +53,7 @@ async function createFixture(t: TestContext, options: {
     };
     const manager = new SyncManager(context as never, {
         watchEnabled: options.watchEnabled !== false,
+        onLifecycleActivityChanged: options.onLifecycleActivityChanged,
         mutationRuntime: options.mutationRuntime ?? {
             assertCurrent: () => {},
             runOutsideMutationScope: <T>(work: () => T) => work(),
@@ -62,6 +64,7 @@ async function createFixture(t: TestContext, options: {
     const internal = manager as unknown as {
         backgroundSyncFlight: Promise<void> | null;
         computeIgnoreControlSignature(root: string): Promise<string>;
+        reconcileIgnoreRulesChange(...args: unknown[]): Promise<unknown>;
         runIgnoreReconcile(...args: unknown[]): Promise<unknown>;
         syncCodebase(root: string): Promise<unknown>;
     };
@@ -220,7 +223,11 @@ test("an automatic pass coalesces with an active writer and retains its later ev
     change();
     await advance(2_000);
     assert.equal(calls.length, 1);
-    assert.equal(manager.getActiveLifecycleOperationCount(), 1);
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        2,
+        "the held automatic pass and the explicit writer are both lifecycle operations",
+    );
     completion.resolve();
     await explicit;
     await settle();
@@ -244,7 +251,11 @@ test("read freshness returns the completed publication while an automatic writer
     await settle();
     assert.equal(readFinished, true, "read assessment never joins the automatic writer");
     assert.equal((await read).mode, "read_only");
-    assert.equal(manager.getActiveLifecycleOperationCount(), 1);
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        2,
+        "the held automatic pass and its in-flight sync are both lifecycle operations",
+    );
     assert.equal(calls.length, 1);
     completion.resolve();
     await settle();
@@ -510,4 +521,194 @@ test("stop drains an ignore reconcile that is still in flight after its root is 
     await reconcile;
     await stopping;
     assert.equal(stopped, true);
+});
+
+async function createIgnoreReconcileFixture() {
+    const publication = {
+        publicationId: "publication-/repo",
+        publication: { status: "complete", canonicalRoot: "/repo", policy: {} },
+    };
+    const deleted: string[][] = [];
+    const recreated: string[] = [];
+    let activePatterns: string[] = [];
+    const context = {
+        listCurrentPublications: () => [publication],
+        getCurrentPublication: () => publication,
+        getPublicationSourceCheckpoint: () => ({
+            fileHashes: [["src/keep.ts", "hash-keep"], ["ignored/file.ts", "hash-ignored"]],
+        }),
+        getActiveIgnorePatterns: () => activePatterns,
+        observeIndexPolicyForIncrementalReconciliation: async () => ({ candidate: "policy" }),
+        activateObservedIndexPolicyForIncrementalReconciliation: async () => true,
+        recreateSynchronizerForCodebase: async (root: string) => { recreated.push(root); },
+        deleteIndexedPathsByRelativePaths: async (_root: string, paths: string[]) => {
+            deleted.push([...paths]);
+        },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: false,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            runOutsideMutationScope: <T>(work: () => T) => work(),
+            getCurrentOperation: () => undefined,
+            getActiveMutation: () => undefined,
+        } as never,
+    });
+    const internal = manager as unknown as {
+        getIgnoreMatcherForCodebase(root: string): unknown;
+        ensureFreshness(root: string, thresholdMs: number, options?: unknown): Promise<unknown>;
+        reconcileIgnoreRulesChange(root: string): Promise<{
+            mode: string;
+            deletedFiles?: number;
+            newlyIgnoredFiles?: number;
+            addedFiles?: number;
+            stats?: { added: number; removed: number; modified: number };
+        }>;
+    };
+    // Seed the previous matcher before the ignore rules change so the
+    // newly-ignored count comes from a real before/after comparison.
+    internal.getIgnoreMatcherForCodebase("/repo");
+    activePatterns = ["ignored/**"];
+    return { internal, publication, deleted, recreated };
+}
+
+test("ignore reconcile never deletes from the live publication when the delta sync fails", async (t) => {
+    const { internal, publication, deleted, recreated } = await createIgnoreReconcileFixture();
+    const liveBefore = structuredClone(publication);
+    t.mock.method(internal, "ensureFreshness", async () => {
+        throw new Error("injected delta sync failure");
+    });
+
+    const decision = await internal.reconcileIgnoreRulesChange("/repo");
+
+    assert.equal(decision.mode, "ignore_reload_failed");
+    assert.deepEqual(
+        deleted,
+        [],
+        "newly ignored paths are never deleted from the live published collection",
+    );
+    assert.deepEqual(
+        recreated,
+        ["/repo"],
+        "the candidate synchronizer is still recreated for the atomic delta",
+    );
+    assert.deepEqual(
+        publication,
+        liveBefore,
+        "the live published state stays untouched when the delta sync fails",
+    );
+});
+
+test("ignore reconcile reports newly ignored paths without mutating the live publication", async (t) => {
+    const { internal, publication, deleted, recreated } = await createIgnoreReconcileFixture();
+    const liveBefore = structuredClone(publication);
+    t.mock.method(internal, "ensureFreshness", async () => ({
+        mode: "synced",
+        lastSyncAt: new Date(1_000_000).toISOString(),
+        stats: { added: 1, removed: 1, modified: 0 },
+    }));
+
+    const decision = await internal.reconcileIgnoreRulesChange("/repo");
+
+    assert.equal(decision.mode, "reconciled_ignore_change");
+    assert.equal(decision.deletedFiles, 1, "the newly ignored indexed path is reported as deleted");
+    assert.equal(decision.newlyIgnoredFiles, 1);
+    assert.equal(decision.addedFiles, 1);
+    assert.equal(decision.stats?.removed, 1);
+    assert.deepEqual(
+        deleted,
+        [],
+        "the delta sync removes the path inside the candidate collection instead",
+    );
+    assert.deepEqual(recreated, ["/repo"]);
+    assert.deepEqual(publication, liveBefore, "the live published state stays untouched");
+});
+
+test("ignore reconcile reports no deletions when the delta sync does not complete", async (t) => {
+    const { internal, publication, deleted, recreated } = await createIgnoreReconcileFixture();
+    const liveBefore = structuredClone(publication);
+    t.mock.method(internal, "ensureFreshness", async () => ({
+        mode: "skipped_requires_reindex",
+        lastSyncAt: new Date(1_000_000).toISOString(),
+        stats: { added: 0, removed: 0, modified: 0 },
+    }));
+
+    const decision = await internal.reconcileIgnoreRulesChange("/repo");
+
+    assert.equal(decision.mode, "reconciled_ignore_change");
+    assert.equal(
+        decision.deletedFiles,
+        0,
+        "a skipped delta sync must not claim the newly ignored paths were deleted",
+    );
+    assert.equal(decision.newlyIgnoredFiles, 1);
+    assert.deepEqual(deleted, []);
+    assert.deepEqual(recreated, ["/repo"]);
+    assert.deepEqual(publication, liveBefore, "the live published state stays untouched");
+});
+
+test("lifecycle activity counts in-flight syncs and ignore reconciles and notifies on each change", async (t) => {
+    const syncGate = deferred();
+    const reconcileGate = deferred();
+    let notifications = 0;
+    const { manager, internal } = await createFixture(t, {
+        execute: async () => { await syncGate.promise; return { mode: "synced" }; },
+        mutationRuntime: {
+            assertCurrent: () => {},
+            isCurrent: () => true,
+            run: async <T>(_root: string, _action: string, work: () => Promise<T>) => await work(),
+            runOutsideMutationScope: <T>(work: () => T) => work(),
+            getCurrentOperation: () => undefined,
+            getActiveMutation: () => undefined,
+            updateCurrentOperation: () => ({}),
+        } as never,
+        onLifecycleActivityChanged: () => { notifications += 1; },
+    });
+    manager.stopBackgroundSync();
+    await settle();
+    assert.equal(manager.getActiveLifecycleOperationCount(), 0);
+
+    const beforeSync = notifications;
+    const sync = manager.ensureFreshness("/repo", 0, { skipIgnoreControlCheck: true });
+    await settle();
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        1,
+        "an in-flight sync counts as one lifecycle operation",
+    );
+    assert.ok(notifications > beforeSync, "starting a sync notifies activity listeners");
+    const duringSync = notifications;
+    syncGate.resolve();
+    await sync;
+    await settle();
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        0,
+        "a finished sync releases its lifecycle operation",
+    );
+    assert.ok(notifications > duringSync, "finishing a sync notifies activity listeners");
+
+    t.mock.method(internal, "reconcileIgnoreRulesChange", async () => {
+        await reconcileGate.promise;
+        return { mode: "reconciled_ignore_change" };
+    });
+    const beforeReconcile = notifications;
+    const reconcile = internal.runIgnoreReconcile("/repo");
+    await settle();
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        1,
+        "an in-flight ignore reconcile counts as one lifecycle operation",
+    );
+    assert.ok(notifications > beforeReconcile, "starting an ignore reconcile notifies activity listeners");
+    const duringReconcile = notifications;
+    reconcileGate.resolve();
+    await reconcile;
+    await settle();
+    assert.equal(
+        manager.getActiveLifecycleOperationCount(),
+        0,
+        "a finished ignore reconcile releases its lifecycle operation",
+    );
+    assert.ok(notifications > duringReconcile, "finishing an ignore reconcile notifies activity listeners");
 });

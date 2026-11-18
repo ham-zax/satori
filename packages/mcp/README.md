@@ -13,8 +13,8 @@ npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor
 ```
 
-`install` auto-detects Codex, Claude Code, and OpenCode; Antigravity (`agy`) is
-opt-in, and `--client all` configures every supported client. A persistent `satori` command is optional:
+`install` auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and
+Windsurf; Antigravity (`agy`) is opt-in, and `--client all` configures every supported client. A persistent `satori` command is optional:
 `npm install -g @satori-code/cli@latest`.
 
 The qualified default offline path supports Linux x64 and Linux ARM64 with glibc, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
@@ -73,12 +73,12 @@ context for implementation searches, call context for reference searches, and
 definition context for exact lookups. Large symbols still recommend the matched
 source span first. Continuation pages preserve the same recommendation policy.
 
-On managed offline runtimes, a tracked rebuild-safe incompatibility automatically starts or joins one background reindex and returns deterministic `not_ready` / `indexing` state for retry. Explicit reindex remains the operator recovery override for connected/remote runtimes, unsafe states, or a failed automatic attempt. `clear` remains explicit.
+Within Satori's automatic eligible-source byte budgets (and `50,000`-file OOM fuse), a tracked rebuild-safe incompatibility automatically starts or joins one background reindex (`<= 150 MiB` on offline runtimes, `<= 8 MiB` / `~2M` tokens on connected/Voyage runtimes) and returns deterministic `not_ready` / `indexing` (`indexing.mode="auto_indexing"`) state for retry. Explicit reindex remains the operator recovery override above those budgets, for unsafe states, or after a failed automatic attempt. `clear` remains explicit.
 
-To opt into first-time workspace indexing on managed offline runtimes, set
-`SATORI_AUTO_INDEX_WORKSPACE=true` in the MCP server environment. After the
-client finishes its MCP handshake, Satori indexes the authorized session roots
-(`SATORI_SESSION_ROOTS_JSON`, or the launcher's working directory) one at a time.
+First-time workspace indexing is enabled by default (`SATORI_AUTO_INDEX_WORKSPACE=false` opts out) and gated by eligible source bytes rather than raw file counts:
+- **Offline runtimes**: auto-indexes `<= 20 MiB` Git workspaces after MCP session handshake, and `<= 150 MiB` Git workspaces (up to `50,000` eligible files) on the first Satori search/navigation tool call.
+- **Connected / paid-capable API runtimes**: never auto-indexes on idle session open; auto-indexes `<= 8 MiB` (`~2M` tokens) Git workspaces on the first Satori tool call, and asks before indexing larger repositories.
+
 Existing publications are preserved. Indexing uses the repository's existing
 index policy and the normal background operation limits; inspect progress with
 `manage_index status`. Workspace creates and compatibility reindexes are
@@ -86,8 +86,7 @@ single-flight. Transient provider/network/worker failures may retry in the same
 runtime after bounded exponential backoff, while deterministic configuration or
 compatibility failures, resource limits, and cancellation stay suppressed until
 relevant state changes or a successful manual create/reindex supersedes them.
-The option defaults to off and has no effect on connected runtimes. File-change
-observation remains controlled by `MCP_ENABLE_WATCHER`.
+File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
 
 Full indexing and sync choose one memory resource plan from cgroup memory
 headroom (v2 ancestors or the v1 memory controller), Linux `MemAvailable`, or

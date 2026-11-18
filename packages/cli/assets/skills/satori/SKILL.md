@@ -54,19 +54,28 @@ those files directly before relying on missing symbols or callers.
 
 ## Index lifecycle
 
-- In Claude Code, a `[satori]` session-start note reports whether the
-  session directory is indexed. Treat it as a hint and confirm with `status`.
-- Unknown readiness: `list_codebases`, then `manage_index` with
-  `action="status"`.
-- `not_indexed`: report it and get the user's approval before
-  `manage_index action="create"`; a full index build is expensive.
-- `not_ready` while indexing: wait for the operation to finish; do not start
-  another mutation.
+- **Byte-budgeted background auto-indexing (`<= 50,000`-file OOM fuse):**
+  - **Offline ($0 local cost):** Git workspaces `<= 20 MiB` of eligible source
+    auto-index silently on session start; repositories up to `<= 150 MiB` defer
+    on idle open and auto-index on first Satori tool call; incompatible
+    Publications rebuild automatically in the background.
+  - **Connected / Voyage API:** Defers on idle open; repositories `<= 8 MiB`
+    (`~2M` tokens, `< 1%` of the 200M free tier) auto-index on first Satori tool
+    call.
+  - Never ask the user whether to index or migrate within these automatic
+    budgets.
+- **`not_ready` / `auto_indexing`:** Check `indexing.mode` (`"auto_indexing"` or
+  `"indexing"`). Keep working immediately with native read/grep tools (or wait
+  briefly on small repos and retry after `retryAfterMs`). Do not start a
+  duplicate mutation.
+- **When to ask the user (`not_indexed` / `requires_reindex`):** Satori only
+  skips automatic indexing when a repository exceeds the **paid API budget
+  (`> 8 MiB` on Voyage)** or **massive monorepo limits (`> 150 MiB` or
+  `> 50,000` files)**. In those cases, use native grep/read tools for quick
+  tasks and ask the user once before running `manage_index` `action="create"` or
+  `action="reindex"` (or suggest `.satoriignore` / `--runtime offline`).
 - Stale or noisy results: update `.satoriignore` if needed, then
   `manage_index action="sync"`.
-- `requires_reindex`: stop relying on search or navigation, report the reason,
-  and get approval before `action="reindex"`. Managed offline runtimes may
-  already be rebuilding in the background; retry after the returned hint.
 - Never run `action="clear"` unless the user explicitly asks for a reset.
 
 ## Warnings

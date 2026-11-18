@@ -2,7 +2,7 @@
 
 Installer, diagnostics, and command-line access for [Satori](https://github.com/ham-zax/satori).
 
-The CLI installs one managed MCP runtime, writes a stable launcher under `~/.satori/`, configures Codex, Claude Code, OpenCode, Antigravity (`agy`), or all of them, and verifies the installed protocol path. The default qualified offline install gives those agents natural-language repository search using local Potion embeddings, BM25, LateOn reranking, and LanceDB without requiring a model API key after installation.
+The CLI installs one managed MCP runtime, writes a stable launcher under `~/.satori/`, configures Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, Antigravity (`agy`), or all of them, and verifies the installed protocol path. The default qualified offline install gives those agents natural-language repository search using local Potion embeddings, BM25, LateOn reranking, and LanceDB without requiring a model API key after installation.
 
 ## Quick Start
 
@@ -21,13 +21,19 @@ satori install
 satori doctor
 ```
 
-`install` auto-detects supported Codex, Claude Code, and OpenCode clients from
-their documented local markers or CLI executables. `--client auto` is the
-explicit equivalent. Antigravity (`agy`) is opt-in: configure it with
-`--client agy`, or use `--client all` to configure every supported client.
-If no supported client is detected, Satori stops before runtime installation and
-shows explicit client commands. `satori uninstall` defaults to all supported
-clients; use `--client auto` to limit cleanup to currently detected clients.
+`install` auto-detects supported Codex, Claude Code, OpenCode, Cursor, VS Code,
+and Windsurf clients from their documented local markers or CLI executables.
+`--client auto` is the explicit equivalent. Antigravity (`agy`) is opt-in:
+configure it with `--client agy`, or use `--client all` to configure every
+supported client. If no supported client is detected, Satori stops before
+runtime installation and shows explicit client commands. `satori uninstall`
+defaults to all supported clients; use `--client auto` to limit cleanup to
+currently detected clients.
+
+Git workspaces are indexed automatically in the background when your agent
+starts (within Satori's byte budgets). Pass `--index` inside a Git repository
+to index it immediately during install, or `--no-index` to leave indexing to
+agent startup.
 
 Codex entries pointing to this home's `~/.satori/bin/satori-mcp.js` are updated
 automatically, including after Codex rewrites its config. Satori changes its
@@ -38,7 +44,7 @@ custom server named `satori` stops installation before runtime downloads.
 The package installs the `satori` command. Run `satori` without arguments for
 human-readable help.
 
-For the default offline Potion + LanceDB runtime on Linux x64/WSL2 and Linux ARM64 with glibc, LateOn D32
+For the default offline Potion + LanceDB runtime on Linux x64/WSL2 and Linux ARM64 with glibc, LateOn D128 (`LateOn-Code-edge`)
 reranks the bounded query-time candidate set. The installer downloads its pinned Apache-2.0 model closure once
 into `~/.satori/models/`, verifies every artifact, and reuses it across MCP
 upgrades. `--reranker none` is the explicit opt-out: it keeps the selected
@@ -82,11 +88,12 @@ allowance, not measured steady consumption.
 ## Commands
 
 ```text
-install [--client auto|all|codex|claude|opencode|agy]
-        [--runtime offline|voyage] # defaults to offline Potion + LateOn D32
+install [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy]
+        [--runtime offline|voyage] # defaults to offline Potion + LateOn D128
         [--vector-store lancedb|milvus]
         [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify]
         [--profile default|minimal|all-text]
+        [--skill|--no-skill] [--index|--no-index]
         [--dry-run]
 
 reranker use lateon|voyage|none [--model <model>] [--no-verify]
@@ -97,7 +104,7 @@ doctor [--verbose] [--json]
 version # aliases: -v, --version
 upgrade
 terminate
-uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
+uninstall [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
 tools list
 tool call <toolName> --args-json '<json>'
 tool call <toolName> --args-file <path>
@@ -136,20 +143,26 @@ prompt and progress messages go to stderr, and cancellation reports
 Agents receive Satori guidance natively, with nothing injected per tool call:
 
 - the Satori MCP server sends short tool guidance once per session through the
-  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively.
-  It includes the approval rule for `manage_index` create and reindex;
-- the `satori` skill with the full workflow is optional. `satori install --skill`
-  installs one canonical copy at `~/.agents/skills/satori`. Codex and OpenCode
-  load it directly; Claude Code gets a link to it at `~/.claude/skills/satori`.
-  Without `--skill`, install never creates the skill, but it keeps a skill it
-  already wrote up to date.
+  MCP `instructions` field, which compatible MCP clients such as Codex, Claude
+  Code, OpenCode, Cursor, VS Code, and Windsurf load natively. It covers
+  automatic background indexing within Satori's byte budgets and the approval
+  rule when a repository exceeds those budgets;
+- `satori install` installs the shared `satori` skill
+  (`~/.agents/skills/satori/SKILL.md`) with the full workflow by default
+  (`--skill` is also accepted explicitly). Codex and OpenCode load
+  `~/.agents/skills/satori` directly; Claude Code gets a link at
+  `~/.claude/skills/satori` (plus one read-only `SessionStart` hook in
+  `~/.claude/settings.json` that reports index state and never indexes), and
+  Antigravity gets a link at `~/.gemini/skills/satori`. Pass `--no-skill` to
+  skip installing the skill (only refreshing an existing Satori-managed skill if
+  already present).
 
-Install adds nothing to `AGENTS.md` or hook files, and it never removes or
-overwrites files it did not write: a real directory at a skill-link path is
-refused with instructions to remove it yourself. `satori uninstall` removes the shared skill only when it targets
-all clients (the default).
+Install adds nothing to `AGENTS.md`, and it never removes or overwrites files
+it did not write: a real directory at a skill-link path is refused with
+instructions to remove it yourself. `satori uninstall` removes the shared skill
+only when it targets all clients (the default).
 
-Global flags must precede the command token:
+Global flags (accepted before or after built-in commands):
 
 ```text
 --startup-timeout-ms <n>
@@ -159,7 +172,8 @@ Global flags must precede the command token:
 ```
 
 `doctor` prints a concise human summary by default, including an
-applied-runtime table for Codex, Claude Code, and OpenCode. The table reports
+applied-runtime table for supported clients (Codex, Claude Code, OpenCode,
+Cursor, VS Code, Windsurf, and Antigravity). The table reports
 configuration status, effective profile, embedding provider/model/dimension,
 reranker, vector store, and configuration source without exposing credentials
 or local artifact paths. A launcher that targets a local repository build keeps
@@ -169,7 +183,7 @@ successful checks, package sources, and local diagnostics. Use `doctor --json`
 or the compatible global form `--format json doctor` for the complete
 machine-readable result, including `runtimeConfigurations`.
 
-`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt without interactive progress text, or use `--debug` to expose MCP startup details during install verification.
+`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Pass `--format json` for a structured receipt without interactive progress text, or use `--debug` to expose MCP startup details during install verification.
 
 `satori -v`, `satori --version`, and `satori version` print the installed CLI,
 MCP runtime, and Core versions. Put `--format json` first for structured output.

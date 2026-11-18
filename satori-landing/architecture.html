@@ -1103,7 +1103,7 @@
               <g transform="translate(300, 10)">
                 <rect width="200" height="70" rx="8" fill="url(#grad-agent)" stroke="rgba(237, 234, 227, 0.35)" stroke-width="1.5" />
                 <text x="100" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Agent</text>
-                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Claude / Codex / OpenCode</text>
+                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Supported MCP Clients</text>
               </g>
 
               <!-- Tool Registry -->
@@ -1148,7 +1148,7 @@
           <div class="arch-mobile-diagram" aria-label="System overview">
             <div class="arch-mobile-node" data-tone="agent">
               <strong>Agent</strong>
-              <small>Claude / Codex / OpenCode</small>
+              <small>Codex · Claude · OpenCode · Cursor · VS Code · Windsurf · AGY</small>
             </div>
             <div class="arch-mobile-link"><span>request</span></div>
             <div class="arch-mobile-node">
@@ -1208,7 +1208,7 @@
           </article>
           <article class="card">
             <h3><code>@satori-code/cli</code></h3>
-            <p>Installs the managed runtime and launcher, marked client config, and the canonical <code>satori</code> skill. It never edits <code>AGENTS.md</code> or hook files, and a real directory at a Satori skill-link path is refused and left in place.</p>
+            <p>Installs the managed runtime and launcher, marked client config, and the canonical <code>satori</code> skill (plus one read-only Claude Code <code>SessionStart</code> status hook). It never edits <code>AGENTS.md</code>, and a real directory at a Satori skill-link path is refused and left in place.</p>
           </article>
         </div>
       </section>
@@ -1267,8 +1267,9 @@
           <article class="card">
             <h3>Harness formats stay behind CLI</h3>
             <p>
-              Codex, Claude, OpenCode, and Antigravity config differences live in the
-              installer and its tests, not in user-maintained snippets.
+              Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, and Antigravity
+              config differences live in the installer and its tests, not in
+              user-maintained snippets.
             </p>
           </article>
         </div>
@@ -1679,7 +1680,7 @@
           <article class="card">
             <h3>Offline After Install</h3>
             <p>
-              Potion + BM25 + LateOn + LanceDB is the managed Linux x64 / WSL2
+              Potion + BM25 + LateOn + LanceDB is the managed Linux x64 / WSL2 and Linux ARM64 with glibc
               path. Provisioning happens during install; the qualified offline
               runtime is designed for zero Satori runtime network requests afterward.
             </p>

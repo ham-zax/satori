@@ -6,7 +6,7 @@ The complete product and operations reference. For the short introduction, see t
 
 Satori is a **local-first code-intelligence layer** for coding agents. Ask where behavior lives in plain English, even when you do not know the filename or symbol yet. Satori combines semantic meaning with BM25 and exact lexical evidence, maps results back to owning symbols, and lets the agent continue into file structure, conservative relationship evidence, exact source spans, and freshness-aware navigation through MCP.
 
-On qualified Linux x64/WSL2 and Linux ARM64 with glibc, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. The installer configures Codex, Claude Code, and OpenCode, plus Antigravity (`agy`) on request.
+On qualified Linux x64/WSL2 and Linux ARM64 with glibc, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. The installer configures Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf, plus Antigravity (`agy`) on request.
 
 ```text
 Repository
@@ -161,10 +161,10 @@ satori install
 satori doctor
 ```
 
-`install` auto-detects supported Codex, Claude Code, and OpenCode clients from
-their documented local markers or CLI executables. `--client auto` is the
-explicit equivalent. Antigravity (`agy`) is opt-in: use `--client agy`, or
-`--client all` to configure every supported client.
+`install` auto-detects supported Codex, Claude Code, OpenCode, Cursor, VS Code,
+and Windsurf clients from their documented local markers or CLI executables.
+`--client auto` is the explicit equivalent. Antigravity (`agy`) is opt-in: use
+`--client agy`, or `--client all` to configure every supported client.
 If no supported client is detected, Satori stops before runtime installation and
 shows explicit client commands. `satori uninstall` defaults to all supported
 clients; use `--client auto` to limit cleanup to currently detected clients.
@@ -175,20 +175,22 @@ Use `satori -v` to print the installed CLI, MCP runtime, and Core versions.
 Agents receive Satori guidance natively, with nothing injected per tool call:
 
 - the Satori MCP server sends short tool guidance once per session through the
-  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively.
-  It includes the approval rule for `manage_index` create and reindex;
-- the `satori` skill with the full workflow is optional. `satori install --skill`
-  installs one canonical copy at `~/.agents/skills/satori`. Codex and OpenCode
-  load it directly; Claude Code gets a link to it at `~/.claude/skills/satori`.
-  Without `--skill`, install never creates the skill, but it keeps a skill it
-  already wrote up to date.
+  MCP `instructions` field, which Codex, Claude Code, OpenCode, Cursor, VS Code,
+  and Windsurf load natively. It covers automatic background indexing within
+  Satori's eligible-byte budgets (`<= 20 MiB` offline startup, `<= 150 MiB`
+  offline tool demand, `<= 8 MiB` connected/Voyage tool demand, `50,000`-file
+  fuse) and the approval rule when a repository exceeds those budgets;
+- the `satori` skill with the full workflow is installed by default at
+  `~/.agents/skills/satori` (pass `--no-skill` to skip). Codex and OpenCode
+  load it directly; Claude Code gets a link to it at `~/.claude/skills/satori`,
+  and Antigravity gets a link at `~/.gemini/skills/satori`.
 
 For Claude Code, install also adds one `SessionStart` hook to
 `~/.claude/settings.json` that runs `~/.satori/bin/satori-hook.js`. The hook
 reads Publication state on disk, starts no server, and never indexes. When the
 session folder is indexed, it tells the agent so. When the folder is an
-unindexed git repository, it shows a one-line note with the approval-first
-`manage_index action="create"` step. Otherwise it prints nothing. Uninstall
+unindexed git repository, it notes Satori's background auto-indexing budgets
+(asking first only when a repository exceeds them). Otherwise it prints nothing. Uninstall
 removes only that hook entry and keeps your own hooks.
 
 Install adds nothing to `AGENTS.md`, and it never removes or
@@ -369,8 +371,8 @@ satori install --client all --runtime voyage
 satori doctor
 ```
 
-`satori doctor` prints an applied-runtime table for Codex, Claude Code, and
-OpenCode. Each row shows whether that client is configured, its effective
+`satori doctor` prints an applied-runtime table for Codex, Claude Code,
+OpenCode, Cursor, VS Code, Windsurf, and Antigravity. Each row shows whether that client is configured, its effective
 profile, embedding provider/model/dimension, reranker, vector store, and whether
 the values come from the managed launcher or client config. Credentials and
 local artifact paths are never included in the table. This also works when the
@@ -398,9 +400,9 @@ LateOn reranker. Restart OpenCode after changing the launcher.
 
 | Development option | Supported values and constraints |
 |---|---|
-| `--client` | `opencode` (default), `codex`, `claude`, or `all` |
+| `--client` | `opencode` (default), `auto`, `all`, `codex`, `claude`, `cursor`, `vscode`, `windsurf`, or `agy` |
 | `--runtime` | `offline` or `voyage`; when omitted, preserve the managed selection, or use offline for a new launcher |
-| `--reranker` | `lateon` or `none`; offline only |
+| `--reranker` | `lateon`, `voyage`, or `none`; offline only |
 | `--vector-store` | `lancedb` or `milvus`; offline requires LanceDB and Milvus requires Voyage |
 | `--no-build` | Reuse the existing local build output |
 | `--home`, `--node` | Override the managed home or Node executable for isolated testing |

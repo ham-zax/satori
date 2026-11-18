@@ -674,7 +674,7 @@
             <span>1 · INSTALL</span>
             <pre><code>npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor</code></pre>
-            <p>Restart the supported MCP client after installation.</p>
+            <p>Auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf, and installs the shared skill (pass <code>--index</code> inside a Git repo to index it right away). Restart the MCP client after installation.</p>
           </article>
           <article>
             <span>2 · INDEX</span>
@@ -732,9 +732,20 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <code>npx -y @satori-code/cli@latest install</code>, then
             <code>npx -y @satori-code/cli@latest doctor</code>.
             No global install is required. The installer auto-detects supported
-            Codex, Claude Code, and OpenCode; Antigravity (<code>agy</code>) is
-            opt-in, and <code>--client all</code> configures every supported client.
-            Restart the MCP client after install.
+            Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf;
+            Antigravity (<code>agy</code>) is opt-in, and
+            <code>--client all</code> configures every supported client. Inside
+            a Git repository, pass <code>--index</code> to index the repository
+            immediately during setup (or <code>--no-index</code> to leave
+            indexing to agent startup). Restart the MCP client after
+            install.
+          </p>
+        </div>
+        <div class="callout">
+          <p>
+            <strong>WSL2:</strong> inside WSL2, <code>satori install</code>
+            configures the Linux <code>$HOME</code> paths used by terminal
+            agents and Remote-WSL sessions.
           </p>
         </div>
         <div class="grid">
@@ -743,8 +754,8 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <pre><code>npx -y @satori-code/cli@latest install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
-              and the shared skill to <code>~/.agents/skills/satori</code>,
-              which Codex loads natively.
+              and installs the shared skill to <code>~/.agents/skills/satori/SKILL.md</code>
+              by default, which Codex loads natively.
             </p>
           </div>
           <div class="panel">
@@ -752,8 +763,10 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <pre><code>npx -y @satori-code/cli@latest install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
-              <code>~/.claude.json</code> and links
-              <code>~/.claude/skills/satori</code> to the shared skill.
+              <code>~/.claude.json</code>, links
+              <code>~/.claude/skills/satori</code> to the shared skill, and
+              adds one read-only <code>SessionStart</code> hook in
+              <code>~/.claude/settings.json</code>.
             </p>
           </div>
           <div class="panel">
@@ -763,6 +776,32 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               Writes the Satori MCP entry to
               <code>~/.config/opencode/opencode.json</code>; OpenCode loads
               the shared skill natively.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Cursor</h3>
+            <pre><code>npx -y @satori-code/cli@latest install --client cursor</code></pre>
+            <p>
+              Writes the Satori MCP entry to
+              <code>~/.cursor/mcp.json</code>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>VS Code</h3>
+            <pre><code>npx -y @satori-code/cli@latest install --client vscode</code></pre>
+            <p>
+              Writes the Satori MCP JSONC entry under <code>servers.satori</code>
+              in <code>~/.config/Code/User/mcp.json</code> on Linux
+              (<code>~/Library/Application Support/Code/User/mcp.json</code> on
+              macOS, <code>%APPDATA%\Code\User\mcp.json</code> on Windows).
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Windsurf</h3>
+            <pre><code>npx -y @satori-code/cli@latest install --client windsurf</code></pre>
+            <p>
+              Writes the Satori MCP entry to
+              <code>~/.codeium/windsurf/mcp_config.json</code>.
             </p>
           </div>
           <div class="panel">
@@ -804,9 +843,9 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             Supported development options are:
           </p>
           <ul>
-            <li><code>--client opencode|codex|claude|all</code> (default: <code>opencode</code>).</li>
+            <li><code>--client auto|all|opencode|codex|claude|cursor|vscode|windsurf|agy</code> (default: <code>opencode</code>).</li>
             <li><code>--runtime offline|voyage</code>; omission preserves the managed selection, or starts offline when no launcher exists.</li>
-            <li><code>--reranker lateon|none</code>, available only with the offline runtime.</li>
+            <li><code>--reranker lateon|voyage|none</code>, available only with the offline runtime.</li>
             <li><code>--vector-store lancedb|milvus</code>; offline requires LanceDB and Milvus requires Voyage.</li>
             <li><code>--no-build</code>, <code>--home &lt;path&gt;</code>, and <code>--node &lt;path&gt;</code> for existing-build or isolated testing.</li>
           </ul>
@@ -859,7 +898,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               credentials and operational overrides; it does not duplicate a
               second provider/model selection.
               Install and uninstall commands show a concise summary by default;
-              use <code>--format json</code> before the command for the complete
+              pass <code>--format json</code> for the complete
               machine-readable receipt.
             </p>
           </div>
@@ -902,16 +941,23 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <h3>Managed Files</h3>
             <ul>
               <li>Codex config: <code>~/.codex/config.toml</code>.</li>
-              <li>Shared skill: <code>~/.agents/skills/satori</code>.</li>
-              <li>Claude config: <code>~/.claude.json</code>.</li>
-              <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
+              <li>Shared skill (installed by default; <code>--no-skill</code> skips): <code>~/.agents/skills/satori/SKILL.md</code>.</li>
+              <li>Claude config and hook: <code>~/.claude.json</code> and read-only <code>SessionStart</code> hook in <code>~/.claude/settings.json</code>.</li>
               <li>Claude skill link: <code>~/.claude/skills/satori</code>.</li>
+              <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
+              <li>Cursor config: <code>~/.cursor/mcp.json</code>.</li>
+              <li>VS Code config: <code>~/.config/Code/User/mcp.json</code> (JSONC <code>servers.satori</code>).</li>
+              <li>Windsurf config: <code>~/.codeium/windsurf/mcp_config.json</code>.</li>
               <li>Antigravity config: <code>~/.gemini/config/mcp_config.json</code>.</li>
               <li>Antigravity skill link: <code>~/.gemini/skills/satori</code>.</li>
             </ul>
             <p>
-              The installer refuses to overwrite unmanaged Satori entries. If
-              you already have one, remove or align it before rerunning install.
+              Pass <code>--no-skill</code> to skip installing the shared skill
+              (only refreshing an existing Satori-managed skill if already
+              present), and <code>--index</code> or <code>--no-index</code> to
+              control immediate Git repository indexing during setup. The
+              installer refuses to overwrite unmanaged Satori entries. If you
+              already have one, remove or align it before rerunning install.
             </p>
           </div>
         </div>
@@ -1090,14 +1136,14 @@ satori reranker status</code></pre>
               <tr><th>Reranker</th><th>Right answer first</th><th>In top 5</th><th>In top 10</th><th>MRR</th><th>Rerank median</th></tr>
             </thead>
             <tbody>
-              <tr><td>LateOn (local, default)</td><td>13/28</td><td>21/28</td><td>23/28</td><td>0.555</td><td>2.62 s</td></tr>
-              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>22/28</td><td>26/28</td><td>26/28</td><td>0.845</td><td>0.99 s</td></tr>
+              <tr><td>LateOn (local, default)</td><td>13/28</td><td>22/28</td><td>24/28</td><td>0.566</td><td>2.58 s</td></tr>
+              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>23/28</td><td>27/28</td><td>27/28</td><td>0.881</td><td>1.03 s</td></tr>
             </tbody>
           </table>
         </div>
         <p>
           28 plain-English questions over React, Polars, and FlatBuffers, with
-          Potion embeddings and the same index for every row. One run per row on
+          Potion embeddings and the same index for every row. Three runs per row on
           one WSL2 laptop. Times are the reranker alone and include the network for
           Voyage. The canonical projection sends about 60% more bytes, so Voyage
           uses the free quota faster.

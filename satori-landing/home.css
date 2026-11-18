@@ -1495,6 +1495,29 @@ h3.minor {
 }
 
 .hero-watch { margin-top: 1.25rem; }
+.hero-proof {
+  margin: 0.75rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--paper-2);
+}
+.hero-proof strong {
+  color: var(--paper);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.hero-proof a {
+  color: var(--shu);
+  text-decoration: none;
+}
+.hero-proof a:hover {
+  text-decoration: underline;
+}
+.hero-proof a:focus-visible {
+  outline: 2px solid var(--shu-hi);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 
 /* Block flow so a narrow screen wraps the label as text and keeps the arrow on the last line. */
 @media (max-width: 720px) {
@@ -1890,6 +1913,83 @@ h3.minor {
   text-wrap: pretty;
 }
 
+/* Measured impact: three figures between the compare cards and the analogy.
+   Same card language as .plain-card, with the figure set in mono. */
+.plain-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.plain-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(237, 234, 227, 0.02);
+}
+
+.plain-metric dt {
+  color: var(--paper-3);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plain-metric dd {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.plain-metric-figure {
+  color: var(--shu-hi);
+  font-family: var(--mono);
+  font-size: clamp(1.45rem, 3vw, 1.8rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.plain-metric-detail {
+  color: var(--paper-2);
+  font-size: 0.85rem;
+  text-wrap: pretty;
+}
+
+.plain-metrics-note {
+  max-width: 78ch;
+  margin-top: 0.9rem;
+  color: var(--paper-3);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.plain-metrics-note code {
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(237, 234, 227, 0.07);
+  color: var(--paper-2);
+  font-size: 0.84em;
+}
+
+.plain-metrics-note a {
+  color: var(--paper-2);
+  text-decoration: underline;
+  text-decoration-color: var(--shu);
+  text-underline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+.plain-metrics-note a:hover { color: var(--paper); }
+}
+
 .plain-analogy {
   max-width: 70ch;
   margin-top: 2rem;
@@ -1934,7 +2034,7 @@ h3.minor {
 }
 
 @media (max-width: 860px) {
-  .plain-compare, .plain-audience { grid-template-columns: 1fr; }
+  .plain-compare, .plain-audience, .plain-metrics { grid-template-columns: 1fr; }
   .plain-steps { grid-template-columns: 1fr 1fr; }
 }
 

@@ -43,7 +43,7 @@ npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor
 ```
 
-`install` sets up Codex, Claude Code, and OpenCode (Antigravity with `--client agy`). Restart your agent and say:
+`install` auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf (`--client agy` for Antigravity; `--client all` for all), and installs the shared `satori` skill by default. Git workspaces within Satori's byte budgets auto-index in the background when your agent starts; pass `--index` inside a Git repository to index it immediately during setup (`--no-index` skips immediate indexing). Restart your agent and say:
 
 ```text
 Index /absolute/path/to/repo with Satori, then find where auth refresh is handled.
@@ -65,8 +65,8 @@ If you are a coding agent setting up or using Satori, follow these steps.
 **Install**
 
 1. Check the platform: `node -v` must be 22.22 or newer, on Linux x64, Linux ARM64 with glibc, or WSL2. Native Windows and macOS are not supported; on Windows, run inside WSL2.
-2. Run `npx -y @satori-code/cli@latest install`, then `npx -y @satori-code/cli@latest doctor`.
-3. If install reports no supported client, rerun it with `--client codex`, `claude`, `opencode`, `agy`, or `all`.
+2. Run `npx -y @satori-code/cli@latest install`, then `npx -y @satori-code/cli@latest doctor`. Inside a Git repository, pass `--index` to index it immediately during setup (`--no-index` leaves indexing to agent startup).
+3. If install reports no supported client, rerun it with `--client codex`, `claude`, `opencode`, `cursor`, `vscode`, `windsurf`, `agy`, or `all`.
 4. Tell the user to restart you. The Satori MCP tools load only at agent startup.
 
 **Use**
@@ -83,7 +83,7 @@ If you are a coding agent setting up or using Satori, follow these steps.
 - `manage_index action="status"` can start or join an automatic rebuild for an incompatible tracked root. Check roots serially on memory-constrained hosts.
 - Treat `call_graph` results as leads to verify, not complete proof.
 - Satori is read-only. Make source edits with your own tools.
-- `satori install --skill` also installs the optional `satori` skill (`~/.agents/skills/satori`) with the full workflow.
+- `satori install` installs the shared `satori` skill (`~/.agents/skills/satori/SKILL.md`) with the full workflow by default; pass `--no-skill` to skip installing it (it still refreshes an existing Satori-managed skill if present).
 
 ## How it works
 
@@ -185,6 +185,17 @@ Tuning set with seven labels corrected to the pinned commits. Wrong guesses cost
 | Peak reranker memory | 0.53 GB | 1.64 GB |
 
 Each session needs 1 GiB of free memory at worker start, so memory-limited hosts and containers run fewer sessions with more threads. The worker is released after 2 minutes idle.
+
+**Agent discovery.** Paired OpenCode benchmark (protocol v3, DeepSeek V4.1 Flash, local Potion embeddings on CPU, Voyage `rerank-3`) comparing Satori against native OpenCode search (`grep`, `glob`, bounded 200-line `read`) across two frozen discovery tasks (three runs per arm):
+
+| Task | Arm | Correct | Input tokens | Tool calls | Source call | Wall time |
+|---|---|---:|---:|---:|---:|---:|
+| `unknown-freshness-reuse` | Native | 1/3 | 63,576 | 23 | 16 [14–24] | 143.9 s |
+| | **Satori** | 1/3 | **17,463 (-72.5%)** | **7 (-69.6%)** | **2 [2–2]** | **84.2 s (-41.5%)** |
+| `known-exact-target` | Native | 2/3 | 16,440 | 14 | 3 [3–5] | 49.1 s |
+| | **Satori** | **3/3** | **12,300 (-25.2%)** | **6 (-57.1%)** | **2 [2–2]** | **32.1 s (-34.7%)** |
+
+Token, tool-call, and wall-time figures are medians on correct runs (one correct run per arm on `unknown-freshness-reuse`). Satori started from a warm index and a harness-supplied first `search_codebase` query; later call and token savings follow from reaching the owner source at call 2 instead of call 16. [Benchmark report and limits](docs/improvements/agent-discovery-benchmark-2026-10-26.md).
 
 **Against [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 0.11.0.** Same machine, 5 public repositories; each range spans two runs:
 

@@ -63,7 +63,6 @@
     "oxc-parser": "0.155.0",
     "voyageai": "^0.4.0",
     "web-tree-sitter": "0.27.1",
-    "ws": "^8.22.0",
     "typescript": "7.1.0-beta"
   },
   "devDependencies": {

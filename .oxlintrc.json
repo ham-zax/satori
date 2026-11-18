@@ -4,7 +4,7 @@
     "typescript"
   ],
   "categories": {
-    "correctness": "off"
+    "correctness": "error"
   },
   "env": {
     "node": true,

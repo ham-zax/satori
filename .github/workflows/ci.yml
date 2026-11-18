@@ -88,30 +88,42 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.22.0'
         run: pnpm run versions:check
 
+      # `release:check` is the full release gate, but it re-runs the Core/MCP/CLI
+      # unit suites that package_unit_tests already runs. Only those three suites
+      # are omitted here; the script tests, the x64 Linux packed smokes, the
+      # contract and manifest checks, the package scope check, and the packed
+      # release graph all stay enforced.
       - name: Verify packed release graph
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.22.0'
-        run: pnpm run release:check
+        run: pnpm run scope:check && pnpm -C packages/mcp contract:check && pnpm -C packages/mcp manifest:check && pnpm run test:scripts && pnpm run release:smoke:mcp && pnpm run release:smoke:cli && pnpm run release:check:packed
 
       - name: Verify MCP docs are in sync
         run: pnpm -C packages/mcp docs:check
+
+      # These run before the Windows clean step, which deletes dist.
+      - name: Verify build outputs (Unix)
+        if: matrix.os != 'windows-latest'
+        run: test -f packages/core/dist/index.js && test -f packages/mcp/dist/index.js && test -f packages/cli/dist/index.js
+
+      - name: Verify build outputs (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          $outputs = @(
+            "packages/core/dist/index.js",
+            "packages/mcp/dist/index.js",
+            "packages/cli/dist/index.js"
+          )
+          foreach ($output in $outputs) {
+            if (-not (Test-Path $output)) {
+              throw "Missing dist output: $output"
+            }
+          }
 
       - name: Test clean command (Windows validation)
         if: matrix.os == 'windows-latest'
         run: |
           pnpm clean
           echo "Clean command executed successfully on Windows"
-
-      - name: Verify build outputs (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          ls -la packages/core/dist || echo "packages/core/dist not found"
-          ls -la packages/mcp/dist || echo "packages/mcp/dist not found"
-
-      - name: Verify build outputs (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          Get-ChildItem packages/core/dist -ErrorAction SilentlyContinue | Format-Table -AutoSize || Write-Host "packages/core/dist not found"
-          Get-ChildItem packages/mcp/dist -ErrorAction SilentlyContinue | Format-Table -AutoSize || Write-Host "packages/mcp/dist not found"
 
   # Native Linux ARM64 packed-runtime acceptance. The packed closure must execute
   # on the target architecture, so this job runs the ARM-specific Potion and

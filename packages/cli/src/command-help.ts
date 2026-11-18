@@ -78,8 +78,8 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
     },
     "tools-list": {
         usage: ["satori tools list"],
-        summary: "List the available MCP tools (use --format json for full input schemas).",
-        examples: ["satori tools list", "satori tools list --format json"],
+        summary: "List the available MCP tools (JSON by default; use --format text for a compact summary).",
+        examples: ["satori tools list", "satori tools list --format text"],
     },
     "tool-call": {
         usage: [

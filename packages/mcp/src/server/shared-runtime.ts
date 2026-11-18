@@ -293,11 +293,14 @@ export class SharedRuntimeHost {
 
     }
 
-    createSession(workspacePolicy: SessionWorkspacePolicy): McpSession {
+    createSession(
+        workspacePolicy: SessionWorkspacePolicy,
+        options?: { autoIndexOnStart?: boolean },
+    ): McpSession {
         if (this.shutdownStarted) {
             throw new Error("Shared Satori runtime host is shutting down.");
         }
-        return new McpSession(this, workspacePolicy);
+        return new McpSession(this, workspacePolicy, options);
     }
 
     async indexWorkspaceRoots(policy: SessionWorkspacePolicy): Promise<void> {
@@ -503,10 +506,14 @@ export class McpSession {
     private resolveResourceRelease: (() => void) | null = null;
     private keepAliveTimer: NodeJS.Timeout | null = null;
 
+    private readonly autoIndexOnStart: boolean;
+
     constructor(
         private readonly host: SharedRuntimeHost,
         private readonly workspacePolicy: SessionWorkspacePolicy,
+        options?: { autoIndexOnStart?: boolean },
     ) {
+        this.autoIndexOnStart = options?.autoIndexOnStart !== false;
         this.continuationCoordinator = host.createSearchContinuationCoordinator();
         this.server = new Server(
             {
@@ -526,7 +533,12 @@ export class McpSession {
         );
         this.setupTools();
         this.server.oninitialized = () => {
-            if (this.closed || !host.config.autoIndexWorkspace || host.config.executionProfile !== "offline") return;
+            if (
+                this.closed
+                || !this.autoIndexOnStart
+                || !host.config.autoIndexWorkspace
+                || host.config.executionProfile !== "offline"
+            ) return;
             this.activeToolCalls += 1;
             this.host.beginOperation();
             void this.host.indexWorkspaceRoots(this.workspacePolicy).catch((error) => {

@@ -43,6 +43,7 @@ type AttachRequest = Readonly<{
     workspaceRoots: readonly string[];
     allowBroadRoots: boolean;
     allowImplicitBroadContainerRoot?: boolean;
+    autoIndexOnStart?: boolean;
 }>;
 
 function isAbsolutePathArray(value: unknown): value is readonly string[] {
@@ -84,6 +85,9 @@ function parseAttachRequest(line: string): AttachRequest | typeof UNSUPPORTED_PR
         if (!isAbsolutePathArray(value.workspaceRoots)) {
             return null;
         }
+        if (value.autoIndexOnStart !== undefined && typeof value.autoIndexOnStart !== "boolean") {
+            return null;
+        }
         return Object.freeze({
             type: "satori-shared-runtime-attach",
             protocolVersion: value.protocolVersion,
@@ -94,6 +98,7 @@ function parseAttachRequest(line: string): AttachRequest | typeof UNSUPPORTED_PR
             workspaceRoots: value.workspaceRoots,
             allowBroadRoots: value.allowBroadRoots === true,
             allowImplicitBroadContainerRoot: value.allowImplicitBroadContainerRoot === true,
+            autoIndexOnStart: value.autoIndexOnStart !== false,
         } as AttachRequest);
     } catch {
         return null;
@@ -347,7 +352,12 @@ export class SharedRuntimeSocketHost {
             // attachSession removes this socket from pendingHandshakes before
             // it yields, so the host never observes a gap between handshake
             // and session ownership.
-            void this.attachSession(socket, trailing, workspacePolicy).catch(() => {
+            void this.attachSession(
+                socket,
+                trailing,
+                workspacePolicy,
+                request.autoIndexOnStart !== false,
+            ).catch(() => {
                 socket.destroy();
                 this.scheduleIdleShutdown();
             });
@@ -362,13 +372,14 @@ export class SharedRuntimeSocketHost {
         socket: net.Socket,
         trailing: Buffer,
         workspacePolicy: SessionWorkspacePolicy,
+        autoIndexOnStart: boolean,
     ): Promise<void> {
         this.pendingHandshakes.delete(socket);
         if (this.closing) {
             socket.destroy();
             return;
         }
-        const session = this.runtimeHost.createSession(workspacePolicy);
+        const session = this.runtimeHost.createSession(workspacePolicy, { autoIndexOnStart });
         let released = false;
         const release = (): void => {
             if (released) return;

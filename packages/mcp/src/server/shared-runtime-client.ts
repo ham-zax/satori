@@ -36,6 +36,7 @@ type AttachRequest = Readonly<{
     workspaceRoots: readonly string[];
     allowBroadRoots: boolean;
     allowImplicitBroadContainerRoot?: boolean;
+    autoIndexOnStart?: boolean;
 }>;
 
 type AttachResponse = Readonly<{
@@ -93,6 +94,14 @@ function connectSocket(socketPath: string, timeoutMs: number): Promise<net.Socke
     });
 }
 
+function resolveAutoIndexOnSessionStart(env: NodeJS.ProcessEnv): boolean {
+    const rawAutoIndex = env.SATORI_AUTO_INDEX_WORKSPACE?.trim().toLowerCase();
+    if (rawAutoIndex === "true") return true;
+    if (rawAutoIndex === "false") return false;
+    const runMode = env.SATORI_RUN_MODE?.trim().toLowerCase();
+    return runMode !== "cli" && runMode !== "postflight";
+}
+
 async function attach(
     socketPath: string,
     identity: ReturnType<typeof buildSharedRuntimeIdentity>,
@@ -100,6 +109,7 @@ async function attach(
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
+    autoIndexOnStart: boolean,
     expectedHost?: SharedRuntimeHostMetadata,
 ): Promise<net.Socket> {
     const socket = await connectSocket(socketPath, timeoutMs);
@@ -120,6 +130,7 @@ async function attach(
         workspaceRoots,
         allowBroadRoots,
         allowImplicitBroadContainerRoot,
+        autoIndexOnStart,
     });
     socket.write(`${JSON.stringify(request)}\n`);
 
@@ -225,6 +236,7 @@ async function attachFromMetadata(
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
+    autoIndexOnStart: boolean,
 ): Promise<net.Socket | null> {
     const metadata = readHostMetadata(metadataPath);
     if (!metadata) return null;
@@ -238,7 +250,7 @@ async function attachFromMetadata(
     })) {
         return null;
     }
-    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, allowImplicitBroadContainerRoot, metadata);
+    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, allowImplicitBroadContainerRoot, autoIndexOnStart, metadata);
 }
 
 function isTransientAttachError(error: unknown): boolean {
@@ -257,6 +269,7 @@ async function waitForHostTransition(
     workspaceRoots: readonly string[],
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
+    autoIndexOnStart: boolean,
 ): Promise<net.Socket | null> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
@@ -272,6 +285,7 @@ async function waitForHostTransition(
                     workspaceRoots,
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
+                    autoIndexOnStart,
                 );
                 unexpected.destroy();
                 throw new Error(
@@ -304,6 +318,7 @@ async function waitForHostTransition(
                     workspaceRoots,
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
+                    autoIndexOnStart,
                     metadata,
                 );
             } catch (error) {
@@ -350,6 +365,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
     const workspaceRoots = resolveSessionWorkspaceRoots(options.env);
     const allowBroadRoots = resolveAllowBroadRoots(options.env);
     const allowImplicitBroadContainerRoot = !hasExplicitSessionWorkspaceRoots(options.env);
+    const autoIndexOnStart = resolveAutoIndexOnSessionStart(options.env);
     const remainingTime = (): number => Math.max(1, deadline - Date.now());
 
     for (;;) {
@@ -362,6 +378,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 workspaceRoots,
                 allowBroadRoots,
                 allowImplicitBroadContainerRoot,
+                autoIndexOnStart,
             );
         } catch (error) {
             if (!isTransientAttachError(error)) throw error;
@@ -373,6 +390,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 workspaceRoots,
                 allowBroadRoots,
                 allowImplicitBroadContainerRoot,
+                autoIndexOnStart,
             );
         }
         if (existing) return existing;
@@ -391,6 +409,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                     workspaceRoots,
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
+                    autoIndexOnStart,
                 );
             } catch (error) {
                 if (!isTransientAttachError(error)) throw error;
@@ -426,6 +445,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         workspaceRoots,
                         allowBroadRoots,
                         allowImplicitBroadContainerRoot,
+                        autoIndexOnStart,
                     );
                 } catch (error) {
                     const code = (error as NodeJS.ErrnoException).code;
@@ -465,6 +485,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         workspaceRoots,
                         allowBroadRoots,
                         allowImplicitBroadContainerRoot,
+                        autoIndexOnStart,
                     );
                     if (connected) return connected;
                 } catch (error) {

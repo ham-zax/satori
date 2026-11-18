@@ -1189,3 +1189,83 @@ test("a second shutdown request after a waiting idle attempt still closes the ho
     });
     bridge = undefined;
 });
+
+test("shared runtime disables session-start auto-indexing for cli/postflight attaches and rejects non-boolean autoIndexOnStart", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-autoindex-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = { ...config(root), autoIndexWorkspace: true };
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const indexedPolicies: Array<Parameters<typeof runtimeHost.indexWorkspaceRoots>[0]> = [];
+    runtimeHost.indexWorkspaceRoots = async (policy) => {
+        indexedPolicies.push(policy);
+    };
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    const bridges: Array<Awaited<ReturnType<typeof createBridge>>> = [];
+    t.after(async () => {
+        for (const bridge of bridges) {
+            await closeBridgeQuietly(bridge);
+        }
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+
+    const workspace = path.join(root, "repo");
+    fs.mkdirSync(workspace, { recursive: true });
+
+    const invalidAttach = JSON.parse(await sendHandshake(
+        paths.socketPath,
+        `${JSON.stringify({
+            type: "satori-shared-runtime-attach",
+            protocolVersion: SHARED_RUNTIME_PROTOCOL_VERSION,
+            sharedRuntimeIdentityHash: identity.hash,
+            installedRuntimeRoot: identity.installedRuntimeRoot,
+            mcpVersion: identity.mcpVersion,
+            challengeNonce: "a".repeat(48),
+            workspaceRoots: [workspace],
+            allowBroadRoots: false,
+            autoIndexOnStart: "false",
+        })}\n`,
+    )) as { accepted: boolean; error?: string };
+    assert.equal(invalidAttach.accepted, false);
+    assert.match(invalidAttach.error ?? "", /malformed/i);
+
+    const cliBridge = await createBridge(runtimeEntry, {
+        ...runtimeEnv,
+        SATORI_RUN_MODE: "cli",
+        SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspace]),
+    });
+    bridges.push(cliBridge);
+    assert.equal(((await cliBridge.request("tools/list")).result?.tools?.length ?? 0) > 0, true);
+
+    const postflightBridge = await createBridge(runtimeEntry, {
+        ...runtimeEnv,
+        SATORI_RUN_MODE: "postflight",
+        SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspace]),
+    });
+    bridges.push(postflightBridge);
+    assert.equal(((await postflightBridge.request("tools/list")).result?.tools?.length ?? 0) > 0, true);
+    assert.equal(indexedPolicies.length, 0);
+
+    const mcpBridge = await createBridge(runtimeEntry, {
+        ...runtimeEnv,
+        SATORI_RUN_MODE: "mcp",
+        SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspace]),
+    });
+    bridges.push(mcpBridge);
+    await waitForGate(() => indexedPolicies.length === 1);
+    assert.deepEqual(indexedPolicies[0]?.roots, [workspace]);
+});

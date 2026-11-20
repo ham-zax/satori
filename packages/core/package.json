@@ -23,6 +23,11 @@
       "require": "./dist/runtime-contract.js",
       "default": "./dist/runtime-contract.js"
     },
+    "./storage-maintenance": {
+      "types": "./dist/generation/storage-maintenance.d.ts",
+      "require": "./dist/generation/storage-maintenance.js",
+      "default": "./dist/generation/storage-maintenance.js"
+    },
     "./semantic": {
       "types": "./dist/semantic/index.d.ts",
       "require": "./dist/semantic/index.js",

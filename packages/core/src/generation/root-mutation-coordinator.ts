@@ -305,6 +305,64 @@ export class MutationLeaseCoordinator {
         return leases.sort((left, right) => left.canonicalRoot.localeCompare(right.canonicalRoot));
     }
 
+    public hasActiveOrUnverifiableLeaseForRootKey(key: string): boolean {
+        if (!/^[a-f0-9]{64}$/.test(key)) return true;
+        const lockPath = path.join(this.stateDir, `${key}.lock`);
+        try {
+            const lockStat = fs.lstatSync(lockPath);
+            if (lockStat.isSymbolicLink() || !lockStat.isFile()) return true;
+            if (!this.shouldBreakLock(lockPath, lockStat)) return true;
+        } catch (error) {
+            if (!isRecord(error) || error.code !== 'ENOENT') return true;
+        }
+        return this.hasActiveOrUnverifiableLeaseStateForRootKey(key);
+    }
+
+    public hasActiveOrUnverifiableLeaseStateForRootKey(key: string): boolean {
+        if (!/^[a-f0-9]{64}$/.test(key)) return true;
+        const statePath = path.join(this.stateDir, `${key}.json`);
+        try {
+            const stateStat = fs.lstatSync(statePath);
+            if (stateStat.isSymbolicLink() || !stateStat.isFile()) return true;
+            const parsed: unknown = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+            if (!isRecord(parsed) || typeof parsed.canonicalRoot !== 'string') return true;
+            if (`${rootKey(parsed.canonicalRoot)}.json` !== `${key}.json`) return true;
+            const state = this.readState(parsed.canonicalRoot);
+            return Boolean(state.lease && this.isOwnerLive(state.lease));
+        } catch (error) {
+            if (isRecord(error) && error.code === 'ENOENT') return false;
+            return true;
+        }
+    }
+
+    public hasAnyActiveOrUnverifiableLease(): boolean {
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(this.stateDir, { withFileTypes: true });
+        } catch (error) {
+            if (isRecord(error) && error.code === 'ENOENT') return false;
+            return true;
+        }
+        for (const entry of entries) {
+            if (entry.isSymbolicLink()) return true;
+            if (entry.name.endsWith('.lock')) {
+                const lockPath = path.join(this.stateDir, entry.name);
+                try {
+                    const stat = fs.lstatSync(lockPath);
+                    if (!stat.isFile() || !this.shouldBreakLock(lockPath, stat)) return true;
+                } catch (error) {
+                    if (!isRecord(error) || error.code !== 'ENOENT') return true;
+                }
+                continue;
+            }
+            if (entry.name.endsWith('.json')) {
+                const key = entry.name.slice(0, -'.json'.length);
+                if (this.hasActiveOrUnverifiableLeaseForRootKey(key)) return true;
+            }
+        }
+        return false;
+    }
+
     public getOperation(root: string): RootMutationOperation | undefined {
         const canonicalRoot = canonicalizeRoot(root);
         return this.withRootLock(canonicalRoot, () => {
@@ -735,8 +793,15 @@ export class MutationLeaseCoordinator {
     }
 
     private withRootLock<T>(canonicalRoot: string, fn: () => T): T {
+        return this.withRootKeyLock(rootKey(canonicalRoot), fn);
+    }
+
+    public withRootKeyLock<T>(key: string, fn: () => T): T {
+        if (!/^[a-f0-9]{64}$/.test(key)) {
+            throw new Error(`Invalid mutation lease root key '${key}'.`);
+        }
         fs.mkdirSync(this.stateDir, { recursive: true });
-        const lockPath = this.lockPath(canonicalRoot);
+        const lockPath = path.join(this.stateDir, `${key}.lock`);
         const deadline = Date.now() + this.lockWaitMs;
         let descriptor: number | null = null;
         while (Date.now() <= deadline) {

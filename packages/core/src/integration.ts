@@ -4,21 +4,25 @@ export {
 } from './config/runtime-state-root';
 export {
     createSharedPublicationRuntime,
+    createStorageMaintenanceReaderGuard,
     probeCurrentPublicationForPath,
 } from './generation/publication-store';
 export type {
     PublicationPathProbe,
     SharedPublicationRuntime,
+    StorageMaintenanceReaderGuard,
 } from './generation/publication-store';
 export {
     RootMutationCancelledError,
     RootMutationInProgressError,
     RootMutationRuntime,
+    createRootMutationLeasePort,
     formatRootMutationBlockedMessage,
     type RootMutationActivity,
     type RootMutationExecution,
     type RootMutationExecutionOptions,
     type RootMutationExecutor,
+    type RootMutationLeasePort,
     type RootMutationStart,
 } from './generation/root-mutation-runtime';
 export {

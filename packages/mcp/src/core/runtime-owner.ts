@@ -580,6 +580,25 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
         }
     }
 
+    public withSoleRegisteredOwnerLock(fn: () => void): boolean {
+        let admitted = false;
+        try {
+            return this.withOwnersLock(() => {
+                const owners = this.readOwnersFile("throw");
+                const liveOwners = this.pruneDeadOwners(owners);
+                if (liveOwners.length !== 1 || liveOwners[0]?.ownerId !== this.ownerId) {
+                    return false;
+                }
+                admitted = true;
+                fn();
+                return true;
+            }, true);
+        } catch (error) {
+            if (admitted) throw error;
+            return false;
+        }
+    }
+
     private buildCurrentOwnerRecord(): RuntimeOwnerRecord {
         const nowIso = new Date(this.now()).toISOString();
         return {
@@ -740,71 +759,96 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
         fs.renameSync(tempPath, targetPath);
     }
 
-    private withOwnersLock<T>(fn: () => T): T {
-        fs.mkdirSync(this.stateDir, { recursive: true });
-        const lockPath = this.ownersLockPath();
-        const deadline = Date.now() + this.lockWaitMs;
-        let fd: number | null = null;
-        while (Date.now() <= deadline) {
-            try {
-                fd = fs.openSync(lockPath, "wx");
-                fs.writeFileSync(fd, JSON.stringify({
-                    pid: process.pid,
-                    acquiredAt: new Date().toISOString(),
-                }));
-                break;
-            } catch (error: unknown) {
-                if (!isRecord(error) || error.code !== "EEXIST") {
-                    throw error;
-                }
-                if (this.shouldBreakLock(lockPath)) {
-                    try {
-                        fs.unlinkSync(lockPath);
-                    } catch {
-                        // Lock owner won the race; retry.
-                    }
-                }
-                sleepSync(this.lockRetryMs);
-            }
-        }
-        if (fd === null) {
-            throw new Error(`Timed out acquiring runtime owner registry lock at ${lockPath}`);
-        }
-        try {
-            return fn();
-        } finally {
-            try {
-                fs.closeSync(fd);
-            } catch {
-                // Best-effort close.
-            }
-            try {
-                fs.unlinkSync(lockPath);
-            } catch {
-                // Best-effort unlock.
-            }
-        }
+    private withOwnersLock<T>(fn: () => T, maintenance = false): T {
+        return withOwnerLock(this.stateDir, this.lockWaitMs, this.lockRetryMs, maintenance, fn);
     }
 
-    private shouldBreakLock(lockPath: string): boolean {
-        let ageMs: number;
+    public isMaintenanceLocked(): boolean {
         try {
-            ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+            const lock: unknown = JSON.parse(fs.readFileSync(this.ownersLockPath(), "utf8"));
+            return isRecord(lock) && lock.maintenance === true;
         } catch {
             return false;
         }
-        if (ageMs < OWNER_LOCK_STALE_MS) {
-            return false;
-        }
+    }
+}
+
+/** Holds the same admission lock used by MCP runtime registration. */
+export function withRuntimeOwnerMaintenanceLock<T>(stateDir: string, fn: () => T): T {
+    return withOwnerLock(stateDir, OWNER_LOCK_WAIT_MS, OWNER_LOCK_RETRY_MS, true, fn);
+}
+
+function withOwnerLock<T>(
+    stateDir: string,
+    lockWaitMs: number,
+    lockRetryMs: number,
+    maintenance: boolean,
+    fn: () => T,
+): T {
+    fs.mkdirSync(stateDir, { recursive: true });
+    const lockPath = path.join(stateDir, OWNER_LOCK_NAME);
+    const deadline = Date.now() + lockWaitMs;
+    let fd: number | null = null;
+    while (Date.now() <= deadline) {
         try {
-            const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-            const pid = isRecord(parsed) && typeof parsed.pid === "number" ? parsed.pid : undefined;
-            if (pid === undefined) {
-                return ageMs >= OWNER_LOCK_METADATALESS_STALE_MS;
+            fd = fs.openSync(lockPath, "wx");
+            fs.writeFileSync(fd, JSON.stringify({
+                pid: process.pid,
+                acquiredAt: new Date().toISOString(),
+                ...(maintenance ? { maintenance: true } : {}),
+            }));
+            break;
+        } catch (error: unknown) {
+            if (!isRecord(error) || error.code !== "EEXIST") {
+                throw error;
             }
-            return !processExists(pid);
+            if (shouldBreakOwnerLock(lockPath)) {
+                try {
+                    fs.unlinkSync(lockPath);
+                } catch {
+                    // Lock owner won the race; retry.
+                }
+            }
+            sleepSync(lockRetryMs);
+        }
+    }
+    if (fd === null) {
+        throw new Error(`Timed out acquiring runtime owner registry lock at ${lockPath}`);
+    }
+    try {
+        return fn();
+    } finally {
+        try {
+            fs.closeSync(fd);
         } catch {
+            // Best-effort close.
+        }
+        try {
+            fs.unlinkSync(lockPath);
+        } catch {
+            // Best-effort unlock.
+        }
+    }
+}
+
+function shouldBreakOwnerLock(lockPath: string): boolean {
+    let ageMs: number;
+    try {
+        ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+    } catch {
+        return false;
+    }
+    if (ageMs < OWNER_LOCK_STALE_MS) {
+        return false;
+    }
+    try {
+        const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        const pid = isRecord(parsed) && typeof parsed.pid === "number" ? parsed.pid : undefined;
+        if (pid === undefined) {
             return ageMs >= OWNER_LOCK_METADATALESS_STALE_MS;
         }
+        return !processExists(pid);
+    } catch {
+        return ageMs >= OWNER_LOCK_METADATALESS_STALE_MS;
     }
 }

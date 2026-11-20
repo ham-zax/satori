@@ -38,6 +38,7 @@ interface CurrentPublicationPointer {
 }
 
 const startupCleanupStateRoots = new Set<string>();
+const LAST_USED_TOUCH_INTERVAL_MS = 10 * 60 * 1000;
 
 export interface PublicationStoreOptions {
     stateRoot?: string;
@@ -85,6 +86,26 @@ export function getSharedPublicationStore(
         throw new Error('Shared Publication runtime must share the Context RootMutationRuntime.');
     }
     return store;
+}
+
+export interface StorageMaintenanceReaderGuard {
+    withGenerationLeaseGuard(canonicalRoot: string, publicationId: string, fn: () => boolean): boolean;
+    withRootLeaseGuard(canonicalRoot: string | null, fn: () => boolean): boolean;
+}
+
+export function createStorageMaintenanceReaderGuard(
+    runtime: SharedPublicationRuntime,
+    rootMutationRuntime: RootMutationRuntime,
+): StorageMaintenanceReaderGuard {
+    const store = getSharedPublicationStore(runtime, rootMutationRuntime);
+    return {
+        withGenerationLeaseGuard(canonicalRoot: string, publicationId: string, fn: () => boolean): boolean {
+            return store.withGenerationMaintenanceReservation(canonicalRoot, publicationId, fn);
+        },
+        withRootLeaseGuard(canonicalRoot: string | null, fn: () => boolean): boolean {
+            return store.withRootMaintenanceReservation(canonicalRoot, fn);
+        },
+    };
 }
 
 function resolveStateRoot(stateRoot?: string): string {
@@ -360,7 +381,9 @@ export class PublicationStore {
     private readonly singleRuntimeReaderCoordination: boolean;
     private readonly readLeasesByRoot = new Map<string, Map<PublicationId, number>>();
     private readonly retiringPublicationIdsByRoot = new Map<string, Set<PublicationId>>();
+    private readonly retiringRoots = new Set<string>();
     private readonly immutableFileCache = new Map<string, { signature: string; value: unknown }>();
+    private readonly lastUsedTouchMs = new Map<string, number>();
 
     constructor(options: PublicationStoreOptions) {
         this.stateRoot = resolveStateRoot(options.stateRoot);
@@ -377,6 +400,58 @@ export class PublicationStore {
 
     usesRootMutationRuntime(runtime: RootMutationRuntime): boolean {
         return this.mutationCoordinator === getRootMutationCoordinator(runtime);
+    }
+
+    withGenerationMaintenanceReservation(
+        root: string,
+        id: PublicationId,
+        fn: () => boolean,
+    ): boolean {
+        if (!this.singleRuntimeReaderCoordination) return false;
+        const canonicalRoot = canonicalizeRoot(root);
+        try {
+            assertPublicationId(id);
+            if (this.readCurrentPointer(canonicalRoot)?.publicationId === id) {
+                return false;
+            }
+        } catch {
+            return false;
+        }
+        if (!this.reserveForGc(canonicalRoot, id)) return false;
+        try {
+            if ((this.readLeasesByRoot.get(canonicalRoot)?.get(id) ?? 0) > 0) {
+                return false;
+            }
+            return fn();
+        } finally {
+            this.releaseGcReservation(canonicalRoot, id);
+        }
+    }
+
+    withRootMaintenanceReservation(
+        root: string | null,
+        fn: () => boolean,
+    ): boolean {
+        if (!this.singleRuntimeReaderCoordination) return false;
+        if (root === null) {
+            return fn();
+        }
+        const canonicalRoot = canonicalizeRoot(root);
+        if ((this.readLeasesByRoot.get(canonicalRoot)?.size ?? 0) > 0) {
+            return false;
+        }
+        if (this.retiringRoots.has(canonicalRoot)) {
+            return false;
+        }
+        this.retiringRoots.add(canonicalRoot);
+        try {
+            if ((this.readLeasesByRoot.get(canonicalRoot)?.size ?? 0) > 0) {
+                return false;
+            }
+            return fn();
+        } finally {
+            this.retiringRoots.delete(canonicalRoot);
+        }
     }
 
     reserveIndexCandidate(
@@ -891,6 +966,7 @@ export class PublicationStore {
             throw error;
         }
 
+        this.recordLastUsedBestEffort(canonicalRoot, true);
         return ref;
     }
 
@@ -1021,6 +1097,39 @@ export class PublicationStore {
                 this.removePendingCollectionDelete(canonicalRoot, ref.id);
             } finally {
                 this.releaseGcReservation(canonicalRoot, ref.id);
+            }
+        }
+
+        // Reclaim retired incompatible generations once current.json no longer
+        // points to them (an active incompatible current stays intact for reindex).
+        for (const retired of this.listIncompatibleRetiredGenerations(canonicalRoot, currentId)) {
+            if (!this.reserveForGc(canonicalRoot, retired.id)) continue;
+            try {
+                const collectionName = retired.collectionName;
+                const collectionStillReferenced = collectionName === null
+                    || protectedCollections.has(collectionName)
+                    || candidateCollections.has(collectionName)
+                    || publications.some((other) => other.publication.vector.collectionName === collectionName);
+                this.mutationCoordinator.publishWhileCurrent(lease, () => {
+                    if (this.readCurrentPointer(canonicalRoot)?.publicationId === retired.id) {
+                        throw new Error(`Publication '${retired.id}' became current during GC.`);
+                    }
+                    if ((this.readLeasesByRoot.get(canonicalRoot)?.get(retired.id) ?? 0) !== 0) {
+                        throw new Error(`Publication '${retired.id}' acquired a read lease during GC.`);
+                    }
+                    if (collectionName !== null && !collectionStillReferenced) {
+                        this.writePendingCollectionDelete(canonicalRoot, retired.id, collectionName);
+                    }
+                    this.removeGeneration(canonicalRoot, retired.id);
+                });
+                if (collectionName !== null && !collectionStillReferenced) {
+                    assertMutationCurrent();
+                    await deleteVectorCollection(collectionName, assertMutationCurrent);
+                    removedCollections.push(collectionName);
+                    this.removePendingCollectionDelete(canonicalRoot, retired.id);
+                }
+            } finally {
+                this.releaseGcReservation(canonicalRoot, retired.id);
             }
         }
         return removedCollections;
@@ -1185,13 +1294,14 @@ export class PublicationStore {
     }
 
     private acquireRef(canonicalRoot: string, ref: PublicationRef): PublicationLease | null {
-        if (this.isRetiring(canonicalRoot, ref.id)) return null;
+        if (this.retiringRoots.has(canonicalRoot) || this.isRetiring(canonicalRoot, ref.id)) return null;
         let leasesById = this.readLeasesByRoot.get(canonicalRoot);
         if (!leasesById) {
             leasesById = new Map();
             this.readLeasesByRoot.set(canonicalRoot, leasesById);
         }
         leasesById.set(ref.id, (leasesById.get(ref.id) ?? 0) + 1);
+        this.recordLastUsedBestEffort(canonicalRoot, false);
         let released = false;
         return {
             ...ref,
@@ -1233,6 +1343,67 @@ export class PublicationStore {
             if (ref) publications.push(ref);
         }
         return publications.sort((left, right) => left.id.localeCompare(right.id));
+    }
+
+    private listIncompatibleRetiredGenerations(
+        canonicalRoot: string,
+        currentId: PublicationId | undefined,
+    ): Array<{ id: PublicationId; collectionName: string | null }> {
+        const generationsRoot = path.join(this.publicationRoot(canonicalRoot), 'generations');
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(generationsRoot, { withFileTypes: true });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+            throw error;
+        }
+        const retired: Array<{ id: PublicationId; collectionName: string | null }> = [];
+        for (const entry of entries) {
+            if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === currentId) continue;
+            assertPublicationId(entry.name);
+            try {
+                this.getByIdCanonical(canonicalRoot, entry.name);
+            } catch (error) {
+                if (!(error instanceof IndexFormatIncompatibleError)) continue;
+                let collectionName: string | null = null;
+                try {
+                    const descriptorPath = path.join(generationsRoot, entry.name, 'publication.json');
+                    const parsed = JSON.parse(fs.readFileSync(descriptorPath, 'utf8')) as unknown;
+                    if (
+                        isRecord(parsed)
+                        && isRecord(parsed.vector)
+                        && typeof parsed.vector.collectionName === 'string'
+                        && parsed.vector.collectionName.length > 0
+                    ) {
+                        collectionName = parsed.vector.collectionName;
+                    }
+                } catch {
+                    // Best-effort collection extraction for incompatible descriptors.
+                }
+                retired.push({ id: entry.name, collectionName });
+            }
+        }
+        return retired.sort((left, right) => left.id.localeCompare(right.id));
+    }
+
+    private recordLastUsedBestEffort(canonicalRoot: string, force: boolean): void {
+        const now = Date.now();
+        const previous = this.lastUsedTouchMs.get(canonicalRoot) ?? 0;
+        if (!force && now - previous < LAST_USED_TOUCH_INTERVAL_MS) return;
+        this.lastUsedTouchMs.set(canonicalRoot, now);
+        const target = path.join(this.publicationRoot(canonicalRoot), 'last-used.json');
+        const tmp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        try {
+            if (!fs.existsSync(this.publicationRoot(canonicalRoot))) return;
+            fs.writeFileSync(
+                tmp,
+                `${JSON.stringify({ version: 1, canonicalRoot, lastUsedAt: new Date(now).toISOString() })}\n`,
+                'utf8',
+            );
+            fs.renameSync(tmp, target);
+        } catch {
+            try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+        }
     }
 
     private reserveForGc(canonicalRoot: string, id: PublicationId): boolean {

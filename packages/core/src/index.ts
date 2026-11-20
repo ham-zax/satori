@@ -96,6 +96,21 @@ export {
     IndexFormatIncompatibleError,
 } from './generation/errors';
 export {
+    DEFAULT_MAX_STORAGE_GIB,
+    DEFAULT_WORKTREE_IDLE_DAYS,
+    inspectSatoriStorage,
+    runPublicationStorageMaintenance,
+} from './generation/storage-maintenance';
+export type {
+    ReclaimRootReason,
+    ReclaimedCollectionRecord,
+    ReclaimedGenerationRecord,
+    ReclaimedRootRecord,
+    StorageBreakdown,
+    StorageMaintenanceOptions,
+    StorageMaintenanceResult,
+} from './generation/storage-maintenance';
+export {
     createLanguageAnalysisService,
 } from './language-analysis/service';
 export {

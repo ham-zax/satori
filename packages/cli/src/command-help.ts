@@ -37,6 +37,15 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
             "satori doctor --verbose",
         ],
     },
+    gc: {
+        usage: ["satori gc [options]"],
+        summary: "Inspect Satori disk usage and reclaim orphaned, retired, or idle index storage.",
+        examples: [
+            "satori gc --dry-run",
+            "satori gc",
+            "satori gc --older-than 14 --max-size 2",
+        ],
+    },
     upgrade: {
         usage: ["satori upgrade"],
         summary: "Update the CLI and its compatible MCP/Core runtime.",

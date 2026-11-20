@@ -23,7 +23,7 @@
     "satori": "dist/index.js"
   },
   "scripts": {
-    "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && node -e \"const fs=require('fs');fs.copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs');fs.copyFileSync('../core/dist/runtime-contract.js','dist/runtime-identities.cjs');fs.copyFileSync('../core/dist/runtime-contract.d.ts','dist/runtime-identities.d.cts')\"",
+    "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && node -e \"const fs=require('fs');fs.copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs');fs.copyFileSync('../core/dist/runtime-contract.js','dist/runtime-identities.cjs');fs.copyFileSync('../core/dist/runtime-contract.d.ts','dist/runtime-identities.d.cts');fs.copyFileSync('../core/dist/generation/storage-maintenance.js','dist/storage-maintenance.cjs');fs.copyFileSync('../core/dist/generation/storage-maintenance.d.ts','dist/storage-maintenance.d.cts')\"",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
     "lint": "oxlint --config ../../.oxlintrc.json src",
@@ -79,6 +79,8 @@
     "dist/**/*.d.ts",
     "dist/runtime-identities.cjs",
     "dist/runtime-identities.d.cts",
+    "dist/storage-maintenance.cjs",
+    "dist/storage-maintenance.d.cts",
     "README.md",
     "assets/skills/**/SKILL.md",
     "!dist/**/*.test.*"

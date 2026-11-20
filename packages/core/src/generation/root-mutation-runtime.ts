@@ -467,6 +467,64 @@ function requireCurrentLeaseForRoot(runtime: RootMutationRuntime, root: string):
     return lease;
 }
 
+export interface RootMutationLeasePort {
+    isRootMutationActive(canonicalRoot: string, rootKey: string): boolean;
+    hasAnyActiveOrUnverifiableLease(): boolean;
+    runWithRootMutationLease(canonicalRoot: string, rootKey: string, fn: () => boolean): boolean;
+}
+
+export function createRootMutationLeasePort(
+    source: RootMutationRuntime | { stateDir: string },
+): RootMutationLeasePort {
+    const coordinator = source instanceof RootMutationRuntime
+        ? requireCoordinator(source)
+        : new MutationLeaseCoordinator({ stateDir: source.stateDir });
+    return Object.freeze({
+        isRootMutationActive(canonicalRoot: string, rootKey: string): boolean {
+            try {
+                if (canonicalRoot.length > 0 && coordinator.getActiveLease(canonicalRoot) !== undefined) {
+                    return true;
+                }
+                return coordinator.hasActiveOrUnverifiableLeaseForRootKey(rootKey);
+            } catch {
+                return true;
+            }
+        },
+        hasAnyActiveOrUnverifiableLease(): boolean {
+            return coordinator.hasAnyActiveOrUnverifiableLease();
+        },
+        runWithRootMutationLease(canonicalRoot: string, rootKey: string, fn: () => boolean): boolean {
+            if (canonicalRoot.length === 0) {
+                try {
+                    return coordinator.withRootKeyLock(rootKey, () => (
+                        !coordinator.hasActiveOrUnverifiableLeaseStateForRootKey(rootKey) && fn()
+                    ));
+                } catch {
+                    return false;
+                }
+            }
+            let acquired: ReturnType<MutationLeaseCoordinator['acquire']>;
+            try {
+                acquired = coordinator.acquire(canonicalRoot, 'gc');
+            } catch {
+                return false;
+            }
+            if (!acquired.acquired) {
+                return false;
+            }
+            try {
+                return fn();
+            } finally {
+                try {
+                    coordinator.release(acquired.lease);
+                } catch {
+                    // Best-effort release; dead owner cleanup handles orphaned leases.
+                }
+            }
+        },
+    });
+}
+
 /** Internal Core-only accessors. Do not re-export from a package entrypoint. */
 export function getRootMutationCoordinator(runtime: RootMutationRuntime): MutationLeaseCoordinator {
     return requireCoordinator(runtime);

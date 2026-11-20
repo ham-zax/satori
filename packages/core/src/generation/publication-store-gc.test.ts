@@ -115,3 +115,49 @@ test('GC drops a recorded delete without deleting a collection that is reference
     assert.deepEqual(removed, ['old-collection']);
     assert.deepEqual(deleted, ['old-collection'], 'the stale record adds no second delete');
 });
+
+test('GC reclaims a superseded incompatible generation and drops its vector collection', async (t) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-publication-gc-incompat-'));
+    t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+    const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, 'repo-')));
+    const stateRoot = path.join(tempRoot, 'state');
+    const runtime = new RootMutationRuntime({ stateDir: path.join(tempRoot, 'mutations') });
+    const store = new PublicationStore({
+        stateRoot,
+        mutationCoordinator: getRootMutationCoordinator(runtime),
+        singleRuntimeReaderCoordination: true,
+    });
+    await runtime.run(repoRoot, 'create', async () => {
+        const lease = getCurrentRootMutationLease(runtime, repoRoot);
+        store.stageSourceCheckpoint(repoRoot, 'current-v2', buildPublicationSourceCheckpoint(repoRoot, {
+            fileHashes: new Map(), fileStats: new Map(), unprocessedPaths: [],
+        }), lease);
+        store.stagePackageOwnership(repoRoot, 'current-v2', buildPublicationPackageOwnership(repoRoot, [], new Map()), lease);
+        store.activate(publication(repoRoot, 'current-v2'), lease);
+    });
+
+    const pubRoots = fs.readdirSync(path.join(stateRoot, 'publications'));
+    assert.equal(pubRoots.length, 1);
+    const incompatGenDir = path.join(stateRoot, 'publications', pubRoots[0]!, 'generations', 'legacy-v1');
+    fs.mkdirSync(incompatGenDir, { recursive: true });
+    fs.writeFileSync(
+        path.join(incompatGenDir, 'publication.json'),
+        JSON.stringify({
+            version: 1,
+            id: 'legacy-v1',
+            canonicalRoot: repoRoot,
+            vector: { collectionName: 'legacy-v1-collection' },
+        }),
+    );
+
+    const deleted: string[] = [];
+    const removed = await runtime.run(repoRoot, 'gc', async () => store.collectGarbage(
+        repoRoot,
+        getCurrentRootMutationLease(runtime, repoRoot),
+        async (name) => { deleted.push(name); },
+    ));
+    assert.deepEqual(removed, ['legacy-v1-collection']);
+    assert.deepEqual(deleted, ['legacy-v1-collection']);
+    assert.equal(fs.existsSync(incompatGenDir), false);
+    assert.equal(store.getCurrent(repoRoot)?.id, 'current-v2');
+});

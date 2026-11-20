@@ -20,6 +20,7 @@ export type HelpTopic =
     | "install"
     | "uninstall"
     | "doctor"
+    | "gc"
     | "upgrade"
     | "terminate"
     | "reranker"
@@ -31,6 +32,7 @@ export type ParsedCommand =
     | { kind: "help"; topic?: HelpTopic }
     | { kind: "version" }
     | { kind: "doctor"; json: boolean; verbose: boolean }
+    | { kind: "gc"; dryRun: boolean; olderThanDays?: number; worktreeDays?: number; maxSizeGib?: number }
     | { kind: "upgrade" }
     | { kind: "terminate" }
     | { kind: "reranker"; operation: RerankerOperation; provider?: InstallReranker; model?: string; noVerify?: boolean; purge: boolean }
@@ -122,6 +124,12 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
         { flag: "--verbose", description: "Include paths, every check, and local diagnostics" },
         { flag: "--json", description: "Print the machine-readable result (same as --format json)" },
     ],
+    gc: [
+        { flag: "--dry-run", description: "Report storage breakdown and reclaimable items without deleting" },
+        { flag: "--older-than", value: "days", description: "Evict idle repository publications unused for at least this many days" },
+        { flag: "--worktree-days", value: "days", description: "Evict idle Git worktree publications older than this many days (default: 3; 0 disables)" },
+        { flag: "--max-size", value: "gib", description: "Enforce an LRU storage budget in GiB for indexed data (default: 4; 0 disables)" },
+    ],
     upgrade: [],
     terminate: [],
     reranker: [
@@ -141,6 +149,7 @@ const HELP_TOPIC_BY_COMMAND: Readonly<Record<string, HelpTopic>> = {
     install: "install",
     uninstall: "uninstall",
     doctor: "doctor",
+    gc: "gc",
     upgrade: "upgrade",
     terminate: "terminate",
     reranker: "reranker",
@@ -155,6 +164,7 @@ const RESERVED_SUBCOMMANDS = new Set([
     "help",
     "version",
     "doctor",
+    "gc",
     "install",
     "uninstall",
     "upgrade",
@@ -606,6 +616,60 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         return {
             globals,
             command: { kind: "reranker", operation: "use", provider, ...(model ? { model } : {}), ...(noVerify ? { noVerify: true } : {}), purge: false },
+        };
+    }
+
+    if (rest[0] === "gc") {
+        let dryRun = false;
+        let olderThanDays: number | undefined;
+        let worktreeDays: number | undefined;
+        let maxSizeGib: number | undefined;
+        for (let i = 1; i < rest.length; i += 1) {
+            const token = rest[i];
+            if (token === "--dry-run") {
+                dryRun = true;
+                continue;
+            }
+            if (token === "--older-than") {
+                const raw = rest[i + 1];
+                if (!raw) throw new CliError("E_USAGE", "Missing value for --older-than.", 2);
+                olderThanDays = parsePositiveInteger(raw, "--older-than");
+                i += 1;
+                continue;
+            }
+            if (token === "--worktree-days") {
+                const raw = rest[i + 1];
+                if (raw === undefined || raw === "") throw new CliError("E_USAGE", "Missing value for --worktree-days.", 2);
+                const parsed = Number.parseInt(raw, 10);
+                if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== raw.trim()) {
+                    throw new CliError("E_USAGE", "--worktree-days must be a non-negative integer.", 2);
+                }
+                worktreeDays = parsed;
+                i += 1;
+                continue;
+            }
+            if (token === "--max-size") {
+                const raw = rest[i + 1];
+                if (raw === undefined || raw === "") throw new CliError("E_USAGE", "Missing value for --max-size.", 2);
+                const parsed = Number(raw);
+                if (!Number.isFinite(parsed) || parsed < 0) {
+                    throw new CliError("E_USAGE", "--max-size must be a non-negative number (GiB).", 2);
+                }
+                maxSizeGib = parsed;
+                i += 1;
+                continue;
+            }
+            throw new CliError("E_USAGE", `Unknown argument for gc: ${token}`, 2);
+        }
+        return {
+            globals,
+            command: {
+                kind: "gc",
+                dryRun,
+                ...(olderThanDays !== undefined ? { olderThanDays } : {}),
+                ...(worktreeDays !== undefined ? { worktreeDays } : {}),
+                ...(maxSizeGib !== undefined ? { maxSizeGib } : {}),
+            },
         };
     }
 

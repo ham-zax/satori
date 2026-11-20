@@ -7,7 +7,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSourceMeasurementOperation } from "@satori-code/core";
-import { resolveRuntimeOwnerStateDir } from "@satori-code/core/integration";
+import {
+    createRootMutationLeasePort,
+    createStorageMaintenanceReaderGuard,
+    resolveRuntimeOwnerStateDir,
+} from "@satori-code/core/integration";
+import {
+    DEFAULT_MAX_STORAGE_GIB,
+    DEFAULT_WORKTREE_IDLE_DAYS,
+    runPublicationStorageMaintenance,
+} from "@satori-code/core/storage-maintenance";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 import { CapabilityResolver } from "../core/capabilities.js";
 import {
@@ -217,6 +226,7 @@ export class SharedRuntimeHost {
     private readonly readFileMaxLines: number;
     private readonly readFileMaxBytes: number;
     private readonly watchSyncEnabled: boolean;
+    private readonly runtimeOwnerRegistered: boolean = false;
     private activeSessions = 0;
     private activeOperations = 0;
     private readonly detachedMutationCompletions = new Set<Promise<void>>();
@@ -249,14 +259,18 @@ export class SharedRuntimeHost {
         });
         try {
             this.runtimeOwnerRegistry.registerCurrentOwner();
+            this.runtimeOwnerRegistered = true;
         } catch (error: unknown) {
+            if (this.runtimeOwnerRegistry.isMaintenanceLocked()) throw error;
             console.warn(
                 "[RUNTIME-OWNER] Failed to register current Satori runtime owner; "
                 + `index mutations will fail closed until the owner registry is writable: ${errorMessage(error)}`,
             );
         }
 
-        this.mutationRuntime = new RootMutationRuntime();
+        this.mutationRuntime = new RootMutationRuntime({
+            stateDir: path.join(config.stateRoot, "runtime", "mutation-leases"),
+        });
         this.publicationRuntime = createSharedPublicationRuntime(this.mutationRuntime, {
             stateRoot: config.stateRoot,
         });
@@ -291,6 +305,95 @@ export class SharedRuntimeHost {
             syncWorkerStandby: this.providerRuntime.externalSyncWorkerStandby,
         });
 
+        if ((runMode === "mcp" || runMode === "host") && config.vectorStoreProvider === "LanceDB") {
+            this.scheduleStartupStorageMaintenance();
+        }
+    }
+
+    private scheduleStartupStorageMaintenance(): void {
+        const task = Promise.resolve().then(() => {
+            if (this.shutdownStarted) return;
+            const parseNonNegativeNumber = (raw: string | undefined, fallback: number): number => {
+                if (raw === undefined || raw.trim() === "") return fallback;
+                const parsed = Number(raw);
+                return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+            };
+            const parseOptionalPositiveNumber = (raw: string | undefined): number | undefined => {
+                if (raw === undefined || raw.trim() === "") return undefined;
+                const parsed = Number(raw);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+            };
+            const worktreeIdleDays = parseNonNegativeNumber(
+                process.env.SATORI_WORKTREE_IDLE_DAYS,
+                DEFAULT_WORKTREE_IDLE_DAYS,
+            );
+            const idleDays = parseOptionalPositiveNumber(process.env.SATORI_MAX_IDLE_DAYS);
+            const maxStorageGib = parseNonNegativeNumber(
+                process.env.SATORI_MAX_STORAGE_GIB,
+                DEFAULT_MAX_STORAGE_GIB,
+            );
+            const defaultStateRoot = path.resolve(os.homedir(), ".satori");
+            const defaultLanceDbPath = path.resolve(os.homedir(), ".satori", "vector", "lancedb");
+            const configuredLanceDbPath = this.config.lanceDbPath ? path.resolve(this.config.lanceDbPath) : undefined;
+            const vectorDbPath = configuredLanceDbPath === undefined
+                ? null
+                : (
+                    path.resolve(this.config.stateRoot) !== defaultStateRoot
+                    && configuredLanceDbPath === defaultLanceDbPath
+                    && process.env.LANCEDB_PATH?.trim() !== configuredLanceDbPath
+                )
+                    ? null
+                    : configuredLanceDbPath;
+            const leasePort = createRootMutationLeasePort(this.mutationRuntime);
+            const readerGuard = createStorageMaintenanceReaderGuard(this.publicationRuntime, this.mutationRuntime);
+            const runMaintenance = () => runPublicationStorageMaintenance({
+                stateRoot: this.config.stateRoot,
+                soleOwner: true,
+                vectorStoreProvider: this.config.vectorStoreProvider,
+                vectorDbPath,
+                worktreeIdleDays,
+                idleDays,
+                maxStorageBytes: Math.round(maxStorageGib * (1024 ** 3)),
+                isRootMutationActive: (canonicalRoot, rootKey) => (
+                    leasePort.isRootMutationActive(canonicalRoot, rootKey)
+                    || (canonicalRoot.length > 0 && Boolean(this.mutationRuntime.getActiveMutation(canonicalRoot)))
+                ),
+                hasAnyActiveOrUnverifiableLease: () => leasePort.hasAnyActiveOrUnverifiableLease(),
+                runWithRootMutationLease: (canonicalRoot, rootKey, fn) => (
+                    leasePort.runWithRootMutationLease(canonicalRoot, rootKey, fn)
+                ),
+                withGenerationLeaseGuard: (canonicalRoot, generationId, fn) => (
+                    readerGuard.withGenerationLeaseGuard(canonicalRoot, generationId, fn)
+                ),
+                withRootLeaseGuard: (canonicalRoot, fn) => (
+                    readerGuard.withRootLeaseGuard(canonicalRoot, fn)
+                ),
+            });
+            let result: ReturnType<typeof runPublicationStorageMaintenance> | undefined;
+            if (this.runtimeOwnerRegistered) {
+                this.runtimeOwnerRegistry.withSoleRegisteredOwnerLock(() => {
+                    if (!this.shutdownStarted) result = runMaintenance();
+                });
+            }
+            if (!result) return;
+            const soleOwner = result.soleOwner;
+            if (
+                result.reclaimedBytes > 0
+                || result.removedRoots.length > 0
+                || result.removedRetiredGenerations.length > 0
+                || result.removedOrphanCollections.length > 0
+            ) {
+                const mib = (result.reclaimedBytes / (1024 * 1024)).toFixed(1);
+                console.log(
+                    `[STORAGE-GC] Reclaimed ${mib} MiB (roots=${result.removedRoots.length}, `
+                    + `retiredGenerations=${result.removedRetiredGenerations.length}, `
+                    + `orphanCollections=${result.removedOrphanCollections.length}, soleOwner=${soleOwner}).`,
+                );
+            }
+        }).catch((error: unknown) => {
+            console.warn(`[STORAGE-GC] Startup storage maintenance failed: ${errorMessage(error)}`);
+        });
+        this.ownDetachedMutationCompletion(task);
     }
 
     createSession(

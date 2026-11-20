@@ -69,6 +69,12 @@ import {
     type TerminateOptions,
     type TerminateResult,
 } from "./terminate.js";
+import {
+    formatGcText,
+    runGcCommand,
+    type GcCommandOptions,
+    type GcResult,
+} from "./gc.js";
 import { sanitizeTerminalText } from "./terminal-sanitize.js";
 
 interface RunCliOptions {
@@ -123,6 +129,7 @@ interface RunCliOptions {
     globalCliUpgradeRunner?: (input: GlobalCliUpgradeInput) => number | Promise<number>;
     invokedScriptPath?: string;
     terminateRunner?: (options: TerminateOptions) => Promise<TerminateResult>;
+    gcRunner?: (options: GcCommandOptions) => Promise<GcResult>;
     connectSession?: (options: {
         command: string;
         args: string[];
@@ -413,6 +420,7 @@ function buildHelpPayload() {
             "reranker use <provider> [--model <name>] [--no-verify]|enable|disable|status [--purge] (select and inspect the reranker for the installed runtime)",
             "uninstall [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
+            "gc [--dry-run] [--older-than <days>] [--worktree-days <days>] [--max-size <gib>]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
             "tool call <toolName> --args-file <path>",
@@ -453,6 +461,7 @@ function formatHelpText(): string {
         "  terminate     Stop all running Satori MCP servers",
         "  reranker      Select or show reranking for the installed runtime",
         "  doctor        Check installation, runtime, and client configuration",
+        "  gc            Inspect Satori disk usage and reclaim orphaned or idle index storage",
         "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",
         "  tools list    List the available MCP tools (JSON by default; --format text for summary)",
         "  tool call     Call an MCP tool from the terminal",
@@ -710,6 +719,24 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 emitDoctorText(writers, result, { verbose: parsed.command.verbose });
             }
             return result.status === "error" ? 1 : 0;
+        }
+
+        if (parsed.command.kind === "gc") {
+            const result = await (options.gcRunner ?? runGcCommand)({
+                homeDir,
+                env: effectiveEnv,
+                dryRun: parsed.command.dryRun,
+                olderThanDays: parsed.command.olderThanDays,
+                worktreeDays: parsed.command.worktreeDays,
+                maxSizeGib: parsed.command.maxSizeGib,
+                nowMs: options.nowMs?.(),
+            });
+            if (parsed.globals.formatExplicit && parsed.globals.format === "json") {
+                emitJson(writers, result);
+            } else {
+                writers.writeStdout(formatGcText(result));
+            }
+            return 0;
         }
 
         if (parsed.command.kind === "upgrade") {

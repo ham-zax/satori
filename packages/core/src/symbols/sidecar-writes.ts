@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import {
     RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION,
@@ -33,6 +34,7 @@ import type {
 } from '../relationships/resolution';
 import {
     RELATIONSHIPS_DIR_NAME,
+    SHARD_GZIP_THRESHOLD_BYTES,
     SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION,
     SYMBOLS_DIR_NAME,
     buildSymbolIndex,
@@ -139,6 +141,19 @@ async function writeJson(filePath: string, value: unknown, timing?: SidecarWrite
 async function writeSerializedJson(filePath: string, serialized: string, timing?: SidecarWriteTiming): Promise<void> {
     const startedAt = timing ? performance.now() : 0;
     await fs.promises.writeFile(filePath, serialized, 'utf8');
+    if (timing) {
+        timing.writeMs += performance.now() - startedAt;
+        timing.writeCount++;
+    }
+}
+
+async function writeSerializedShard(filePath: string, serialized: string, timing?: SidecarWriteTiming): Promise<void> {
+    const raw = Buffer.from(serialized, 'utf8');
+    const payload = raw.length >= SHARD_GZIP_THRESHOLD_BYTES
+        ? zlib.gzipSync(raw, { level: 4 })
+        : raw;
+    const startedAt = timing ? performance.now() : 0;
+    await fs.promises.writeFile(filePath, payload);
     if (timing) {
         timing.writeMs += performance.now() - startedAt;
         timing.writeCount++;
@@ -314,7 +329,7 @@ async function writeSymbolRegistrySidecarInternal(
                         language: file.language,
                         symbols,
                     };
-                    await writeSerializedJson(targetPath, timedSerialize(shard, timing, true), timing);
+                    await writeSerializedShard(targetPath, timedSerialize(shard, timing, true), timing);
                 }
             }));
         }
@@ -688,7 +703,7 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                await writeSerializedJson(targetPath, timedSerialize(shard, timing, true), timing);
+                await writeSerializedShard(targetPath, timedSerialize(shard, timing, true), timing);
                 return {
                     path: filePath,
                     hash: fileHash,

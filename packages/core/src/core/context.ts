@@ -16,6 +16,7 @@ import {
     type VectorStoreProviderIdentity,
 } from '../vectordb';
 import { LANCEDB_LEXICAL_ANALYZER_VERSION } from '../vectordb/lancedb-lexical-analyzer';
+import { NAVIGATION_SHARD_ENCODING } from '../symbols/sidecar-reads';
 import {
     SemanticSearchRequest,
     SemanticSearchResult,
@@ -1032,6 +1033,7 @@ export class Context {
                 lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
                 ...(lexicalAnalyzerVersion !== undefined ? { lexicalAnalyzerVersion } : {}),
                 packageOwnershipVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+                navigationShardEncoding: NAVIGATION_SHARD_ENCODING,
             }),
             embeddingIdentity: JSON.stringify({
                 provider: embeddingIdentity.provider,

@@ -287,3 +287,56 @@ test('relationship shard staging settles every started writer before it reports 
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('large navigation shards are gzip-compressed on disk and corrupt gzip shards report corrupt', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-gzip-shard-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const publicationId = 'fixture-gzip';
+    const navigationRoot = path.join(root, publicationId, 'navigation');
+    const symbolRegistryManifestHash = 'fixture-symbol-hash';
+
+    const records = Array.from({ length: 40 }, (_, idx) => ({
+        sourceKey: `big.ts#caller_${idx}`,
+        targetKey: `big.ts#callee_${idx}`,
+        type: 'CALLS' as const,
+        file: 'big.ts',
+        confidence: 'high' as const,
+    }));
+    await writeRelationshipSidecar({
+        normalizedRootPath: root,
+        navigationRoot,
+        symbolRegistryManifestHash,
+        relationshipVersion: 'fixture-version',
+        builtAt: new Date(0).toISOString(),
+        records,
+        files: [
+            { path: 'big.ts', hash: 'hash-big', language: 'typescript', symbolCount: 40, definitionStatus: 'definitions_present' },
+        ],
+    });
+
+    const shardPath = path.join(navigationRoot, 'relationships', 'by-file', fileShardName('big.ts', 'hash-big'));
+    const raw = fs.readFileSync(shardPath);
+    assert.equal(raw[0], 0x1f, 'large shard begins with gzip magic byte 0');
+    assert.equal(raw[1], 0x8b, 'large shard begins with gzip magic byte 1');
+
+    const okRead = await readRelationshipSidecar({
+        normalizedRootPath: root,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        navigationRoot,
+        publicationId,
+    });
+    assert.equal(okRead.status, 'ok');
+    if (okRead.status === 'ok') {
+        assert.equal(okRead.records.length, 40);
+    }
+
+    // Corrupt gzip payload must be classified as corrupt rather than throwing.
+    fs.writeFileSync(shardPath, Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xff, 0xff]));
+    const corruptRead = await readRelationshipSidecar({
+        normalizedRootPath: root,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        navigationRoot,
+        publicationId,
+    });
+    assert.equal(corruptRead.status, 'corrupt');
+});

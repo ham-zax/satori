@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {
     RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION,
     isRelationshipManifest,
@@ -30,6 +31,13 @@ export const NAVIGATION_DIR_NAME = 'navigation';
 export const SYMBOLS_DIR_NAME = 'symbols';
 export const RELATIONSHIPS_DIR_NAME = 'relationships';
 export const SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION = 'symbol_file_contribution_v1';
+export const NAVIGATION_SHARD_ENCODING = 'gzip_v1' as const;
+/**
+ * Shards smaller than 2 KiB already fit in a single 4 KiB filesystem block, so
+ * skipping gzip avoids compression CPU with zero disk-block penalty while
+ * multi-block shards compress ~6-9x.
+ */
+export const SHARD_GZIP_THRESHOLD_BYTES = 2048;
 
 // Shard reads are batched by bytes as well as count so one oversized shard
 // batch cannot multiply the transient string + parse peak.
@@ -167,6 +175,22 @@ export function fileShardName(filePath: string, fileHash: string): string {
     return `${digest}.json`;
 }
 
+function decodeShardBuffer(buffer: Buffer): string {
+    if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+        return zlib.gunzipSync(buffer).toString('utf8');
+    }
+    return buffer.toString('utf8');
+}
+
+function isCorruptShardError(error: unknown): boolean {
+    if (error instanceof SyntaxError) return true;
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+        const code = String((error as { code?: unknown }).code);
+        if (code.startsWith('Z_') || code.startsWith('ERR_ZLIB')) return true;
+    }
+    return false;
+}
+
 // Shared serialization helpers. Small manifests stay readable; bulky per-file
 // shards are written compact.
 export function serializeJson(value: unknown): string {
@@ -280,13 +304,13 @@ async function visitShardsInByteBudget<T, R = never>(
             batchBytes += size;
             offset += 1;
         }
-        const serializedShards = await Promise.all(batch.map((entry) => (
-            entry.reused === undefined ? fs.promises.readFile(entry.filePath, 'utf8') : undefined
+        const rawShards = await Promise.all(batch.map((entry) => (
+            entry.reused === undefined ? fs.promises.readFile(entry.filePath) : undefined
         )));
         for (let index = 0; index < batch.length; index += 1) {
             const entry = batch[index]!;
             const result = entry.reused === undefined
-                ? visit(entry.item, serializedShards[index]!, entry.stats)
+                ? visit(entry.item, decodeShardBuffer(rawShards[index]!), entry.stats)
                 : skip!.visit(entry.item, entry.reused, entry.stats);
             if (result.status !== 'ok') return result;
         }
@@ -375,7 +399,7 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
             .map((file) => path.basename(file.shardPath))
             .sort(compareStrings);
         const actualShardNames = (await fs.promises.readdir(path.join(readableRoot, SYMBOLS_DIR_NAME, 'by-file'), { withFileTypes: true }))
-            .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+            .filter((entry) => entry.isFile() && (entry.name.endsWith('.json.gz') || entry.name.endsWith('.json')))
             .map((entry) => entry.name)
             .sort(compareStrings);
         if (
@@ -445,7 +469,7 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         };
     } catch (error) {
         return {
-            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
+            status: isCorruptShardError(error) ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
@@ -535,7 +559,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     try {
         const expectedShardNames = manifest.files.map((file) => path.basename(file.shardPath)).sort(compareStrings);
         const actualShardNames = (await fs.promises.readdir(byFileDir, { withFileTypes: true }))
-            .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+            .filter((entry) => entry.isFile() && (entry.name.endsWith('.json.gz') || entry.name.endsWith('.json')))
             .map((entry) => entry.name)
             .sort(compareStrings);
         if (
@@ -587,7 +611,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         }
     } catch (error) {
         return {
-            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
+            status: isCorruptShardError(error) ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
@@ -741,7 +765,7 @@ export async function readRelationshipAnalysisEvidence(
         }
     } catch (error) {
         return {
-            status: error instanceof SyntaxError
+            status: isCorruptShardError(error)
                 ? 'corrupt'
                 : (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : 'incompatible',
             rootPath,

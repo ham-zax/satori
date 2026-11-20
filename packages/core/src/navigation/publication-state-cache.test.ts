@@ -73,3 +73,25 @@ test('idle state is released after the idle window', async () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     assert.equal(cache.has('/repo', 'a'), false);
 });
+
+test('memory pressure trims resident roots to maxRootsUnderPressure', async () => {
+    let available = 4 * 1024 * 1024 * 1024;
+    const cache = new PublicationStateCache<string>({
+        maxRoots: 3,
+        idleMs: 0,
+        maxRootsUnderPressure: 1,
+        lowMemoryThresholdBytes: 2 * 1024 * 1024 * 1024,
+        availableMemoryBytes: () => available,
+    });
+    const load = async () => 'ok';
+    await cache.get('/a', 'p', load, retainOk);
+    await cache.get('/b', 'p', load, retainOk);
+    assert.equal(cache.size, 2);
+
+    available = 1024 * 1024 * 1024;
+    await cache.get('/c', 'p', load, retainOk);
+    assert.equal(cache.size, 1);
+    assert.equal(cache.has('/c', 'p'), true);
+    assert.equal(cache.has('/a', 'p'), false);
+    assert.equal(cache.has('/b', 'p'), false);
+});

@@ -213,3 +213,46 @@ test('take rejects a standby that exited on its own', async () => fixture(async 
     await waitFor(() => absent(pids()[0]), 'exited standby');
     assert.equal(standby.take('a'), undefined);
 }));
+
+test('standby retires automatically after idleMs and skips spawn under low memory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-standby-ram-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const pidFile = path.join(root, 'pids');
+    fs.writeFileSync(workerPath, `
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n');
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', message => {
+    if (message.type === 'mutation_worker_cancel') process.exit(0);
+});
+setInterval(() => {}, 50);
+`);
+    const pids = () => fs.existsSync(pidFile)
+        ? fs.readFileSync(pidFile, 'utf8').trim().split('\n').filter(Boolean).map(Number)
+        : [];
+    let available = 512 * 1024 * 1024;
+    const standby = new SyncWorkerStandby({
+        workerPath,
+        idleMs: 120,
+        minAvailableMemoryBytes: 1024 * 1024 * 1024,
+        availableMemoryBytes: () => available,
+    });
+    try {
+        // Low memory prevents pre-spawning.
+        standby.prepare('low');
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        assert.equal(pids().length, 0);
+
+        // Once headroom is available, standby spawns and then retires after idleMs.
+        available = 4 * 1024 * 1024 * 1024;
+        standby.prepare('idle-root');
+        await waitFor(() => pids().length === 1, 'standby spawn');
+        const [pid] = pids();
+        await waitFor(() => absent(pid), 'idle standby exit');
+        assert.equal(standby.take('idle-root'), undefined);
+    } finally {
+        await standby.close();
+        for (const pid of pids()) await waitFor(() => absent(pid), `group ${pid} to exit`);
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

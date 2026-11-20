@@ -54,10 +54,37 @@ import {
 // add: 42 s and a full 1 GiB cache; at 16,384 rows: 9 s and 1 MiB). The
 // indexing resource plan bounds the logical write size by memory.
 const DEFAULT_MAX_WRITE_BATCH_SIZE = 16_384;
-// LanceDB's default metadata cache is 1 GiB per session. Manifests of old
-// versions are not needed after a write; the index cache keeps its default
-// because search reads the FTS index through it.
+// LanceDB's default caches are 6 GiB (index) + 1 GiB (metadata) per session.
+// Cap both explicitly: metadata stays at 128 MiB, while the index cache scales
+// with available memory (64-512 MiB by default, overridable via
+// SATORI_LANCEDB_INDEX_CACHE_MB) so idle/multi-repo hosts never balloon into swap.
 const METADATA_CACHE_BYTES = 128n * 1024n * 1024n;
+const MIN_INDEX_CACHE_BYTES = 64n * 1024n * 1024n;
+const MAX_INDEX_CACHE_BYTES = 512n * 1024n * 1024n;
+const MIB_BIGINT = 1024n * 1024n;
+
+export function resolveLanceDbIndexCacheBytes(
+    availableMemoryBytes?: number,
+    env: NodeJS.ProcessEnv = process.env,
+): bigint {
+    const rawOverride = env.SATORI_LANCEDB_INDEX_CACHE_MB?.trim();
+    if (rawOverride) {
+        const parsedMb = Number.parseInt(rawOverride, 10);
+        if (Number.isSafeInteger(parsedMb) && parsedMb > 0 && String(parsedMb) === rawOverride) {
+            return BigInt(parsedMb) * MIB_BIGINT;
+        }
+    }
+    const available = availableMemoryBytes ?? (
+        typeof process.availableMemory === 'function' ? process.availableMemory() : 0
+    );
+    if (!Number.isFinite(available) || available <= 0) {
+        return MIN_INDEX_CACHE_BYTES;
+    }
+    const scaled = BigInt(Math.floor(available * 0.08));
+    if (scaled < MIN_INDEX_CACHE_BYTES) return MIN_INDEX_CACHE_BYTES;
+    if (scaled > MAX_INDEX_CACHE_BYTES) return MAX_INDEX_CACHE_BYTES;
+    return scaled;
+}
 const STABLE_TIE_INITIAL_MULTIPLIER = 2;
 const STABLE_TIE_MINIMUM_FETCH = 32;
 /**
@@ -273,6 +300,10 @@ export interface LanceDbConfig {
     databasePath: string;
     /** Bounds each physical merge without changing the logical write. */
     maxWriteBatchSize?: number;
+    /** Explicit LanceDB index cache ceiling in bytes (defaults to RAM-scaled 64-512 MiB). */
+    indexCacheSizeBytes?: number | bigint;
+    /** Explicit LanceDB metadata cache ceiling in bytes (defaults to 128 MiB). */
+    metadataCacheSizeBytes?: number | bigint;
 }
 
 function assertCollectionName(collectionName: string): void {
@@ -472,6 +503,8 @@ async function withTable<T>(
 export class LanceDbVectorDatabase implements VectorDatabase {
     private readonly databasePath: string;
     private readonly maxWriteBatchSize: number;
+    private readonly indexCacheSizeBytes: bigint;
+    private readonly metadataCacheSizeBytes: bigint;
     private connectionPromise: Promise<Connection> | null = null;
     private closed = false;
     // Tables this adapter created with a deferred index build and has not yet
@@ -497,6 +530,12 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         }
         this.databasePath = path.resolve(config.databasePath);
         this.maxWriteBatchSize = maxWriteBatchSize;
+        this.indexCacheSizeBytes = config.indexCacheSizeBytes !== undefined
+            ? BigInt(config.indexCacheSizeBytes)
+            : resolveLanceDbIndexCacheBytes();
+        this.metadataCacheSizeBytes = config.metadataCacheSizeBytes !== undefined
+            ? BigInt(config.metadataCacheSizeBytes)
+            : METADATA_CACHE_BYTES;
     }
 
     private getConnection(): Promise<Connection> {
@@ -504,7 +543,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         if (!this.connectionPromise) {
             this.connectionPromise = connect(this.databasePath, {
                 readConsistencyInterval: 0,
-                session: new Session(null, METADATA_CACHE_BYTES),
+                session: new Session(this.indexCacheSizeBytes, this.metadataCacheSizeBytes),
             })
                 .catch((error) => {
                     this.connectionPromise = null;

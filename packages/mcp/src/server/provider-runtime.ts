@@ -305,7 +305,10 @@ export class ProviderRuntime {
     private readonly indexMaintenanceCoordinator: IndexMaintenanceCoordinator;
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
+    private sharedVectorBackendKey: string | null = null;
+    private sharedVectorBackendPromise: Promise<VectorDatabase> | null = null;
     private activeContexts: ToolContext[] = [];
+    private readonly activeVectorBackends = new Set<VectorDatabase>();
     private readonly activeEmbeddings = new Set<Embedding>();
     private readonly activeRerankers = new Set<Reranker>();
     private readonly detachedMutationCompletions = new Set<Promise<void>>();
@@ -509,7 +512,7 @@ export class ProviderRuntime {
         let reranker: Reranker | null = null;
         let toolHandlers: ToolHandlers | null = null;
         try {
-            vectorDatabase = await this.createVectorBackend(bootstrap);
+            vectorDatabase = await this.acquireSharedVectorBackend(bootstrap);
             context = new Context({
                 embedding,
                 vectorDatabase,
@@ -592,6 +595,7 @@ export class ProviderRuntime {
                 // immutable per-session workspace policy.
                 workspacePolicy: UNBOUND_WORKSPACE_POLICY,
             };
+            this.activeVectorBackends.add(vectorDatabase);
             this.activeEmbeddings.add(embedding);
             if (reranker) this.activeRerankers.add(reranker);
             this.activeContexts.push(toolContext);
@@ -609,7 +613,11 @@ export class ProviderRuntime {
             };
             await cleanup(() => syncManager?.stopAndDrainLifecycle());
             await cleanup(() => toolHandlers?.releaseSearchContinuationOwnership());
-            await cleanup(() => vectorDatabase?.close?.());
+            if (vectorDatabase && !this.activeVectorBackends.has(vectorDatabase)) {
+                this.sharedVectorBackendPromise = null;
+                this.sharedVectorBackendKey = null;
+                await cleanup(() => vectorDatabase?.close?.());
+            }
             await cleanup(() => context?.dispose());
             await cleanup(() => reranker?.close?.());
             await cleanup(() => embedding.close());
@@ -689,6 +697,25 @@ export class ProviderRuntime {
         return embedding;
     }
 
+    private acquireSharedVectorBackend(
+        bootstrap: ResolvedProviderRuntimeBootstrap,
+    ): Promise<VectorDatabase> {
+        const key = JSON.stringify(bootstrap.vectorBackend);
+        if (this.sharedVectorBackendPromise && this.sharedVectorBackendKey === key) {
+            return this.sharedVectorBackendPromise;
+        }
+        const created = this.createVectorBackend(bootstrap).catch((error) => {
+            if (this.sharedVectorBackendPromise === created) {
+                this.sharedVectorBackendPromise = null;
+                this.sharedVectorBackendKey = null;
+            }
+            throw error;
+        });
+        this.sharedVectorBackendKey = key;
+        this.sharedVectorBackendPromise = created;
+        return created;
+    }
+
     private async createVectorBackend(
         bootstrap: ResolvedProviderRuntimeBootstrap,
     ): Promise<VectorDatabase> {
@@ -745,6 +772,7 @@ export class ProviderRuntime {
                 return new LateOnReranker({
                     modelDirectory: bootstrap.reranker.modelDirectory,
                     profileId: bootstrap.reranker.profileId,
+                    getActiveMutationCount: () => this.mutationRuntime.listActiveMutations().length,
                 });
         }
     }
@@ -818,15 +846,22 @@ export class ProviderRuntime {
             await toolContext.syncManager.stopAndDrainLifecycle();
         }));
         await this.syncWorkerStandby.close();
+        const vectorBackends = new Set<VectorDatabase>(this.activeVectorBackends);
+        for (const toolContext of this.activeContexts) {
+            vectorBackends.add(toolContext.context.getVectorStore());
+        }
         await Promise.all([
             Promise.all(this.activeContexts.map(async (toolContext) => {
-                await toolContext.context.getVectorStore().close?.();
                 await toolContext.context.dispose?.();
             })),
+            Promise.all([...vectorBackends].map((backend) => backend.close?.())),
             Promise.all([...this.activeEmbeddings].map((embedding) => embedding.close())),
             Promise.all([...this.activeRerankers].map((reranker) => reranker.close?.())),
         ]);
         this.activeContexts = [];
+        this.activeVectorBackends.clear();
+        this.sharedVectorBackendPromise = null;
+        this.sharedVectorBackendKey = null;
         this.activeEmbeddings.clear();
         this.activeRerankers.clear();
     }

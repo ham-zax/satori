@@ -121,6 +121,17 @@ export class PreparedReadCache<T> {
         const seededAtMs = existing && preserveProofAge
             ? existing.seededAtMs
             : nowMs;
+        for (const [entryRoot, entry] of this.entries) {
+            if (
+                entryRoot !== root
+                && (
+                    nowMs - entry.seededAtMs >= this.maxProofAgeMs
+                    || nowMs - entry.lastUsedAtMs > this.idleMs
+                )
+            ) {
+                this.entries.delete(entryRoot);
+            }
+        }
         this.entries.delete(root);
         this.entries.set(root, {
             state: structuredClone(state),

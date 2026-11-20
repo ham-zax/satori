@@ -17,6 +17,8 @@ import {
 
 // This is a quiet-window deadline, not a total-runtime ceiling; heartbeats do not reset it.
 const SYNC_NO_PROGRESS_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_STANDBY_IDLE_MS = 2 * 60_000;
+const DEFAULT_STANDBY_MIN_AVAILABLE_MEMORY_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
 
 export const TERMINAL_OPERATION_PHASES: ReadonlySet<MutationOperationPhase> = new Set<MutationOperationPhase>([
     "completed",
@@ -105,20 +107,75 @@ function spawnSyncWorkerProcess(
  * exits after its one sync, so the process-group completion fence that
  * releases the bound executor lease is unchanged.
  */
+export type SyncWorkerStandbyOptions = Readonly<{
+    /** Overrides the sync worker entry point (tests only). */
+    workerPath?: string;
+    /** Retire an unused standby worker after this long (ms). 0 disables idle retirement. Default: 2 min. */
+    idleMs?: number;
+    /** Skip pre-spawning standby when available host memory is below this threshold. 0 disables. Default: 1.5 GiB. */
+    minAvailableMemoryBytes?: number;
+    /** Injectable available-memory probe (defaults to `process.availableMemory()`). */
+    availableMemoryBytes?: () => number;
+}>;
+
 export class SyncWorkerStandby {
     private standby: SyncWorkerProcess | undefined;
+    private idleTimer: NodeJS.Timeout | undefined;
     private readonly retiring = new Map<SyncWorkerProcess, Promise<void>>();
     private pendingRoot: string | undefined;
     private closed = false;
+    private readonly idleMs: number;
+    private readonly minAvailableMemoryBytes: number;
+    private readonly availableMemoryBytes: () => number;
 
-    /** `workerPath` overrides the sync worker entry point (tests only). */
-    constructor(private readonly options: Readonly<{ workerPath?: string }> = {}) {}
+    constructor(private readonly options: SyncWorkerStandbyOptions = {}) {
+        this.idleMs = Math.max(0, options.idleMs ?? DEFAULT_STANDBY_IDLE_MS);
+        this.minAvailableMemoryBytes = Math.max(
+            0,
+            options.minAvailableMemoryBytes ?? DEFAULT_STANDBY_MIN_AVAILABLE_MEMORY_BYTES,
+        );
+        this.availableMemoryBytes = options.availableMemoryBytes
+            ?? (() => (typeof process.availableMemory === "function" ? process.availableMemory() : Number.POSITIVE_INFINITY));
+    }
+
+    private hasMemoryHeadroom(): boolean {
+        if (this.minAvailableMemoryBytes <= 0) return true;
+        const available = this.availableMemoryBytes();
+        return !Number.isFinite(available) || available >= this.minAvailableMemoryBytes;
+    }
+
+    private clearIdleTimer(): void {
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = undefined;
+        }
+    }
+
+    private scheduleIdleTimer(target: SyncWorkerProcess): void {
+        this.clearIdleTimer();
+        if (this.idleMs <= 0 || this.closed) return;
+        this.idleTimer = setTimeout(() => {
+            this.idleTimer = undefined;
+            if (this.standby === target) {
+                this.discard(target, "sync_standby_idle");
+            }
+        }, this.idleMs);
+        this.idleTimer.unref?.();
+    }
 
     /** Ensures a standby exists for `codebasePath`, replacing another root's. */
     prepare(codebasePath: string): void {
         if (this.closed) return;
+        if (!this.hasMemoryHeadroom()) {
+            this.pendingRoot = undefined;
+            if (this.standby) this.discard(this.standby, "sync_standby_low_memory");
+            return;
+        }
         const current = this.standby;
-        if (current && current.codebasePath === codebasePath && !current.isSettled()) return;
+        if (current && current.codebasePath === codebasePath && !current.isSettled()) {
+            this.scheduleIdleTimer(current);
+            return;
+        }
         if (current) this.discard(current, "sync_standby_replaced");
         this.pendingRoot = codebasePath;
         this.startPending();
@@ -126,10 +183,16 @@ export class SyncWorkerStandby {
 
     private startPending(): void {
         if (this.closed || this.standby || this.retiring.size > 0 || this.pendingRoot === undefined) return;
+        if (!this.hasMemoryHeadroom()) {
+            this.pendingRoot = undefined;
+            return;
+        }
         const codebasePath = this.pendingRoot;
         this.pendingRoot = undefined;
         try {
-            this.standby = spawnSyncWorkerProcess(codebasePath, `standby-${randomUUID()}`, this.options.workerPath);
+            const spawned = spawnSyncWorkerProcess(codebasePath, `standby-${randomUUID()}`, this.options.workerPath);
+            this.standby = spawned;
+            this.scheduleIdleTimer(spawned);
         } catch (error) {
             this.standby = undefined;
             console.warn(`[SYNC-STANDBY] Could not pre-start a sync worker for '${codebasePath}': ${error instanceof Error ? error.message : String(error)}`);
@@ -149,6 +212,7 @@ export class SyncWorkerStandby {
     take(codebasePath: string): SyncWorkerProcess | undefined {
         const current = this.standby;
         if (!current || current.codebasePath !== codebasePath) return undefined;
+        this.clearIdleTimer();
         this.standby = undefined;
         if (current.isSettled()) return undefined;
         return current;
@@ -157,13 +221,17 @@ export class SyncWorkerStandby {
     async close(): Promise<void> {
         this.closed = true;
         this.pendingRoot = undefined;
+        this.clearIdleTimer();
         const current = this.standby;
         if (current) this.discard(current, "sync_standby_shutdown");
         await Promise.all(this.retiring.values());
     }
 
     private discard(standby: SyncWorkerProcess, reason: string): void {
-        if (this.standby === standby) this.standby = undefined;
+        if (this.standby === standby) {
+            this.clearIdleTimer();
+            this.standby = undefined;
+        }
         if (this.retiring.has(standby)) return;
         const completion = standby.worker.completion.then(() => undefined, () => undefined);
         this.retiring.set(standby, completion);

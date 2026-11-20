@@ -93,6 +93,8 @@ export type LateOnRerankerConfig = Readonly<{
     idleShutdownMs?: number;
     /** Fixed pool layout; by default each worker start sizes the pool to this host. */
     executionPlan?: LateOnExecutionPlan;
+    /** Optional probe for active index/sync mutations to cap concurrent ONNX sessions. */
+    getActiveMutationCount?: () => number;
 }>;
 
 function safeIntegerAtLeast(value: unknown, minimum: number, label: string): number {
@@ -223,9 +225,12 @@ export class LateOnReranker implements Reranker {
         this.rawProfileDigest = profileDigest(this.profile);
         this.modelDirectory = path.resolve(config.modelDirectory);
         const executionPlan = config.executionPlan;
+        const getActiveMutationCount = config.getActiveMutationCount;
         this.resolveExecutionPlan = executionPlan
             ? () => executionPlan
-            : resolveHostLateOnExecutionPlan;
+            : () => resolveHostLateOnExecutionPlan({
+                activeMutations: getActiveMutationCount ? getActiveMutationCount() : 0,
+            });
         this.identity = Object.freeze({
             provider: "lateon",
             model: `${this.profile.identity.repository}@${this.profile.identity.revision}`,

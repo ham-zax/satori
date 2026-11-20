@@ -327,8 +327,8 @@ type LoadedRelationshipState =
     | NavigationStoreFailure
     | (NavigationStoreRelationshipsOk & {
         claimFilesByKey: Map<string, string[]>;
-        /** Per-shard projection by reuse key, so the next Publication skips unchanged shards. */
-        shardsByReuseKey: Map<string, RelationshipShardProjection>;
+        /** Per-shard projection by reuse key; detached on retention expiry so in-flight reads stay intact. */
+        shardsByReuseKey?: Map<string, RelationshipShardProjection>;
     });
 
 type RelationshipShardProjection = {
@@ -434,11 +434,19 @@ export interface JsonNavigationStoreOptions {
     maxRelationshipRoots?: number;
     /** Resident state is released after this long without use. 0 disables idle release. */
     idleMs?: number;
+    /** Release per-shard reuse maps after this window to free V8 heap on query-only hosts. 0 disables. */
+    shardReuseRetentionMs?: number;
+    /** Available memory threshold below which each cache trims to 1 resident root. 0 disables. */
+    lowMemoryThresholdBytes?: number;
+    /** Injectable available-memory probe for deterministic tests. */
+    availableMemoryBytes?: () => number;
 }
 
 const DEFAULT_MAX_REGISTRY_ROOTS = 4;
 const DEFAULT_MAX_RELATIONSHIP_ROOTS = 2;
 const DEFAULT_NAVIGATION_IDLE_MS = 5 * 60_000;
+const DEFAULT_SHARD_REUSE_RETENTION_MS = 60_000;
+const DEFAULT_NAVIGATION_LOW_MEMORY_BYTES = 2 * 1024 * 1024 * 1024;
 // Bounds the transient evidence held while streaming every claim.
 const RESOLUTION_CLAIM_SCAN_FILES_PER_READ = 64;
 
@@ -451,16 +459,25 @@ const RESOLUTION_CLAIM_SCAN_FILES_PER_READ = 64;
 export class JsonNavigationStore {
     private readonly registries: PublicationStateCache<NavigationRegistryState>;
     private readonly relationships: PublicationStateCache<LoadedRelationshipState>;
+    private readonly shardReuseRetentionMs: number;
 
     public constructor(options: JsonNavigationStoreOptions = {}) {
         const idleMs = options.idleMs ?? DEFAULT_NAVIGATION_IDLE_MS;
+        const lowMemoryThresholdBytes = options.lowMemoryThresholdBytes ?? DEFAULT_NAVIGATION_LOW_MEMORY_BYTES;
+        this.shardReuseRetentionMs = Math.max(0, options.shardReuseRetentionMs ?? DEFAULT_SHARD_REUSE_RETENTION_MS);
         this.registries = new PublicationStateCache({
             maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
             idleMs,
+            maxRootsUnderPressure: 1,
+            lowMemoryThresholdBytes,
+            availableMemoryBytes: options.availableMemoryBytes,
         });
         this.relationships = new PublicationStateCache({
             maxRoots: options.maxRelationshipRoots ?? DEFAULT_MAX_RELATIONSHIP_ROOTS,
             idleMs,
+            maxRootsUnderPressure: 1,
+            lowMemoryThresholdBytes,
+            availableMemoryBytes: options.availableMemoryBytes,
         });
     }
 
@@ -746,10 +763,17 @@ export class JsonNavigationStore {
             relationshipIdentity(relationshipInput),
             async () => {
                 const previousState = await previous?.catch(() => undefined);
-                return readRelationshipState(
-                    relationshipInput,
-                    previousState?.status === 'ok' ? previousState.shardsByReuseKey : undefined,
-                );
+                const previousShards = previousState?.status === 'ok'
+                    ? previousState.shardsByReuseKey
+                    : undefined;
+                const loaded = await readRelationshipState(relationshipInput, previousShards);
+                if (loaded.status === 'ok' && this.shardReuseRetentionMs > 0 && loaded.shardsByReuseKey && loaded.shardsByReuseKey.size > 0) {
+                    const timer = setTimeout(() => {
+                        loaded.shardsByReuseKey = undefined;
+                    }, this.shardReuseRetentionMs);
+                    timer.unref?.();
+                }
+                return loaded;
             },
             (state) => state.status === 'ok',
         );

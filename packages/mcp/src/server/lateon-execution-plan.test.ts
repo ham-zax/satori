@@ -42,3 +42,14 @@ test("LateOn execution plan falls back to one single-threaded session for unusab
         );
     }
 });
+
+test("LateOn execution plan caps to one session during active mutations and respects reserve memory", () => {
+    assert.deepEqual(
+        planLateOnExecution({ logicalCpus: 16, availableMemoryBytes: 16 * GIB, activeMutations: 1 }),
+        { encoderSessions: 1, intraOpThreads: 4 },
+    );
+    assert.deepEqual(
+        planLateOnExecution({ logicalCpus: 16, availableMemoryBytes: 3 * GIB, reserveMemoryBytes: 1.5 * GIB }),
+        { encoderSessions: 1, intraOpThreads: 4 },
+    );
+});

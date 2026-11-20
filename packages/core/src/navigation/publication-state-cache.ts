@@ -3,6 +3,12 @@ export interface PublicationStateCacheOptions {
     maxRoots: number;
     /** Resident state is released after this long without an access. 0 disables idle release. */
     idleMs: number;
+    /** Optional reduced root cap applied when available host memory falls below `lowMemoryThresholdBytes`. */
+    maxRootsUnderPressure?: number;
+    /** Available memory threshold below which `maxRootsUnderPressure` applies. 0 disables pressure trimming. */
+    lowMemoryThresholdBytes?: number;
+    /** Memory availability probe (defaults to `process.availableMemory()`). */
+    availableMemoryBytes?: () => number;
 }
 
 type Entry<T> = {
@@ -45,11 +51,26 @@ export class PublicationStateCache<T> {
             if (this.entries.get(root) === entry) this.release(root, entry);
         };
         entry.value.then((value) => { if (!isRetainable(value)) evict(); }, evict);
-        while (this.entries.size > Math.max(1, this.options.maxRoots)) {
+        while (this.entries.size > this.effectiveMaxRoots()) {
             const oldestRoot = this.entries.keys().next().value as string;
             this.release(oldestRoot, this.entries.get(oldestRoot)!);
         }
         return entry.value;
+    }
+
+    private effectiveMaxRoots(): number {
+        const baseCap = Math.max(1, this.options.maxRoots);
+        const threshold = this.options.lowMemoryThresholdBytes ?? 0;
+        const pressureCap = this.options.maxRootsUnderPressure;
+        if (threshold <= 0 || pressureCap === undefined || pressureCap >= baseCap) {
+            return baseCap;
+        }
+        const probe = this.options.availableMemoryBytes
+            ?? (() => (typeof process.availableMemory === 'function' ? process.availableMemory() : Number.POSITIVE_INFINITY));
+        const available = probe();
+        return Number.isFinite(available) && available < threshold
+            ? Math.max(1, pressureCap)
+            : baseCap;
     }
 
     /** The resident state of `root` for any identity, without touching it. */

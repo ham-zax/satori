@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Table } from '@lancedb/lancedb';
 import { Field, FixedSizeList, Float32, Type } from 'apache-arrow';
-import { LanceDbVectorDatabase } from './lancedb-vectordb.js';
+import { LanceDbVectorDatabase, resolveLanceDbIndexCacheBytes } from './lancedb-vectordb.js';
 
 function tableWithVectorType(type: unknown): Table {
     return {
@@ -27,4 +27,16 @@ test('LanceDB rejects variable-size and missing vector columns', async () => {
     for (const type of [{ typeId: Type.List }, undefined]) {
         await assert.rejects(database['vectorDimension'](tableWithVectorType(type)), /no fixed-size vector column/);
     }
+});
+
+test('LanceDB index cache size scales with available RAM and honors env override', () => {
+    const MIB = 1024n * 1024n;
+    const GIB = 1024 * 1024 * 1024;
+    assert.equal(resolveLanceDbIndexCacheBytes(256 * 1024 * 1024, {}), 64n * MIB);
+    assert.equal(resolveLanceDbIndexCacheBytes(4 * GIB, {}), BigInt(Math.floor(4 * GIB * 0.08)));
+    assert.equal(resolveLanceDbIndexCacheBytes(32 * GIB, {}), 512n * MIB);
+    assert.equal(
+        resolveLanceDbIndexCacheBytes(32 * GIB, { SATORI_LANCEDB_INDEX_CACHE_MB: '256' }),
+        256n * MIB,
+    );
 });

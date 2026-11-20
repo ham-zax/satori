@@ -15,10 +15,21 @@ import {
 // and encodes about 4,300 chunks/s; 2 helpers 7,200/s, 3 helpers 9,200/s.
 const CORES_PER_HELPER = 5;
 const MAX_HELPERS = 3;
+const GIB = 1024 * 1024 * 1024;
+const SECONDARY_HELPER_IDLE_SHUTDOWN_MS = 45_000;
 
-/** Helper processes worth running on a machine with this many CPUs. */
-export function defaultPotionHelperCount(cpuCount: number): number {
-    return Math.max(1, Math.min(MAX_HELPERS, Math.floor(cpuCount / CORES_PER_HELPER)));
+/** Helper processes worth running on a machine with this many CPUs (and optional available memory). */
+export function defaultPotionHelperCount(cpuCount: number, availableMemoryBytes?: number): number {
+    const cpuBound = Math.max(1, Math.min(MAX_HELPERS, Math.floor(cpuCount / CORES_PER_HELPER)));
+    if (availableMemoryBytes === undefined || !Number.isFinite(availableMemoryBytes)) {
+        return cpuBound;
+    }
+    const memoryBound = availableMemoryBytes <= 4 * GIB
+        ? 1
+        : availableMemoryBytes <= 8 * GIB
+            ? 2
+            : MAX_HELPERS;
+    return Math.min(cpuBound, memoryBound);
 }
 
 /**
@@ -53,7 +64,14 @@ export class PotionEmbeddingPool extends Embedding {
 
     static async create(config: Readonly<PotionEmbeddingConfig>, helperCount: number): Promise<PotionEmbeddingPool> {
         const first = await PotionEmbedding.create(config);
-        return new PotionEmbeddingPool(first, helperCount, () => PotionEmbedding.create(config));
+        const secondaryIdleShutdownMs = config.idleShutdownMs === 0
+            ? 0
+            : Math.min(config.idleShutdownMs ?? 5 * 60_000, SECONDARY_HELPER_IDLE_SHUTDOWN_MS);
+        const secondaryConfig: Readonly<PotionEmbeddingConfig> = Object.freeze({
+            ...config,
+            idleShutdownMs: secondaryIdleShutdownMs,
+        });
+        return new PotionEmbeddingPool(first, helperCount, () => PotionEmbedding.create(secondaryConfig));
     }
 
     private leastBusy(): number {

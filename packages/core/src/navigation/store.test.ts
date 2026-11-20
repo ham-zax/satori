@@ -266,6 +266,52 @@ test('a rewritten shard under an unchanged manifest entry is not reused', async 
     assert.deepEqual([warmView.target, warmView.moved1], [['b.ts'], ['a.ts']]);
 });
 
+test('shard reuse retention expiry between batch stat awaits still matches a cold load and clears expired state', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const first = await writeShardPublication(root, 'publication-a', { 'a.ts': 'target', 'b.ts': 'target', 'c.ts': 'moved1' });
+    const second = await writeShardPublication(
+        root, 'publication-b', { 'a.ts': 'target', 'b.ts': 'moved1', 'c.ts': 'moved1' },
+        { navigationRoot: first.navigationRoot, files: ['a.ts', 'c.ts'] },
+    );
+
+    const warm = new JsonNavigationStore({ shardReuseRetentionMs: 15 });
+    const firstLoaded = await warm.getRelationships(first);
+    assert.equal(firstLoaded.status, 'ok');
+
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let delayedOnce = false;
+    t.mock.method(fs.promises, 'stat', async (...args: Parameters<typeof fs.promises.stat>) => {
+        const result = await originalStat(...args);
+        if (!delayedOnce && String(args[0]).includes(`${path.sep}by-file${path.sep}`)) {
+            delayedOnce = true;
+            await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        return result;
+    });
+
+    const warmView = await relationshipView(warm, second);
+    assert.equal(delayedOnce, true);
+    const coldView = await relationshipView(new JsonNavigationStore(), second);
+    assert.deepEqual(warmView, coldView);
+    assert.deepEqual([warmView.target, warmView.moved1], [['a.ts'], ['b.ts', 'c.ts']]);
+
+    // Wait past second publication's retention window and verify expired reuse maps do not linger.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const third = await writeShardPublication(
+        root, 'publication-c', { 'a.ts': 'target', 'b.ts': 'moved1', 'c.ts': 'moved1' },
+        { navigationRoot: second.navigationRoot, files: ['a.ts', 'b.ts', 'c.ts'] },
+    );
+    const readFile = t.mock.method(fs.promises, 'readFile');
+    assert.equal((await warm.getRelationships(third)).status, 'ok');
+    const shardReads = readFile.mock.calls
+        .map((call) => String(call.arguments[0]))
+        .filter((file) => file.includes(`${path.sep}by-file${path.sep}`));
+    readFile.mock.restore();
+    assert.equal(shardReads.length, 3, 'expired shard reuse cache must not remain retained indefinitely');
+    assert.deepEqual(await relationshipView(warm, third), await relationshipView(new JsonNavigationStore(), third));
+});
+
 test('a newer Publication releases the previous Publication state for the root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
     try {

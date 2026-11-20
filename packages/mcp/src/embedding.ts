@@ -66,11 +66,14 @@ export async function createEmbeddingInstance(config: ContextMcpConfig): Promise
             if (!config.potionHelperPath || !config.potionModelPath) {
                 throw new Error('POTION_HELPER_PATH and POTION_MODEL_PATH are required for Potion');
             }
+            const availableMemoryBytes = typeof process.availableMemory === "function"
+                ? process.availableMemory()
+                : undefined;
             const potionEmbedding = await PotionEmbeddingPool.create({
                 helperPath: config.potionHelperPath,
                 modelPath: config.potionModelPath,
                 requestTimeoutMs: config.potionRequestTimeoutMs,
-            }, defaultPotionHelperCount(os.availableParallelism()));
+            }, defaultPotionHelperCount(os.availableParallelism(), availableMemoryBytes));
             console.error(`[EMBEDDING] ✅ Potion embedding instance created successfully`);
             return potionEmbedding;
         }

@@ -45,7 +45,11 @@ const settle = async () => {
 };
 
 test('defaultPotionHelperCount uses one helper per five CPUs, between 1 and 3', () => {
-    assert.deepEqual([1, 4, 9, 10, 14, 15, 64].map(defaultPotionHelperCount), [1, 1, 1, 2, 2, 3, 3]);
+    assert.deepEqual([1, 4, 9, 10, 14, 15, 64].map((cpus) => defaultPotionHelperCount(cpus)), [1, 1, 1, 2, 2, 3, 3]);
+    const GIB = 1024 * 1024 * 1024;
+    assert.equal(defaultPotionHelperCount(16, 3 * GIB), 1);
+    assert.equal(defaultPotionHelperCount(16, 6 * GIB), 2);
+    assert.equal(defaultPotionHelperCount(16, 12 * GIB), 3);
 });
 
 test('Potion pool starts helpers only under load and never over-fills one', async () => {

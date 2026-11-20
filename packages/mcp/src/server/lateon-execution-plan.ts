@@ -10,6 +10,10 @@ export type LateOnExecutionPlan = Readonly<{
 export type LateOnHostResources = Readonly<{
     logicalCpus: number;
     availableMemoryBytes: number;
+    /** Active index/sync mutations; when > 0, LateOn caps to 1 session (~0.53 GiB) to avoid swap spikes. */
+    activeMutations?: number;
+    /** Host memory headroom kept free before scaling beyond 1 session. */
+    reserveMemoryBytes?: number;
 }>;
 
 // Sizing comes from 64-candidate reranks on a Ryzen 7 3800X (WSL2), with CPU
@@ -29,6 +33,7 @@ const LATEON_MAXIMUM_THREADS_PER_POOLED_SESSION = 2;
 // Each session adds ~370 MB of peak worker RSS (1x8 0.53 GB, 4x2 1.64 GB);
 // require 1 GiB of free memory per session when the worker starts.
 const LATEON_AVAILABLE_MEMORY_PER_SESSION_BYTES = 1024 * 1024 * 1024;
+const LATEON_HOST_RESERVE_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
 
 function wholeAtLeastOne(value: number): number {
     return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
@@ -36,6 +41,16 @@ function wholeAtLeastOne(value: number): number {
 
 export function planLateOnExecution(host: LateOnHostResources): LateOnExecutionPlan {
     const logicalCpus = wholeAtLeastOne(host.logicalCpus);
+    if ((host.activeMutations ?? 0) > 0) {
+        return Object.freeze({
+            encoderSessions: 1,
+            intraOpThreads: Math.min(LATEON_MAXIMUM_THREADS_PER_SESSION, logicalCpus),
+        });
+    }
+    const reserve = host.reserveMemoryBytes && Number.isFinite(host.reserveMemoryBytes) && host.reserveMemoryBytes > 0
+        ? host.reserveMemoryBytes
+        : 0;
+    const plannableMemory = Math.max(0, host.availableMemoryBytes - reserve);
     const encoderSessions = Math.min(
         logicalCpus,
         Math.max(
@@ -43,7 +58,7 @@ export function planLateOnExecution(host: LateOnHostResources): LateOnExecutionP
             Math.floor(logicalCpus / LATEON_CPUS_PER_EXTRA_SESSION),
         ),
         LATEON_MAXIMUM_ENCODER_SESSIONS,
-        wholeAtLeastOne(host.availableMemoryBytes / LATEON_AVAILABLE_MEMORY_PER_SESSION_BYTES),
+        wholeAtLeastOne(plannableMemory / LATEON_AVAILABLE_MEMORY_PER_SESSION_BYTES),
     );
     const threadCeiling = encoderSessions >= LATEON_BASE_ENCODER_SESSIONS
         ? LATEON_MAXIMUM_THREADS_PER_POOLED_SESSION
@@ -54,10 +69,14 @@ export function planLateOnExecution(host: LateOnHostResources): LateOnExecutionP
     });
 }
 
-/** Sizes the pool from this host's CPUs (affinity-aware) and cgroup-aware free memory. */
-export function resolveHostLateOnExecutionPlan(): LateOnExecutionPlan {
+/** Sizes the pool from this host's CPUs (affinity-aware), cgroup-aware free memory, and active mutations. */
+export function resolveHostLateOnExecutionPlan(
+    options: Readonly<{ activeMutations?: number }> = {},
+): LateOnExecutionPlan {
     return planLateOnExecution({
         logicalCpus: os.availableParallelism(),
         availableMemoryBytes: process.availableMemory(),
+        activeMutations: options.activeMutations,
+        reserveMemoryBytes: LATEON_HOST_RESERVE_BYTES,
     });
 }

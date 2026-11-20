@@ -4585,6 +4585,44 @@ test("cursor, vscode, windsurf, and pi auto-detect, configure, inspect, and unin
     });
 });
 
+test("pi honors PI_CODING_AGENT_DIR across auto-detect, install, inspection, and uninstall", async () => {
+    await withTempHome(async (homeDir) => {
+        const overrideDir = path.join(homeDir, "custom-pi-agent");
+        const overrideConfig = path.join(overrideDir, "mcp.json");
+        const defaultConfig = path.join(homeDir, ".pi", "agent", "mcp.json");
+        fs.mkdirSync(overrideDir, { recursive: true });
+
+        const env = { PATH: "", PI_CODING_AGENT_DIR: "~/custom-pi-agent" };
+        assert.deepEqual(detectClientTargets(homeDir, env), ["pi"]);
+        assert.deepEqual(detectClientTargets(homeDir, { PATH: "" }), []);
+
+        const installed = await executeInstallCommand({
+            kind: "install",
+            client: "auto",
+            runtime: "voyage",
+            dryRun: false,
+        }, { ...installOptions(homeDir), env: { ...env, VOYAGEAI_API_KEY: "test-voyage-key" } });
+        assert.deepEqual(installed.results.map((r) => [r.client, r.configPath, r.status]), [
+            ["pi", overrideConfig, "updated"],
+        ]);
+        assert.equal(fs.existsSync(defaultConfig), false);
+
+        const proofs = inspectManagedClientConfigurations(homeDir, env);
+        assert.equal(proofs.length, 1);
+        assert.equal(proofs[0]?.client, "pi");
+        assert.equal(proofs[0]?.configPath, overrideConfig);
+        assert.equal(proofs[0]?.status, "ok");
+
+        await executeInstallCommand({
+            kind: "uninstall",
+            client: "auto",
+            dryRun: false,
+        }, { ...installOptions(homeDir), env });
+        const afterPi = JSON.parse(readFile(overrideConfig)) as { mcpServers?: unknown };
+        assert.equal(afterPi.mcpServers, undefined);
+    });
+});
+
 test("vscode install, inspection, and uninstall support JSONC comments and trailing commas", async () => {
     await withTempHome(async (homeDir) => {
         const initialJsonc = [

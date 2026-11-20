@@ -53,6 +53,8 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
     const opencodeGlobalConfigDir = resolveOpenCodeGlobalConfigDir(homeDir);
     const opencodeConfigPath = resolveConfiguredPath(env.OPENCODE_CONFIG, homeDir)
         ?? path.join(opencodeGlobalConfigDir, "opencode.json");
+    const piAgentDir = resolveConfiguredPath(env.PI_CODING_AGENT_DIR, homeDir)
+        ?? path.join(homeDir, ".pi", "agent");
 
     // One canonical skill in the cross-agent skills directory. Codex and
     // OpenCode load it natively; Claude Code and Antigravity scan their own
@@ -125,7 +127,7 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
         },
         {
             client: "pi",
-            configPath: path.join(homeDir, ".pi", "agent", "mcp.json"),
+            configPath: path.join(piAgentDir, "mcp.json"),
             companions: [
                 skill,
             ],

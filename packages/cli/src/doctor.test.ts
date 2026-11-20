@@ -1905,3 +1905,40 @@ test("runDoctor lists all 8 supported clients when not installed and validates c
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("runDoctor checks Pi client config at PI_CODING_AGENT_DIR when set", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-pi-override-"));
+    try {
+        const piAgentDir = path.join(homeDir, "custom-pi");
+        const piConfigPath = path.join(piAgentDir, "mcp.json");
+        fs.mkdirSync(piAgentDir, { recursive: true });
+        fs.writeFileSync(piConfigPath, JSON.stringify({
+            mcpServers: {
+                satori: {
+                    command: process.execPath,
+                    args: [path.join(homeDir, ".satori", "bin", "satori-mcp.js")],
+                },
+            },
+        }));
+
+        const result = await runDoctor({
+            env: {
+                HOME: homeDir,
+                PI_CODING_AGENT_DIR: "~/custom-pi",
+                VOYAGEAI_API_KEY: "test-key",
+            },
+            execFileSyncImpl: () => JSON.stringify("0.13.1"),
+            mutationLeasesPath: null,
+            runtimeOwnersPath: path.join(homeDir, ".satori", "runtime-owner", "owners.json"),
+            diagnosticsPath: path.join(homeDir, ".satori", "diagnostics", "events.jsonl"),
+        });
+
+        const managedCheck = result.checks.find((c) => c.name === "managed_client_configuration");
+        assert.equal(managedCheck?.status, "ok");
+        assert.match(managedCheck?.message ?? "", /1 configured MCP client/);
+        assert.equal(result.runtimeConfigurations?.some((row) => row.client === "pi"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".pi", "agent", "mcp.json")), false);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});

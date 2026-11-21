@@ -35,6 +35,20 @@ const SEARCH_MECHANISM_CUES = [
     /\bdisclosure\b/,
 ] as const;
 
+const MANIFEST_LOCATION_CUE = /\b(?:where\s+(?:is|are)|which\s+file)\b/;
+const MANIFEST_SUBJECT_CUE =
+    /\b(?:build\s+metadata|package\s+metadata|project\s+metadata|module\s+path|runtime\s+dependencies|dependency\s+versions?|dependencies|devdependencies|peerdependencies)\b/;
+const MANIFEST_DECLARATION_CUE = /\b(?:declared|declares|specified|specifies|listed|lists|pinned|defined|defines)\b/;
+const MANIFEST_RUNTIME_EXCLUSION =
+    /\b(?:how\s+(?:does|do|is|are)|where\s+(?:does|do)|parse[sd]?|parsing|load(?:s|ed)?|loading|resolv(?:e|es|ed|ing)|comput(?:e|es|ed|ing)|compar(?:e|es|ed|ing)|check(?:s|ed|ing)?|validat(?:e|es|ed|ing))\b/;
+
+function isManifestDeclarationQuery(query: string): boolean {
+    return MANIFEST_LOCATION_CUE.test(query)
+        && MANIFEST_SUBJECT_CUE.test(query)
+        && MANIFEST_DECLARATION_CUE.test(query)
+        && !MANIFEST_RUNTIME_EXCLUSION.test(query);
+}
+
 function hasSearchMechanismImplementationCue(query: string): boolean {
     let matches = 0;
     for (const cue of SEARCH_MECHANISM_CUES) {
@@ -68,13 +82,17 @@ export function resolveSearchAnswerFocus(
     if (plan.referenceSeeking) {
         return { focus: "references", reasons: ["reference_seeking_query"] };
     }
+    const normalizedQuery = plan.semanticQuery.toLowerCase();
+    if (isManifestDeclarationQuery(normalizedQuery)) {
+        return { focus: "configuration", reasons: ["manifest_declaration_query"] };
+    }
     if (plan.implementationSeeking) {
         return { focus: "implementation", reasons: ["implementation_seeking_query"] };
     }
-    if (implementationCue.test(plan.semanticQuery.toLowerCase())) {
+    if (implementationCue.test(normalizedQuery)) {
         return { focus: "implementation", reasons: ["implementation_question_cue"] };
     }
-    if (hasSearchMechanismImplementationCue(plan.semanticQuery.toLowerCase())) {
+    if (hasSearchMechanismImplementationCue(normalizedQuery)) {
         return { focus: "implementation", reasons: ["search_mechanism_query"] };
     }
     return { focus: "neutral", reasons: ["no_focus_signal"] };

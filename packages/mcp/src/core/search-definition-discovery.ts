@@ -167,6 +167,7 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     query: string;
     metadata: (originalIndex: number) => DefinitionDiscoveryMetadata | undefined;
     totalWindowSize?: number;
+    minimumMatchedTerms?: number;
     candidateLanguage?: (originalIndex: number) => string | undefined;
     candidatePath?: (originalIndex: number) => string | undefined;
 }): { items: T[]; applied: boolean } {
@@ -219,6 +220,7 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     const effectiveDocCount = Math.max(docs.length, input.totalWindowSize ?? docs.length);
     const providerRankScale = itemsLengthScale(itemsLengthOf(input.items), effectiveDocCount);
     const scores = new Map<T, number>();
+    const matchedTermCounts = new Map<T, number>();
     for (const term of effectiveQueryTerms) {
         const df = docs.filter(doc => doc.counts.has(term)).length;
         if (df === 0) continue;
@@ -228,6 +230,16 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
             if (tf === 0) continue;
             const score = idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * length / averageLength));
             scores.set(item, (scores.get(item) ?? 0) + score);
+            matchedTermCounts.set(item, (matchedTermCounts.get(item) ?? 0) + 1);
+        }
+    }
+    const minMatchedTerms = input.minimumMatchedTerms ?? 1;
+    const effectiveMinMatchedTerms = queryTerms.length >= minMatchedTerms ? minMatchedTerms : 1;
+    if (effectiveMinMatchedTerms > 1) {
+        for (const [item, matchedCount] of matchedTermCounts.entries()) {
+            if (matchedCount < effectiveMinMatchedTerms) {
+                scores.delete(item);
+            }
         }
     }
     if (scores.size === 0 && !languageMatchedItems) return { items: [...input.items], applied: false };
@@ -262,9 +274,12 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     // Name coverage compares definitions the query actually names. Preserve
     // provider order within the file for implementations named only by behavior.
     // Supporting/file targets can still yield a slot to a matching definition.
+    // Honor effectiveMinMatchedTerms here too so single-term matches filtered
+    // from BM25 cannot still swap ahead within the same file.
     const coverage = (item: T) => {
         const terms = evidenceByItem.get(item)!.ownerTerms;
-        return queryTerms.filter(term => terms.includes(term)).length;
+        const count = queryTerms.filter(term => terms.includes(term)).length;
+        return count >= effectiveMinMatchedTerms ? count : 0;
     };
     for (const slots of fileSlots.values()) {
         const withinFile = slots.map(index => items[index]!)

@@ -596,6 +596,23 @@ export function applyRerankOrder(args: {
             rerankBlend: rerankerIdentity(host)?.provider === "lateon",
         });
         let itemsForPolicy = [...validatedItems];
+        if (executionFlags.rerank_blend) {
+            // originalIndex indexes rerankSlice, not the full fused pool,
+            // so these are ranks WITHIN the rerank window. The blend
+            // therefore weighs the provider rank against the candidate's
+            // position in the slice the provider was handed, not its
+            // position in the pool it was drawn from. Applying the blend
+            // before definition discovery preserves LateOn's first-stage
+            // consensus instead of discarding it when definition fusion runs.
+            itemsForPolicy.sort((a, b) => {
+                const aSliceRank = a.originalIndex + 1;
+                const bSliceRank = b.originalIndex + 1;
+                const aBlend = 0.5 * a.providerRank + 0.5 * aSliceRank;
+                const bBlend = 0.5 * b.providerRank + 0.5 * bSliceRank;
+                if (aBlend !== bBlend) return aBlend - bBlend;
+                return a.providerRank - b.providerRank;
+            });
+        }
         let definitionFusionApplied = false;
         if (allowsDefinitionDiscovery({
             enabled: executionFlags.definition_discovery === true,
@@ -607,10 +624,14 @@ export function applyRerankOrder(args: {
         }) && host.definitionMetadata && rerankerOrderNeedsDefinitionFusion(rerankerIdentity(host))) {
             const definitionAltTerms = executionFlags.definition_alt_terms
                 ? (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted : [];
+            const fusionInputItems = executionFlags.rerank_blend
+                ? itemsForPolicy.map((item, index) => ({ ...item, providerRank: index + 1 }))
+                : itemsForPolicy;
             const fusion = fuseDefinitionDiscovery({
-                items: validatedItems,
+                items: fusionInputItems,
                 query: [input.semanticQuery, ...definitionAltTerms].join(" "),
                 metadata: index => host.definitionMetadata!(rerankSlice[index]!.result),
+                ...(executionFlags.rerank_blend ? { minimumMatchedTerms: 2 } : {}),
                 ...(selectedWindowSize !== undefined && selectedWindowSize > validatedItems.length
                     ? { totalWindowSize: selectedWindowSize }
                     : {}),
@@ -621,23 +642,10 @@ export function applyRerankOrder(args: {
                     }
                     : {}),
             });
-            itemsForPolicy = fusion.items;
+            if (fusion.applied) {
+                itemsForPolicy = fusion.items;
+            }
             definitionFusionApplied = fusion.applied;
-        }
-        if (executionFlags.rerank_blend && !definitionFusionApplied) {
-            // originalIndex indexes rerankSlice, not the full fused pool,
-            // so these are ranks WITHIN the rerank window. The blend
-            // therefore weighs the provider rank against the candidate's
-            // position in the slice the provider was handed, not its
-            // position in the pool it was drawn from.
-            itemsForPolicy.sort((a, b) => {
-                const aSliceRank = a.originalIndex + 1;
-                const bSliceRank = b.originalIndex + 1;
-                const aBlend = 0.5 * a.providerRank + 0.5 * aSliceRank;
-                const bBlend = 0.5 * b.providerRank + 0.5 * bSliceRank;
-                if (aBlend !== bBlend) return aBlend - bBlend;
-                return a.providerRank - b.providerRank;
-            });
         }
         if (candidateSurvival) {
             appendSearchCandidateStage(

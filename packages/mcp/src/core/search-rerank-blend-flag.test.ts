@@ -289,3 +289,33 @@ test("an explicit rerank_blend:false is honoured even when the env enables it", 
         else process.env.SATORI_SEARCH_FLAGS = previous;
     }
 });
+
+test("LateOn preserves rerank_blend consensus when definition discovery is active", async () => {
+    const rows = [
+        candidate("a", "src/a.ts", 0.9),
+        candidate("b", "src/b.ts", 0.8),
+        candidate("c", "src/c.ts", 0.7),
+        candidate("d", "src/d.ts", 0.6),
+    ];
+    const reranker = buildReranker(permutedResults, undefined, "lateon");
+    const host = buildHost(rows, reranker);
+    // Only candidate "d" matches a single term ("implementation"), which is filtered
+    // by minimumMatchedTerms=2 on multi-term queries so LateOn's blended order survives.
+    host.definitionMetadata = (result) => ({
+        name: result.relativePath === "src/d.ts" ? "implementation" : "helper",
+        qualifiedName: result.relativePath === "src/d.ts" ? "implementation" : "helper",
+        file: result.relativePath,
+        kind: "function",
+    });
+    const outcome = await runSearchExecution(
+        buildInput(undefined),
+        host,
+        buildDiagnostics(),
+    );
+    assert.equal(outcome.kind, "ok");
+    if (outcome.kind !== "ok") throw new Error("expected an ok outcome");
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["a", "c", "b", "d"],
+    );
+});

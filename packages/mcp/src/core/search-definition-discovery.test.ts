@@ -228,3 +228,43 @@ test("totalWindowSize preserves provider rank spread when supporting candidates 
         "preserving original window rank spread must not demote top provider picks below late BM25 matches",
     );
 });
+
+test("minimumMatchedTerms filters incidental single-token definition matches on multi-term queries", () => {
+    const rows = [
+        metadata("make_response", "src/app.py"),
+        metadata("url_value_preprocessor", "src/scaffold.py"),
+        metadata("convert_response_value", "src/response.py"),
+    ];
+    const filtered = fuseDefinitionDiscovery({
+        items: rows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "convert value into a response object",
+        metadata: (index) => rows[index],
+        minimumMatchedTerms: 2,
+    });
+    assert.equal(filtered.applied, true);
+    // url_value_preprocessor only matched 1 term ("value"), so it must not outrank make_response (#1)
+    // while convert_response_value matched 3 terms and remains eligible.
+    const idxOf = (orig: number) => filtered.items.findIndex((item) => item.originalIndex === orig);
+    assert.ok(idxOf(0) < idxOf(1));
+    assert.ok(idxOf(2) < idxOf(1));
+});
+
+test("minimumMatchedTerms prevents filtered single-term matches from swapping ahead within the same file", () => {
+    const rows = [
+        metadata("dispatch_impl", "src/app.py"),
+        metadata("value_helper", "src/app.py"),
+        metadata("convert_response_value", "src/other.py"),
+    ];
+    const filtered = fuseDefinitionDiscovery({
+        items: rows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "convert value into a response object",
+        metadata: (index) => rows[index],
+        minimumMatchedTerms: 2,
+    });
+    assert.equal(filtered.applied, true);
+    const idxOf = (orig: number) => filtered.items.findIndex((item) => item.originalIndex === orig);
+    assert.ok(
+        idxOf(0) < idxOf(1),
+        "single-term same-file helper must not swap ahead of higher-ranked implementation when minimumMatchedTerms=2",
+    );
+});

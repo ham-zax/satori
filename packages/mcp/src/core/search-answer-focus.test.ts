@@ -50,3 +50,42 @@ test("answer-focus priority prefers documentation over configuration", () => {
     const resolution = resolveSearchAnswerFocus(plan);
     assert.equal(resolution.focus, "documentation");
 });
+
+test("answer-focus classifies package and build manifest declaration queries as configuration without changing route", () => {
+    const manifestQueries = [
+        "where are the Python build metadata, version, and runtime dependencies declared",
+        "where are the module path and dependency versions declared for the Go build",
+        "where are the package dependencies and scripts declared",
+        "which file specifies the Rust crate metadata and dependencies",
+    ];
+    for (const query of manifestQueries) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.notEqual(plan.route.kind, "configuration", query);
+        const resolution = resolveSearchAnswerFocus(plan);
+        assert.equal(resolution.focus, "configuration", query);
+        assert.deepEqual(resolution.reasons, ["manifest_declaration_query"]);
+    }
+});
+
+test("answer-focus keeps runtime implementation queries about metadata or dependencies as non-configuration", () => {
+    const implementationQueries = [
+        "where does the app parse build metadata",
+        "how does the loader read package dependencies",
+        "how are runtime dependencies resolved",
+        "where are useEffect dependencies compared",
+    ];
+    for (const query of implementationQueries) {
+        const plan = buildSearchQueryPlan(query, true);
+        const resolution = resolveSearchAnswerFocus(plan);
+        assert.equal(resolution.focus, "implementation", query);
+    }
+    const nonConfigurationRuntimeQueries = [
+        "where does the loader read package dependencies",
+        "where are package dependencies loaded",
+        "where are declared package dependencies loaded",
+    ];
+    for (const query of nonConfigurationRuntimeQueries) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.notEqual(resolveSearchAnswerFocus(plan).focus, "configuration", query);
+    }
+});

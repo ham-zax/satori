@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createBoundedSourceSelector } from "./bounded-source-selector.js";
 import {
     buildSearchRerankDocument,
     SEARCH_RERANK_DOCUMENT_POLICY,
 } from "./search-rerank-document.js";
+import {
+    MAXIMUM_SELECTION_ATTEMPTS,
+    MAXIMUM_UTF8_BYTES,
+    selectedExcerptText,
+    selectRerankSourceWithinBudget,
+    selectSource,
+    type NormalizedProjectionInput,
+} from "./search-rerank-projection-primitives.js";
 import type { SearchRerankStructuralReference } from "./search-rerank-structural-context.js";
 
 const CONTENT = [
@@ -90,15 +99,197 @@ test("Swift declaration selection handles stacked attributes and preserves uncer
 });
 
 test("canonical projection encodes the source once across budget attempts", (t) => {
+    const oversizedLines = [
+        "function validate_order(order) {",
+        ...Array.from({ length: 120 }, (_, i) => `    const check_${i} = check_shariah_compliance(order, "${"x".repeat(40)}_${i}");`),
+        "    return check_0;",
+        "}",
+    ];
+    const oversizedContent = oversizedLines.join("\n");
     const original = Buffer.from;
     let encodings = 0;
     t.mock.method(Buffer, "from", (...args: Parameters<typeof Buffer.from>) => {
-        if (args[0] === CONTENT) encodings++;
+        if (args[0] === oversizedContent) encodings++;
         return Reflect.apply(original, Buffer, args);
     });
-    const result = buildSearchRerankDocument(baseInput());
+    const result = buildSearchRerankDocument(baseInput({
+        content: oversizedContent,
+        symbolSpan: { startLine: 1, endLine: oversizedLines.length },
+    }));
     assert.ok(result.selectionAttemptCount > 1);
     assert.equal(encodings, 1);
+
+    // Complete symbols resolve in one shot while still encoding source once.
+    let completeEncodings = 0;
+    t.mock.method(Buffer, "from", (...args: Parameters<typeof Buffer.from>) => {
+        if (args[0] === CONTENT) completeEncodings++;
+        return Reflect.apply(original, Buffer, args);
+    });
+    const completeResult = buildSearchRerankDocument(baseInput());
+    assert.equal(completeResult.selectionAttemptCount, 1);
+    assert.equal(completeEncodings, 1);
+});
+
+test("selectRerankSourceWithinBudget fast path is bit-identical to reference binary search across edge fixtures", () => {
+    const referenceBinarySearch = (input: {
+        normalized: NormalizedProjectionInput;
+        minimumText: string;
+        buildProjectionText: (excerpt: string) => string;
+    }) => {
+        const minimumBytes = Buffer.byteLength(input.minimumText, "utf8");
+        let lowerBudget = 1;
+        let upperBudget = Math.max(1, MAXIMUM_UTF8_BYTES - minimumBytes);
+        let selectedSource: ReturnType<typeof selectRerankSourceWithinBudget>["selectedSource"];
+        let text = input.minimumText;
+        const select = createBoundedSourceSelector({
+            sourceBytes: Buffer.from(input.normalized.content, "utf8"),
+            symbolSpan: input.normalized.symbolSpan,
+        });
+        for (
+            let attempt = 0;
+            attempt < MAXIMUM_SELECTION_ATTEMPTS && lowerBudget <= upperBudget;
+            attempt += 1
+        ) {
+            const sourceBudget = Math.floor((lowerBudget + upperBudget) / 2);
+            const selection = selectSource(input.normalized, sourceBudget, undefined, select);
+            if (selection.status !== "selected") {
+                lowerBudget = sourceBudget + 1;
+                continue;
+            }
+            const candidateText = input.buildProjectionText(selectedExcerptText(selection.source));
+            if (Buffer.byteLength(candidateText, "utf8") <= MAXIMUM_UTF8_BYTES) {
+                selectedSource = selection.source;
+                text = candidateText;
+                lowerBudget = sourceBudget + 1;
+                continue;
+            }
+            upperBudget = sourceBudget - 1;
+        }
+        return { text, selectedSource };
+    };
+
+    const makeFixture = (name: string, content: string, query: string): {
+        name: string;
+        normalized: NormalizedProjectionInput;
+        expectFastHit: boolean;
+    } => {
+        const lineCount = content.split("\n").length;
+        return {
+            name,
+            normalized: {
+                relativePath: "src/fixture.ts",
+                language: "typescript",
+                symbolKind: "function",
+                canonicalSymbolLabel: "fixture",
+                signatureOrDeclaration: content.split("\n")[0] ?? "function fixture()",
+                documentationExcerpt: "",
+                requiredOwnerSiblings: [],
+                content,
+                query,
+                symbolSpan: { startLine: 1, endLine: lineCount },
+                evidenceSpans: [],
+            },
+            expectFastHit: false,
+        };
+    };
+
+    // 1. Small complete symbol -> fast hit (1 attempt)
+    const smallComplete = { ...makeFixture("small_complete", CONTENT, "shariah compliance"), expectFastHit: true };
+    // 2. Heavy JSON-escaping near 4000-byte boundary: raw bytes fit in upperBudget (~2500 B),
+    //    but JSON escaping (\u001b -> 6 B, \" -> 2 B, \\ -> 2 B) pushes outer candidateText > 4000 B!
+    const heavyEscapeLines = [
+        "function escapeBoundary() {",
+        ...Array.from({ length: 45 }, (_, i) => `  const s${i} = "\\\\" + "\\"" + "\u001b[31m\u001b[0m" + "你好🚀_${i}";`),
+        "  return s0;",
+        "}",
+    ];
+    const heavyEscape = makeFixture("heavy_json_escape_over_4000", heavyEscapeLines.join("\n"), "escapeBoundary");
+    // 3. Complete symbol with CJK/emoji that stays just under 4000 B after escaping
+    const utf8UnderLines = [
+        "function utf8UnderLimit() {",
+        ...Array.from({ length: 25 }, (_, i) => `  const msg${i} = "こんにちは世界_${i}_🚀";`),
+        "  return msg0;",
+        "}",
+    ];
+    const utf8Under = { ...makeFixture("utf8_complete_under_4000", utf8UnderLines.join("\n"), "utf8UnderLimit"), expectFastHit: true };
+    // 4. Truncated symbol > 4000 bytes
+    const largeBytesLines = [
+        "function largeFunction(input) {",
+        ...Array.from({ length: 120 }, (_, i) => `  const item_${i} = processValue(input, "payload_${"a".repeat(36)}_${i}");`),
+        "  return item_99;",
+        "}",
+    ];
+    const largeBytes = makeFixture("truncated_over_4000_bytes", largeBytesLines.join("\n"), "processValue item_99");
+    // 5. Truncated symbol > 200 lines (short lines so raw bytes < 3000, but lines > 200 forces bounded excerpt!)
+    const over200Lines = [
+        "function manyShortLines() {",
+        ...Array.from({ length: 215 }, (_, i) => `  a(${i});`),
+        "  return 1;",
+        "}",
+    ];
+    const manyLines = makeFixture("truncated_over_200_lines", over200Lines.join("\n"), "manyShortLines");
+
+    for (const fixture of [smallComplete, heavyEscape, utf8Under, largeBytes, manyLines]) {
+        const buildProjectionText = (excerpt: string) => JSON.stringify({
+            repository_relative_path: fixture.normalized.relativePath,
+            canonical_symbol_label: fixture.normalized.canonicalSymbolLabel,
+            query_relevant_source_excerpt: excerpt,
+        });
+        const minimumText = buildProjectionText("");
+        const expected = referenceBinarySearch({
+            normalized: fixture.normalized,
+            minimumText,
+            buildProjectionText,
+        });
+        const actual = selectRerankSourceWithinBudget({
+            normalized: fixture.normalized,
+            minimumText,
+            buildProjectionText,
+        });
+        assert.equal(actual.text, expected.text, `${fixture.name}: projection text must be bit-identical`);
+        assert.deepEqual(actual.selectedSource, expected.selectedSource, `${fixture.name}: selectedSource must match`);
+        assert.ok(Buffer.byteLength(actual.text, "utf8") <= MAXIMUM_UTF8_BYTES, `${fixture.name}: must respect byte budget`);
+        if (fixture.expectFastHit) {
+            assert.equal(actual.selectionAttemptCount, 1, `${fixture.name}: expected 1-shot fast path`);
+        } else {
+            assert.ok(actual.selectionAttemptCount > 1, `${fixture.name}: expected binary search fallback`);
+        }
+    }
+
+    // 6. Custom buildProjectionText whose non-empty excerpt pushes outer bytes > 4000
+    //    even when selectPreparedBoundedSource returns completeSymbolReturned === true.
+    //    Directly exercises the probeBytes <= MAXIMUM_UTF8_BYTES guard.
+    const outerOverflowFixture = makeFixture(
+        "complete_symbol_outer_projection_overflow",
+        [
+            "function overflowOuter() {",
+            ...Array.from({ length: 18 }, (_, i) => `  const v${i} = "${"z".repeat(40)}_${i}";`),
+            "  return v0;",
+            "}",
+        ].join("\n"),
+        "overflowOuter",
+    );
+    const buildExpandingProjectionText = (excerpt: string) => JSON.stringify({
+        repository_relative_path: outerOverflowFixture.normalized.relativePath,
+        canonical_symbol_label: outerOverflowFixture.normalized.canonicalSymbolLabel,
+        query_relevant_source_excerpt: excerpt,
+        ...(excerpt.length > 0 ? { extra_framing: "f".repeat(3_200) } : {}),
+    });
+    const expandingMinimumText = buildExpandingProjectionText("");
+    const expectedExpanding = referenceBinarySearch({
+        normalized: outerOverflowFixture.normalized,
+        minimumText: expandingMinimumText,
+        buildProjectionText: buildExpandingProjectionText,
+    });
+    const actualExpanding = selectRerankSourceWithinBudget({
+        normalized: outerOverflowFixture.normalized,
+        minimumText: expandingMinimumText,
+        buildProjectionText: buildExpandingProjectionText,
+    });
+    assert.equal(actualExpanding.text, expectedExpanding.text);
+    assert.deepEqual(actualExpanding.selectedSource, expectedExpanding.selectedSource);
+    assert.ok(Buffer.byteLength(actualExpanding.text, "utf8") <= MAXIMUM_UTF8_BYTES);
+    assert.ok(actualExpanding.selectionAttemptCount > 1);
 });
 
 test("v5 keeps textual source references distinct from trusted structural relationships", () => {

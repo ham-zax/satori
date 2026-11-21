@@ -281,6 +281,36 @@ export function selectRerankSourceWithinBudget(input: {
         sourceBytes: Buffer.from(input.normalized.content, "utf8"),
         symbolSpan: input.normalized.symbolSpan,
     });
+    // One-shot fast path for complete symbols: in selectPreparedBoundedSource,
+    // completeProjection is independent of sourceBudget and its serialized JSON
+    // size strictly dominates any bounded excerpt's serialized size (extra
+    // excerpt metadata far exceeds the "\n...\n" joiner). When upperBudget
+    // already returns the complete symbol within MAXIMUM_UTF8_BYTES, the binary
+    // search moves monotonically upward to upperBudget and emits the exact same
+    // projection and text. Any incomplete or over-budget probe falls through to
+    // the exact binary search with unchanged bounds.
+    selectionAttemptCount += 1;
+    const probeSelection = selectSource(
+        input.normalized,
+        upperBudget,
+        input.selectionPolicyVersion,
+        select,
+    );
+    if (probeSelection.status === "selected") {
+        const probeExcerpt = selectedExcerptText(probeSelection.source);
+        const probeText = input.buildProjectionText(probeExcerpt);
+        const probeBytes = Buffer.byteLength(probeText, "utf8");
+        if (
+            probeSelection.source.completeSymbolReturned === true
+            && probeBytes <= MAXIMUM_UTF8_BYTES
+        ) {
+            return {
+                text: probeText,
+                selectedSource: probeSelection.source,
+                selectionAttemptCount,
+            };
+        }
+    }
     for (
         let attempt = 0;
         attempt < MAXIMUM_SELECTION_ATTEMPTS && lowerBudget <= upperBudget;

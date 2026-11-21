@@ -560,6 +560,11 @@ export function selectBoundedSource(
     return selectPreparedBoundedSource({ ...input, selectionPolicyVersion }, sourceBytes, lines);
 }
 
+type PreparedSelectionCache = {
+    candidateWitness?: string;
+    candidates?: ReturnType<typeof buildOrderedCandidates>;
+};
+
 /** Own a private source/span snapshot; repeated budgets cannot observe caller mutations. */
 export function createBoundedSourceSelector(
     input: Pick<BoundedSourceSelectionInput, "sourceBytes" | "symbolSpan">,
@@ -568,14 +573,26 @@ export function createBoundedSourceSelector(
     const symbolSpan = { ...input.symbolSpan };
     const lines = readPhysicalLines(sourceBytes, symbolSpan.endLine);
     validateSymbolSpan(symbolSpan, lines.length);
+    const cache: PreparedSelectionCache = {};
     return (options) => {
         validateBudgets(options.budgets);
         const selectionPolicyVersion = options.selectionPolicyVersion ?? BOUNDED_SOURCE_SELECTION_POLICY_VERSION;
         if (selectionPolicyVersion !== BOUNDED_SOURCE_SELECTION_POLICY_VERSION) {
             throw new TypeError("Unsupported bounded source selection policy version.");
         }
-        return selectPreparedBoundedSource({ ...options, symbolSpan, selectionPolicyVersion }, sourceBytes, lines);
+        return selectPreparedBoundedSource({ ...options, symbolSpan, selectionPolicyVersion }, sourceBytes, lines, cache);
     };
+}
+
+function candidateOrderingWitness(
+    input: Pick<BoundedSourceSelectionInput, "query" | "evidenceSpans" | "structuralAnchors" | "budgets">,
+): string {
+    return JSON.stringify([
+        input.query ?? "",
+        input.evidenceSpans ?? [],
+        input.structuralAnchors ?? [],
+        input.budgets.contextLines,
+    ]);
 }
 
 function selectPreparedBoundedSource(
@@ -584,40 +601,42 @@ function selectPreparedBoundedSource(
     },
     sourceBytes: Buffer,
     lines: PhysicalLine[],
+    cache?: PreparedSelectionCache,
 ): BoundedSourceSelectionResult {
     const selectionPolicyVersion = input.selectionPolicyVersion;
     const fullSpan = byteRangeForLines(lines, input.symbolSpan.endLine, input.symbolSpan);
     const totalLines = input.symbolSpan.endLine - input.symbolSpan.startLine + 1;
     const totalBytes = fullSpan.endByte - fullSpan.startByte;
-    const completeSelected: SelectedRange[] = [{
-        ...input.symbolSpan,
-        reasons: [{
-            reason: "complete_symbol",
-            selectionBasis: "complete_symbol",
-            priority: 0,
-        }],
-    }];
-    const completeProjection = buildSourceProjection({
-        sourceBytes,
-        lines,
-        symbolSpan: input.symbolSpan,
-        selected: completeSelected,
-        complete: true,
-        capabilities: input.capabilities,
-        hasOversizedLine: false,
-        selectionPolicyVersion,
-    });
-    const completeSerializedBytes = serializedBytes(completeProjection);
     if (
         totalBytes <= input.budgets.maxSourceBytes
         && totalLines <= input.budgets.maxSourceLines
-        && completeSerializedBytes <= input.budgets.maxSerializedSourceBytes
     ) {
-        return {
-            status: "selected",
-            source: completeProjection,
-            serializedSourceBytes: completeSerializedBytes,
-        };
+        const completeSelected: SelectedRange[] = [{
+            ...input.symbolSpan,
+            reasons: [{
+                reason: "complete_symbol",
+                selectionBasis: "complete_symbol",
+                priority: 0,
+            }],
+        }];
+        const completeProjection = buildSourceProjection({
+            sourceBytes,
+            lines,
+            symbolSpan: input.symbolSpan,
+            selected: completeSelected,
+            complete: true,
+            capabilities: input.capabilities,
+            hasOversizedLine: false,
+            selectionPolicyVersion,
+        });
+        const completeSerializedBytes = serializedBytes(completeProjection);
+        if (completeSerializedBytes <= input.budgets.maxSerializedSourceBytes) {
+            return {
+                status: "selected",
+                source: completeProjection,
+                serializedSourceBytes: completeSerializedBytes,
+            };
+        }
     }
 
     const oversizedLines = new Set<number>();
@@ -628,15 +647,35 @@ function selectPreparedBoundedSource(
         }
     }
 
-    const candidates = buildOrderedCandidates({
-        sourceBytes,
-        lines,
-        symbolSpan: input.symbolSpan,
-        query: input.query,
-        evidenceSpans: input.evidenceSpans,
-        structuralAnchors: input.structuralAnchors,
-        contextLines: input.budgets.contextLines,
-    });
+    let candidates: ReturnType<typeof buildOrderedCandidates>;
+    if (cache) {
+        const witness = candidateOrderingWitness(input);
+        if (cache.candidateWitness === witness && cache.candidates) {
+            candidates = cache.candidates;
+        } else {
+            candidates = buildOrderedCandidates({
+                sourceBytes,
+                lines,
+                symbolSpan: input.symbolSpan,
+                query: input.query,
+                evidenceSpans: input.evidenceSpans,
+                structuralAnchors: input.structuralAnchors,
+                contextLines: input.budgets.contextLines,
+            });
+            cache.candidateWitness = witness;
+            cache.candidates = candidates;
+        }
+    } else {
+        candidates = buildOrderedCandidates({
+            sourceBytes,
+            lines,
+            symbolSpan: input.symbolSpan,
+            query: input.query,
+            evidenceSpans: input.evidenceSpans,
+            structuralAnchors: input.structuralAnchors,
+            contextLines: input.budgets.contextLines,
+        });
+    }
     let selected: SelectedRange[] = [];
     let smallestRejectedProjectionBytes = Number.POSITIVE_INFINITY;
     for (const rawCandidate of candidates) {

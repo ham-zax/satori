@@ -31,6 +31,12 @@ export type InspectableSourceSelectionCapabilities = {
     controlFlowAnchors: "unavailable_streaming_source";
 };
 
+export type InspectableSourceObservedStat = Readonly<{
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+}>;
+
 export type InspectableSourceEvidence = {
     canonicalRoot: string;
     relativeFile: string;
@@ -39,6 +45,7 @@ export type InspectableSourceEvidence = {
     sourceByteLength: number;
     observedHash: string;
     identity: RootBoundFileIdentity;
+    observedStat?: InspectableSourceObservedStat;
     selectionCapabilities: InspectableSourceSelectionCapabilities;
     measurementObservation?: SourceMeasurementObservation;
 };
@@ -229,6 +236,11 @@ export async function prepareInspectableSource(input: {
             sourceByteLength: sourceBytes.length,
             observedHash,
             identity: opened.identity,
+            observedStat: {
+                size: opened.observedStat.size,
+                mtimeMs: opened.observedStat.mtimeMs,
+                ctimeMs: opened.observedStat.ctimeMs,
+            },
             selectionCapabilities: STREAMING_SELECTION_CAPABILITIES,
             ...(measurementObservation ? { measurementObservation } : {}),
         };

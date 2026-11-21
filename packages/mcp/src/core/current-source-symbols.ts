@@ -5,13 +5,17 @@ import {
     createLanguageAnalysisService,
     normalizeLanguageId,
     recordSourceProcessing,
+    type RootBoundFileIdentity,
     type SymbolRecord,
     type SymbolSpan,
     type LanguageAnalysisPort,
     type SourceMeasurementObservation,
     type SourceProcessingOutcome,
 } from "@satori-code/core";
-import { prepareInspectableSource } from "./inspectable-source.js";
+import {
+    prepareInspectableSource,
+    type InspectableSourceObservedStat,
+} from "./inspectable-source.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
 export const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
@@ -55,6 +59,8 @@ export type CurrentSourceEvidence = {
     sourceBytes: Uint8Array;
     source: string;
     observedHash: string;
+    identity?: RootBoundFileIdentity;
+    observedStat?: InspectableSourceObservedStat;
     measurementObservation?: SourceMeasurementObservation;
 };
 
@@ -92,6 +98,10 @@ export async function readCurrentSourceEvidence(
             sourceBytes: prepared.evidence.sourceBytes,
             source: prepared.evidence.source,
             observedHash: prepared.evidence.observedHash,
+            identity: prepared.evidence.identity,
+            ...(prepared.evidence.observedStat
+                ? { observedStat: prepared.evidence.observedStat }
+                : {}),
             ...(prepared.evidence.measurementObservation
                 ? { measurementObservation: prepared.evidence.measurementObservation }
                 : {}),

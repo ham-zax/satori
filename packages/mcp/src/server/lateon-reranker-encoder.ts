@@ -1,4 +1,4 @@
-import { parentPort } from "node:worker_threads";
+import { parentPort, type Transferable } from "node:worker_threads";
 import path from "node:path";
 import type * as onnxRuntime from "onnxruntime-node";
 import type {
@@ -87,6 +87,54 @@ export function encodeTokenVectors(
     return vectors;
 }
 
+// Specialized 48-dimension late-interaction max-sim preserving strict
+// left-to-right IEEE-754 addition order so scores remain bit-identical to the
+// generic loop while avoiding inner-loop overhead on warm documentCache hits.
+function maxSimScore48(
+    queryVectors: Float64Array,
+    documentVectors: Float64Array,
+): number {
+    const queryCount = Math.floor(queryVectors.length / 48);
+    const documentCount = Math.floor(documentVectors.length / 48);
+    if (queryCount === 0 || documentCount === 0) return 0;
+    let score = 0;
+    for (let queryIndex = 0; queryIndex < queryCount; queryIndex++) {
+        const qo = queryIndex * 48;
+        const q0 = queryVectors[qo], q1 = queryVectors[qo + 1], q2 = queryVectors[qo + 2], q3 = queryVectors[qo + 3];
+        const q4 = queryVectors[qo + 4], q5 = queryVectors[qo + 5], q6 = queryVectors[qo + 6], q7 = queryVectors[qo + 7];
+        const q8 = queryVectors[qo + 8], q9 = queryVectors[qo + 9], q10 = queryVectors[qo + 10], q11 = queryVectors[qo + 11];
+        const q12 = queryVectors[qo + 12], q13 = queryVectors[qo + 13], q14 = queryVectors[qo + 14], q15 = queryVectors[qo + 15];
+        const q16 = queryVectors[qo + 16], q17 = queryVectors[qo + 17], q18 = queryVectors[qo + 18], q19 = queryVectors[qo + 19];
+        const q20 = queryVectors[qo + 20], q21 = queryVectors[qo + 21], q22 = queryVectors[qo + 22], q23 = queryVectors[qo + 23];
+        const q24 = queryVectors[qo + 24], q25 = queryVectors[qo + 25], q26 = queryVectors[qo + 26], q27 = queryVectors[qo + 27];
+        const q28 = queryVectors[qo + 28], q29 = queryVectors[qo + 29], q30 = queryVectors[qo + 30], q31 = queryVectors[qo + 31];
+        const q32 = queryVectors[qo + 32], q33 = queryVectors[qo + 33], q34 = queryVectors[qo + 34], q35 = queryVectors[qo + 35];
+        const q36 = queryVectors[qo + 36], q37 = queryVectors[qo + 37], q38 = queryVectors[qo + 38], q39 = queryVectors[qo + 39];
+        const q40 = queryVectors[qo + 40], q41 = queryVectors[qo + 41], q42 = queryVectors[qo + 42], q43 = queryVectors[qo + 43];
+        const q44 = queryVectors[qo + 44], q45 = queryVectors[qo + 45], q46 = queryVectors[qo + 46], q47 = queryVectors[qo + 47];
+        let maximum = Number.NEGATIVE_INFINITY;
+        for (let documentIndex = 0; documentIndex < documentCount; documentIndex++) {
+            const o = documentIndex * 48;
+            let dotProduct = q0 * documentVectors[o];
+            dotProduct += q1 * documentVectors[o + 1]; dotProduct += q2 * documentVectors[o + 2]; dotProduct += q3 * documentVectors[o + 3];
+            dotProduct += q4 * documentVectors[o + 4]; dotProduct += q5 * documentVectors[o + 5]; dotProduct += q6 * documentVectors[o + 6]; dotProduct += q7 * documentVectors[o + 7];
+            dotProduct += q8 * documentVectors[o + 8]; dotProduct += q9 * documentVectors[o + 9]; dotProduct += q10 * documentVectors[o + 10]; dotProduct += q11 * documentVectors[o + 11];
+            dotProduct += q12 * documentVectors[o + 12]; dotProduct += q13 * documentVectors[o + 13]; dotProduct += q14 * documentVectors[o + 14]; dotProduct += q15 * documentVectors[o + 15];
+            dotProduct += q16 * documentVectors[o + 16]; dotProduct += q17 * documentVectors[o + 17]; dotProduct += q18 * documentVectors[o + 18]; dotProduct += q19 * documentVectors[o + 19];
+            dotProduct += q20 * documentVectors[o + 20]; dotProduct += q21 * documentVectors[o + 21]; dotProduct += q22 * documentVectors[o + 22]; dotProduct += q23 * documentVectors[o + 23];
+            dotProduct += q24 * documentVectors[o + 24]; dotProduct += q25 * documentVectors[o + 25]; dotProduct += q26 * documentVectors[o + 26]; dotProduct += q27 * documentVectors[o + 27];
+            dotProduct += q28 * documentVectors[o + 28]; dotProduct += q29 * documentVectors[o + 29]; dotProduct += q30 * documentVectors[o + 30]; dotProduct += q31 * documentVectors[o + 31];
+            dotProduct += q32 * documentVectors[o + 32]; dotProduct += q33 * documentVectors[o + 33]; dotProduct += q34 * documentVectors[o + 34]; dotProduct += q35 * documentVectors[o + 35];
+            dotProduct += q36 * documentVectors[o + 36]; dotProduct += q37 * documentVectors[o + 37]; dotProduct += q38 * documentVectors[o + 38]; dotProduct += q39 * documentVectors[o + 39];
+            dotProduct += q40 * documentVectors[o + 40]; dotProduct += q41 * documentVectors[o + 41]; dotProduct += q42 * documentVectors[o + 42]; dotProduct += q43 * documentVectors[o + 43];
+            dotProduct += q44 * documentVectors[o + 44]; dotProduct += q45 * documentVectors[o + 45]; dotProduct += q46 * documentVectors[o + 46]; dotProduct += q47 * documentVectors[o + 47];
+            if (dotProduct > maximum) maximum = dotProduct;
+        }
+        score += maximum;
+    }
+    return score;
+}
+
 // Late-interaction max-sim over two flat projections. Reads both buffers in
 // place, so scoring a document allocates nothing.
 export function maxSimScore(
@@ -96,6 +144,9 @@ export function maxSimScore(
     documentDimensions: number,
 ): number {
     if (queryDimensions <= 0 || documentDimensions <= 0) return 0;
+    if (queryDimensions === 48 && documentDimensions === 48) {
+        return maxSimScore48(queryVectors, documentVectors);
+    }
     const queryCount = Math.floor(queryVectors.length / queryDimensions);
     const documentCount = Math.floor(documentVectors.length / documentDimensions);
     if (queryCount === 0 || documentCount === 0) return 0;
@@ -264,7 +315,22 @@ async function handle(request: LateOnEncoderRequest): Promise<LateOnEncoderRespo
             encoded.dimensions,
         ),
         tokenCount: encoded.tokenCount,
+        vectors: encoded.vectors,
+        dimensions: encoded.dimensions,
     };
+}
+
+function transferListFor(response: LateOnEncoderResponse): Transferable[] {
+    if (
+        (response.type === "query" || response.type === "scored")
+        && response.vectors.byteLength > 0
+        && response.vectors.byteOffset === 0
+        && response.vectors.byteLength === response.vectors.buffer.byteLength
+        && response.vectors.buffer instanceof ArrayBuffer
+    ) {
+        return [response.vectors.buffer];
+    }
+    return [];
 }
 
 // The encoder is only ever started as a worker thread, so the port is present
@@ -273,7 +339,7 @@ if (parentPort) {
     const port = parentPort;
     port.on("message", (request: LateOnEncoderRequest) => {
         void handle(request).then(
-            (response) => port.postMessage(response),
+            (response) => port.postMessage(response, transferListFor(response)),
             (error: unknown) => port.postMessage({
                 type: "error",
                 message: error instanceof Error ? error.message : String(error),

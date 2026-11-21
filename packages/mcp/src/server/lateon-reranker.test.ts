@@ -14,10 +14,24 @@ import {
 import { encodeTokenVectors, maxSimScore } from "./lateon-reranker-encoder.js";
 import {
     BoundedCache,
+    ByteBoundedCache,
+    createDocumentCacheKey,
     createScoreCacheKey,
+    DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES,
+    DOCUMENT_CACHE_MAX_BYTES,
+    estimateDocumentEncodingBytes,
     QUERY_CACHE_LIMIT,
     SCORE_CACHE_LIMIT,
+    scoreDocuments,
+    type DocumentEncoding,
+    type DocumentScore,
+    type LateOnEncoderHandle,
+    type QueryEncoding,
 } from "./lateon-reranker-worker.js";
+import type {
+    LateOnEncoderRequest,
+    LateOnEncoderResponse,
+} from "./lateon-reranker-protocol.js";
 import { resolveSearchRerankQuery } from "../core/search-rerank-query-routing.js";
 import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
 import { buildSearchRerankDocument } from "../core/search-rerank-document.js";
@@ -304,6 +318,231 @@ test("LateOn rerank caches are bounded, LRU-ordered, and keyed on query plus doc
         createScoreCacheKey("a\0b", "c"),
         createScoreCacheKey("a", "b\0c"),
         "a NUL byte inside the query must not collide with the separator",
+    );
+});
+
+test("LateOn document vector cache enforces byte bounds, LRU order, and oversized-entry safety", () => {
+    assert.equal(DOCUMENT_CACHE_MAX_BYTES, 64 * 1024 * 1024);
+    assert.equal(DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES, 256);
+
+    const cache = new ByteBoundedCache<Uint8Array>(10, (value) => value.byteLength);
+    assert.equal(cache.maxBytes, 10);
+    assert.equal(cache.bytes, 0);
+    assert.equal(cache.set("a", new Uint8Array(4)), true);
+    assert.equal(cache.set("b", new Uint8Array(4)), true);
+    assert.equal(cache.bytes, 8);
+    assert.equal(cache.size, 2);
+
+    // Touch "a" so "b" becomes least recently used.
+    assert.ok(cache.get("a"));
+    assert.equal(cache.set("c", new Uint8Array(4)), true);
+    assert.equal(cache.get("b"), undefined, "LRU entry must be evicted when byte budget is exceeded");
+    assert.ok(cache.get("a"));
+    assert.ok(cache.get("c"));
+    assert.equal(cache.bytes, 8);
+
+    // Overwriting an existing key adjusts retained bytes without leaking.
+    assert.equal(cache.set("a", new Uint8Array(6)), true);
+    assert.equal(cache.bytes, 10);
+    assert.equal(cache.size, 2);
+
+    // An oversized entry is declined without evicting unrelated entries, while
+    // dropping any stale value stored under the same key.
+    assert.equal(cache.set("oversized", new Uint8Array(11)), false);
+    assert.equal(cache.size, 2);
+    assert.equal(cache.bytes, 10);
+    assert.equal(cache.set("a", new Uint8Array(11)), false);
+    assert.equal(cache.get("a"), undefined, "stale entry under replaced oversized key must be cleared");
+    assert.ok(cache.get("c"), "unrelated entries must survive an oversized insert");
+    assert.equal(cache.bytes, 4);
+
+    assert.throws(() => new ByteBoundedCache<Uint8Array>(0, (v) => v.byteLength), /positive integer/);
+    assert.throws(() => cache.set("zero", new Uint8Array(0)), /positive integer/);
+
+    assert.equal(createDocumentCacheKey("doc"), createDocumentCacheKey("doc"));
+    assert.notEqual(createDocumentCacheKey("doc"), createDocumentCacheKey("doc "));
+    assert.equal(
+        estimateDocumentEncodingBytes({
+            vectors: new Float64Array(48),
+            dimensions: 48,
+            tokenCount: 1,
+        }),
+        48 * 8 + DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES,
+    );
+});
+
+test("LateOn documentCache reproduces uncached scores bit-for-bit across queries and catches broken keys", async () => {
+    const dimensions = 48;
+    const seedFor = (text: string): number => {
+        let hash = 2166136261;
+        for (let index = 0; index < text.length; index++) {
+            hash = Math.imul(hash ^ text.charCodeAt(index), 16777619) >>> 0;
+        }
+        return (hash % 2147483646) + 1;
+    };
+    const encodeSynthetic = (text: string, tokenCount: number): DocumentEncoding => ({
+        vectors: encodeTokenVectors(
+            createDeterministicTensor(tokenCount * dimensions, seedFor(text)),
+            tokenCount,
+            dimensions,
+            (tokenIndex) => tokenIndex % 5 !== 2,
+        ),
+        dimensions,
+        tokenCount,
+    });
+    const encodeSyntheticQuery = (text: string): QueryEncoding => ({
+        vectors: encodeTokenVectors(
+            createDeterministicTensor(9 * dimensions, seedFor(`Q:${text}`)),
+            9,
+            dimensions,
+            () => true,
+        ),
+        dimensions,
+        tokenCount: 9,
+    });
+
+    const createInstrumentedEncoders = (count: number) => {
+        const counts = { setQuery: 0, scoreDocument: 0 };
+        const encoders: LateOnEncoderHandle[] = Array.from({ length: count }, () => {
+            let activeQuery: Readonly<{ vectors: Float64Array; dimensions: number }> | null = null;
+            return {
+                request: async (message: LateOnEncoderRequest): Promise<LateOnEncoderResponse> => {
+                    if (message.type === "set_query") {
+                        counts.setQuery += 1;
+                        activeQuery = { vectors: message.vectors, dimensions: message.dimensions };
+                        return { type: "query_set" };
+                    }
+                    if (message.type === "score_document") {
+                        counts.scoreDocument += 1;
+                        assert.ok(activeQuery, "query must be installed before scoring");
+                        const tokenCount = 12 + (message.text.length % 17);
+                        const encoded = encodeSynthetic(message.text, tokenCount);
+                        return {
+                            type: "scored",
+                            relevanceScore: maxSimScore(
+                                activeQuery.vectors,
+                                activeQuery.dimensions,
+                                encoded.vectors,
+                                encoded.dimensions,
+                            ),
+                            tokenCount: encoded.tokenCount,
+                            vectors: encoded.vectors,
+                            dimensions: encoded.dimensions,
+                        };
+                    }
+                    throw new Error(`Unexpected encoder message: ${message.type}`);
+                },
+                terminate: async () => 0,
+            };
+        });
+        return { encoders, counts };
+    };
+
+    const docs = [
+        '{"canonical_symbol_label":"alpha","query_relevant_source_excerpt":"function alpha() { return 1; }"}',
+        '{"canonical_symbol_label":"beta","query_relevant_source_excerpt":"function beta(x) { return x * 2; }"}',
+        '{"canonical_symbol_label":"gamma","query_relevant_source_excerpt":"class Gamma { run() {} }"}',
+        '{"canonical_symbol_label":"alpha","query_relevant_source_excerpt":"function alpha() { return 1; }"}',
+    ];
+    const query1 = "find alpha implementation";
+    const query2 = "locate beta and gamma handlers";
+    const q1Enc = encodeSyntheticQuery(query1);
+    const q2Enc = encodeSyntheticQuery(query2);
+
+    // Reference uncached run for query2 (completely cold caches).
+    const coldRef = createInstrumentedEncoders(3);
+    const expectedQuery2 = await scoreDocuments(
+        {
+            encoders: coldRef.encoders,
+            documentCache: new ByteBoundedCache<DocumentEncoding>(
+                DOCUMENT_CACHE_MAX_BYTES,
+                estimateDocumentEncodingBytes,
+            ),
+            scoreCache: new BoundedCache<DocumentScore>(SCORE_CACHE_LIMIT),
+        },
+        query2,
+        docs,
+        q2Enc,
+    );
+    // Duplicate doc[0]/doc[3] should only invoke the encoder once while still
+    // counting both occurrences toward tokenCount.
+    assert.equal(coldRef.counts.scoreDocument, 3);
+    assert.equal(coldRef.counts.setQuery, 3);
+
+    // Warm run: populate documentCache via query1, then run query2 with 0% scoreCache overlap.
+    const warm = createInstrumentedEncoders(3);
+    const warmState = {
+        encoders: warm.encoders,
+        documentCache: new ByteBoundedCache<DocumentEncoding>(
+            DOCUMENT_CACHE_MAX_BYTES,
+            estimateDocumentEncodingBytes,
+        ),
+        scoreCache: new BoundedCache<DocumentScore>(SCORE_CACHE_LIMIT),
+    };
+    await scoreDocuments(warmState, query1, docs, q1Enc);
+    assert.equal(warm.counts.scoreDocument, 3);
+    warm.counts.setQuery = 0;
+    warm.counts.scoreDocument = 0;
+
+    const cachedQuery2 = await scoreDocuments(warmState, query2, docs, q2Enc);
+    assert.equal(warm.counts.setQuery, 0, "100% documentCache hit must not call set_query");
+    assert.equal(warm.counts.scoreDocument, 0, "100% documentCache hit must not call score_document");
+    assert.equal(cachedQuery2.tokenCount, expectedQuery2.tokenCount);
+    assert.equal(cachedQuery2.scores.length, expectedQuery2.scores.length);
+    for (let index = 0; index < expectedQuery2.scores.length; index++) {
+        assert.ok(
+            Object.is(cachedQuery2.scores[index], expectedQuery2.scores[index]),
+            `cached score[${index}] must be bit-identical to uncached score`,
+        );
+    }
+
+    // Partial hit (3 cached + 1 unseen) installs query on only 1 encoder lane.
+    const mixedDocs = [
+        docs[0],
+        '{"canonical_symbol_label":"delta","query_relevant_source_excerpt":"export const delta = 42;"}',
+        docs[2],
+    ];
+    const mixedRef = createInstrumentedEncoders(3);
+    const expectedMixed = await scoreDocuments(
+        {
+            encoders: mixedRef.encoders,
+            documentCache: new ByteBoundedCache<DocumentEncoding>(
+                DOCUMENT_CACHE_MAX_BYTES,
+                estimateDocumentEncodingBytes,
+            ),
+            scoreCache: new BoundedCache<DocumentScore>(SCORE_CACHE_LIMIT),
+        },
+        query2,
+        mixedDocs,
+        q2Enc,
+    );
+    warm.counts.setQuery = 0;
+    warm.counts.scoreDocument = 0;
+    const cachedMixed = await scoreDocuments(warmState, query2, mixedDocs, q2Enc);
+    assert.equal(warm.counts.setQuery, 1, "single miss must only install query on 1 encoder lane");
+    assert.equal(warm.counts.scoreDocument, 1, "only the unseen document must hit the encoder");
+    assert.equal(cachedMixed.tokenCount, expectedMixed.tokenCount);
+    for (let index = 0; index < expectedMixed.scores.length; index++) {
+        assert.ok(Object.is(cachedMixed.scores[index], expectedMixed.scores[index]));
+    }
+
+    // Witness/key mutation check: breaking the cache key must fail equivalence.
+    const mutated = createInstrumentedEncoders(3);
+    const mutatedState = {
+        encoders: mutated.encoders,
+        documentCache: new ByteBoundedCache<DocumentEncoding>(
+            DOCUMENT_CACHE_MAX_BYTES,
+            estimateDocumentEncodingBytes,
+        ),
+        scoreCache: new BoundedCache<DocumentScore>(SCORE_CACHE_LIMIT),
+    };
+    const brokenKey = () => "broken-constant-witness";
+    await scoreDocuments(mutatedState, query1, [docs[0]], q1Enc, brokenKey);
+    const poisonedQuery2 = await scoreDocuments(mutatedState, query2, docs, q2Enc, brokenKey);
+    assert.notDeepEqual(
+        poisonedQuery2.scores,
+        expectedQuery2.scores,
+        "a broken documentCache witness must visibly diverge from the uncached reference",
     );
 });
 

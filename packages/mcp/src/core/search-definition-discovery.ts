@@ -1,4 +1,4 @@
-import type { SymbolRecord } from "@satori-code/core";
+import { normalizeLanguageId, type SymbolRecord } from "@satori-code/core";
 import { SEARCH_RRF_K } from "./search-constants.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import { classifyPathCategory, isConfigurationPath, normalizeSearchPath } from "./search-ranking-policy.js";
@@ -12,6 +12,73 @@ const DEFINITION_KINDS = new Set(["function", "method", "constructor", "class", 
 const QUERY_STOP_WORDS = new Set("the a an and or of to in for is are be does do where when how what which current against".split(" "));
 type DefinitionTerms = { terms: string[]; ownerTerms: string[]; abstains: boolean };
 const termsByDefinition = new WeakMap<DefinitionDiscoveryMetadata, DefinitionTerms & { witness: string[] }>();
+
+type QueryLanguageSpec = Readonly<{
+    canonical: string;
+    queryPattern: RegExp;
+    pathTokens: readonly string[];
+}>;
+
+const EXPLICIT_QUERY_LANGUAGES: readonly QueryLanguageSpec[] = Object.freeze([
+    { canonical: "python", queryPattern: /\bpython\b/i, pathTokens: ["python", "py"] },
+    { canonical: "swift", queryPattern: /\bswift\b/i, pathTokens: ["swift"] },
+    { canonical: "kotlin", queryPattern: /\bkotlin\b/i, pathTokens: ["kotlin", "kt"] },
+    { canonical: "rust", queryPattern: /\brust\b/i, pathTokens: ["rust", "rs"] },
+    {
+        canonical: "go",
+        queryPattern: /\bgolang\b|\b(?:in\s+(?:the\s+)?go\b|\bgo\s+(?:builder|runtime|library|generator|package|struct|code|client|server|sdk|implementation))\b/i,
+        pathTokens: ["go", "golang"],
+    },
+    { canonical: "cpp", queryPattern: /(?:^|[^a-z0-9_])c\+\+(?=$|[^a-z0-9_+])|\bcpp\b/i, pathTokens: ["cpp", "cxx", "cc"] },
+    { canonical: "csharp", queryPattern: /(?:^|[^a-z0-9_])c#(?=$|[^a-z0-9_])|\bcsharp\b|\b\.net\b/i, pathTokens: ["csharp", "net", "cs"] },
+    { canonical: "java", queryPattern: /\bjava\b/i, pathTokens: ["java"] },
+    { canonical: "typescript", queryPattern: /\btypescript\b/i, pathTokens: ["typescript", "ts"] },
+    { canonical: "javascript", queryPattern: /\bjavascript\b/i, pathTokens: ["javascript", "js"] },
+    { canonical: "dart", queryPattern: /\bdart\b/i, pathTokens: ["dart"] },
+    { canonical: "lua", queryPattern: /\blua\b/i, pathTokens: ["lua"] },
+    { canonical: "php", queryPattern: /\bphp\b/i, pathTokens: ["php"] },
+    { canonical: "ruby", queryPattern: /\bruby\b/i, pathTokens: ["ruby", "rb"] },
+]);
+
+/**
+ * Extract programming languages explicitly named in natural-language queries
+ * (e.g. "in the Kotlin runtime", "in the Swift library", "C++ generator").
+ * Only activates as a soft RRF tie-breaker when the rerank window is polyglot.
+ */
+function itemsLengthOf(items: readonly unknown[]): number {
+    return items.length;
+}
+
+function itemsLengthScale(itemCount: number, effectiveDocCount: number): number {
+    if (itemCount <= 0 || effectiveDocCount <= itemCount) return 1;
+    return effectiveDocCount / itemCount;
+}
+
+export function extractExplicitQueryLanguages(query: string): readonly string[] {
+    const matched: string[] = [];
+    for (const spec of EXPLICIT_QUERY_LANGUAGES) {
+        if (spec.queryPattern.test(query)) {
+            matched.push(spec.canonical);
+        }
+    }
+    return matched;
+}
+
+function candidateMatchesRequestedLanguage(
+    requestedSpecs: readonly QueryLanguageSpec[],
+    rawLanguage: string | undefined,
+    rawPath: string | undefined,
+): boolean {
+    const normalizedLang = rawLanguage ? normalizeLanguageId(rawLanguage) : undefined;
+    const pathTokens = rawPath
+        ? new Set(normalizeSearchPath(rawPath).split(/[^a-z0-9]+/).filter(Boolean))
+        : undefined;
+    for (const spec of requestedSpecs) {
+        if (normalizedLang && normalizedLang === spec.canonical) return true;
+        if (pathTokens && spec.pathTokens.some((token) => pathTokens.has(token))) return true;
+    }
+    return false;
+}
 
 export function allowsDefinitionDiscovery(input: {
     enabled: boolean;
@@ -99,10 +166,39 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     items: readonly T[];
     query: string;
     metadata: (originalIndex: number) => DefinitionDiscoveryMetadata | undefined;
+    totalWindowSize?: number;
+    candidateLanguage?: (originalIndex: number) => string | undefined;
+    candidatePath?: (originalIndex: number) => string | undefined;
 }): { items: T[]; applied: boolean } {
     const queryTerms = [...new Set(tokenizeMetadataField(input.query)
         .filter(term => term.length >= 3 && !QUERY_STOP_WORDS.has(term)))];
     if (queryTerms.length === 0) return { items: [...input.items], applied: false };
+
+    // Polyglot natural-language language affinity: when a query names a
+    // language ("in the Swift library", "in the Kotlin runtime") and the rerank
+    // window contains multiple languages, give matching candidates a soft RRF
+    // vote so wrong-language clones do not outrank the requested runtime.
+    const requestedLanguageSpecs = EXPLICIT_QUERY_LANGUAGES.filter(
+        (spec) => spec.queryPattern.test(input.query),
+    );
+    let languageMatchedItems: Set<T> | undefined;
+    if (requestedLanguageSpecs.length > 0 && input.candidateLanguage) {
+        const distinctLanguages = new Set<string>();
+        const matched = new Set<T>();
+        for (const item of input.items) {
+            const rawLang = input.candidateLanguage(item.originalIndex);
+            const normalizedLang = rawLang ? normalizeLanguageId(rawLang) : undefined;
+            if (normalizedLang) distinctLanguages.add(normalizedLang);
+            const rawPath = input.candidatePath?.(item.originalIndex)
+                ?? input.metadata(item.originalIndex)?.file;
+            if (candidateMatchesRequestedLanguage(requestedLanguageSpecs, rawLang, rawPath)) {
+                matched.add(item);
+            }
+        }
+        if (distinctLanguages.size >= 2 && matched.size > 0 && matched.size < input.items.length) {
+            languageMatchedItems = matched;
+        }
+    }
     const docs = input.items.map(item => {
         const metadata = input.metadata(item.originalIndex);
         const evidence = metadata ? definitionTerms(metadata) : { terms: [], ownerTerms: [], abstains: false };
@@ -120,11 +216,13 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
         const base = inflectedBaseTerm(term, candidate => corpusTerms.has(candidate));
         return base ? [term, base] : [term];
     }))];
+    const effectiveDocCount = Math.max(docs.length, input.totalWindowSize ?? docs.length);
+    const providerRankScale = itemsLengthScale(itemsLengthOf(input.items), effectiveDocCount);
     const scores = new Map<T, number>();
     for (const term of effectiveQueryTerms) {
         const df = docs.filter(doc => doc.counts.has(term)).length;
         if (df === 0) continue;
-        const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
+        const idf = Math.log(1 + (effectiveDocCount - df + 0.5) / (df + 0.5));
         for (const { item, counts, length } of populated) {
             const tf = counts.get(term) ?? 0;
             if (tf === 0) continue;
@@ -132,11 +230,12 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
             scores.set(item, (scores.get(item) ?? 0) + score);
         }
     }
-    if (scores.size === 0) return { items: [...input.items], applied: false };
+    if (scores.size === 0 && !languageMatchedItems) return { items: [...input.items], applied: false };
     const definitionRank = new Map([...scores.keys()]
         .sort((a, b) => scores.get(b)! - scores.get(a)! || a.originalIndex - b.originalIndex)
         .map((item, index) => [item, index + 1]));
     const evidenceByItem = new Map(docs.map(doc => [doc.item, doc]));
+    const languageAffinityVote = 1 / (SEARCH_RRF_K + 1);
     const score = (item: T) => {
         const evidence = evidenceByItem.get(item)!;
         // A behavior description need not share the declaration's name.
@@ -144,8 +243,13 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
         // Single-term lookup keeps lexical semantics.
         const abstentionRank = queryTerms.length > 1 && evidence.abstains ? scores.size + 1 : undefined;
         const rank = definitionRank.get(item) ?? abstentionRank;
-        return 1 / (SEARCH_RRF_K + item.providerRank)
-            + (rank !== undefined ? 1 / (SEARCH_RRF_K + rank) : 0);
+        // When supporting/test chunks were omitted before rerank, restore the
+        // provider's rank spread across the original window so BM25 definition
+        // votes cannot overpower LateOn's top production picks via rank compression.
+        const effectiveProviderRank = 1 + (item.providerRank - 1) * providerRankScale;
+        return 1 / (SEARCH_RRF_K + effectiveProviderRank)
+            + (rank !== undefined ? 1 / (SEARCH_RRF_K + rank) : 0)
+            + (languageMatchedItems?.has(item) ? languageAffinityVote : 0);
     };
     const items = [...input.items].sort((a, b) => score(b) - score(a)
         || Number(definitionRank.has(b)) - Number(definitionRank.has(a))

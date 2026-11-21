@@ -17,6 +17,7 @@ export function buildSearchRerankSourceReferences(input: {
     owner: SymbolRecord | undefined;
     registry: SymbolRegistry;
     source: string;
+    sourceLines?: readonly string[];
     sourceStartLine: number;
     observedHash: string;
     query: string;
@@ -26,7 +27,7 @@ export function buildSearchRerankSourceReferences(input: {
         || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(owner.name)) return [];
     const name = owner.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const occurrence = new RegExp(`(^|[^A-Za-z0-9_$])${name}(?=$|[^A-Za-z0-9_$])`);
-    const lines = input.source.split(/\r?\n/);
+    const lines = input.sourceLines ?? input.source.split(/\r?\n/);
     const symbols = (input.registry.symbolsByFile.get(owner.file) ?? [])
         .filter((symbol) => symbol.symbolInstanceId !== owner.symbolInstanceId
             && ["function", "method"].includes(symbol.kind)

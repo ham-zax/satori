@@ -140,9 +140,11 @@ import {
     resolveSearchRerankDocumentProjectionIdentity,
 } from "./search-rerank-document-routing.js";
 import {
+    createSearchRerankProjectionRequestCache,
     projectPublicationBoundSearchRerankDocument,
     resolveCanonicalOwner,
     searchRerankCandidateId,
+    VerifiedRerankSourceCache,
 } from "./search-rerank-projection.js";
 import type { SearchRerankProjectionResult } from "./search-rerank-projection-result.js";
 import { SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID } from "./search-order-policy.js";
@@ -614,6 +616,11 @@ export class SearchRequestCoordinator {
     private readonly preparedRead: SearchPreparedReadCollaborator;
     private readonly freshness: SearchFreshnessCollaborator;
     private readonly environment: SearchEnvironmentCollaborator;
+    private readonly verifiedRerankSourceCache = new VerifiedRerankSourceCache();
+    private readonly preparedRelationshipsByManifestHash = new Map<
+        string,
+        PreparedSearchRerankStructuralRelationships
+    >();
 
     constructor(
         collaborators: SearchRequestCoordinatorCollaborators,
@@ -1695,6 +1702,9 @@ export class SearchRequestCoordinator {
                 );
                 const wantsStructuralContext = rerankerDocumentProjectionIdentity
                     === SEARCH_RERANK_DOCUMENT_POLICY.id;
+                const rerankProjectionRequestCache = createSearchRerankProjectionRequestCache(
+                    this.verifiedRerankSourceCache,
+                );
                 const retrievalFilter = searchSymbolRegistry
                     ? buildSearchRetrievalScope({
                         files: searchSymbolRegistry.manifest.files,
@@ -1836,10 +1846,27 @@ export class SearchRequestCoordinator {
                                         if (status !== "available" || compatibility.relationships.status !== "ok") {
                                             return { status };
                                         }
-                                        preparedSearchRerankStructuralRelationships
-                                            = prepareSearchRerankStructuralRelationships(
-                                                compatibility.relationships.records,
+                                        const manifestHashKey = searchSymbolRegistryManifestHash!;
+                                        const cachedPrepared = this.preparedRelationshipsByManifestHash.get(manifestHashKey);
+                                        if (cachedPrepared) {
+                                            this.preparedRelationshipsByManifestHash.delete(manifestHashKey);
+                                            this.preparedRelationshipsByManifestHash.set(manifestHashKey, cachedPrepared);
+                                            preparedSearchRerankStructuralRelationships = cachedPrepared;
+                                        } else {
+                                            preparedSearchRerankStructuralRelationships
+                                                = prepareSearchRerankStructuralRelationships(
+                                                    compatibility.relationships.records,
+                                                );
+                                            this.preparedRelationshipsByManifestHash.set(
+                                                manifestHashKey,
+                                                preparedSearchRerankStructuralRelationships,
                                             );
+                                            while (this.preparedRelationshipsByManifestHash.size > 8) {
+                                                const oldestKey = this.preparedRelationshipsByManifestHash.keys().next();
+                                                if (oldestKey.done) break;
+                                                this.preparedRelationshipsByManifestHash.delete(oldestKey.value);
+                                            }
+                                        }
                                         return {
                                             status,
                                             preparedRelationships: preparedSearchRerankStructuralRelationships,
@@ -1853,6 +1880,7 @@ export class SearchRequestCoordinator {
                                     maxSourceBytes: this.environment.getReadFileMaxBytes(),
                                     result,
                                     registry: searchSymbolRegistry,
+                                    requestCache: rerankProjectionRequestCache,
                                     ...(structuralContext?.preparedRelationships
                                         ? { preparedStructuralRelationships: structuralContext.preparedRelationships }
                                         : {}),

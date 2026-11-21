@@ -13,8 +13,10 @@ import type { CurrentSourceEvidence } from "./current-source-symbols.js";
 import { SEARCH_RERANK_DOCUMENT_POLICY } from "./search-rerank-document.js";
 import type { SearchResultLike } from "./search-lexical-scoring.js";
 import {
+    createSearchRerankProjectionRequestCache,
     projectPublicationBoundSearchRerankDocument,
     searchRerankCandidateId,
+    VerifiedRerankSourceCache,
 } from "./search-rerank-projection.js";
 
 const source = [
@@ -459,6 +461,180 @@ test("canonical publication-bound projection uses universal newlines and enforce
         assert.deepEqual(await projectPublicationBoundSearchRerankDocument(common), {
             ok: false,
             candidateId: common.candidateId,
+            reason: "source_hash_mismatch",
+        });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("rerank projection request cache coalesces duplicate reads and VerifiedRerankSourceCache stays bit-identical and invalidates on edits", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-rerank-cache-"));
+    try {
+        const relativeFile = "src/multi.ts";
+        const absoluteFile = path.join(root, relativeFile);
+        const content = [
+            "export function alpha() {",
+            "  return beta();",
+            "}",
+            "",
+            "export function beta() {",
+            "  return 42;",
+            "}",
+        ].join("\n");
+        fs.mkdirSync(path.dirname(absoluteFile), { recursive: true });
+        fs.writeFileSync(absoluteFile, content, "utf8");
+        // Backdate mtime by 5 seconds so the racily-clean guard allows stat-witness hits.
+        const past = new Date(Date.now() - 5_000);
+        fs.utimesSync(absoluteFile, past, past);
+        // Advance virtual clock beyond ctime + racily-clean window since utimes updates ctime.
+        let nowMs = Date.now() + 5_000;
+        const hash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
+
+        const symAlpha: SymbolRecord = {
+            symbolKey: `typescript:${relativeFile}:alpha`,
+            symbolInstanceId: "sym-alpha",
+            language: "typescript",
+            kind: "function",
+            name: "alpha",
+            qualifiedName: "alpha",
+            label: "function alpha",
+            file: relativeFile,
+            span: { startLine: 1, endLine: 3 },
+            parentQualifiedNamePath: [],
+            fileHash: hash,
+            extractorVersion: "test",
+        };
+        const symBeta: SymbolRecord = {
+            symbolKey: `typescript:${relativeFile}:beta`,
+            symbolInstanceId: "sym-beta",
+            language: "typescript",
+            kind: "function",
+            name: "beta",
+            qualifiedName: "beta",
+            label: "function beta",
+            file: relativeFile,
+            span: { startLine: 5, endLine: 7 },
+            parentQualifiedNamePath: [],
+            fileHash: hash,
+            extractorVersion: "test",
+        };
+        const reg = buildSymbolRegistry({
+            manifest: {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: root,
+                rootFingerprint: "fp",
+                indexPolicyHash: "policy",
+                languageRouterVersion: "test",
+                extractorVersion: "test",
+                relationshipVersion: "test",
+                builtAt: "2026-08-10T00:00:00.000Z",
+                files: [{
+                    path: relativeFile,
+                    hash,
+                    language: "typescript",
+                    symbolCount: 2,
+                    definitionStatus: "definitions_present",
+                }],
+            },
+            symbols: [symAlpha, symBeta],
+        });
+        const resAlpha: SearchResultLike = {
+            content,
+            relativePath: relativeFile,
+            language: "typescript",
+            score: 1,
+            startLine: 1,
+            endLine: 3,
+            symbolKind: "function",
+            symbolLabel: "function alpha",
+            ownerSymbolInstanceId: symAlpha.symbolInstanceId,
+        };
+        const resBeta: SearchResultLike = {
+            content,
+            relativePath: relativeFile,
+            language: "typescript",
+            score: 1,
+            startLine: 5,
+            endLine: 7,
+            symbolKind: "function",
+            symbolLabel: "function beta",
+            ownerSymbolInstanceId: symBeta.symbolInstanceId,
+        };
+
+        // 1. Differential equivalence: uncached vs request-coalesced + cross-request cached.
+        const uncachedAlpha = await projectPublicationBoundSearchRerankDocument({
+            candidateId: searchRerankCandidateId(resAlpha),
+            codebaseRoot: root,
+            semanticQuery: "how does alpha call beta",
+            result: resAlpha,
+            registry: reg,
+        });
+        const uncachedBeta = await projectPublicationBoundSearchRerankDocument({
+            candidateId: searchRerankCandidateId(resBeta),
+            codebaseRoot: root,
+            semanticQuery: "how does alpha call beta",
+            result: resBeta,
+            registry: reg,
+        });
+
+        const crossCache = new VerifiedRerankSourceCache(1024 * 1024, () => nowMs);
+        const reqCache1 = createSearchRerankProjectionRequestCache(crossCache);
+        const [cachedAlpha1, cachedBeta1] = await Promise.all([
+            projectPublicationBoundSearchRerankDocument({
+                candidateId: searchRerankCandidateId(resAlpha),
+                codebaseRoot: root,
+                semanticQuery: "how does alpha call beta",
+                result: resAlpha,
+                registry: reg,
+                requestCache: reqCache1,
+            }),
+            projectPublicationBoundSearchRerankDocument({
+                candidateId: searchRerankCandidateId(resBeta),
+                codebaseRoot: root,
+                semanticQuery: "how does alpha call beta",
+                result: resBeta,
+                registry: reg,
+                requestCache: reqCache1,
+            }),
+        ]);
+        assert.deepEqual(cachedAlpha1, uncachedAlpha);
+        assert.deepEqual(cachedBeta1, uncachedBeta);
+        assert.equal(crossCache.size, 1);
+
+        // 2. Second request must hit VerifiedRerankSourceCache via stat witness without calling fallback reader.
+        const canonicalRoot = fs.realpathSync(root);
+        let fallbackCalls = 0;
+        const secondRead = await crossCache.readVerifiedSource(
+            canonicalRoot,
+            root,
+            relativeFile,
+            async () => {
+                fallbackCalls += 1;
+                return undefined;
+            },
+        );
+        assert.ok(secondRead);
+        assert.equal(fallbackCalls, 0, "unchanged file past racily-clean window must skip full read and SHA-256");
+        assert.equal(secondRead.evidence.observedHash, hash);
+
+        // 3. Edit the file on disk (even keeping same byte length) -> witness must detect change and fail hash check.
+        const edited = content.replace("42", "99");
+        assert.equal(Buffer.byteLength(edited), Buffer.byteLength(content));
+        fs.writeFileSync(absoluteFile, edited, "utf8");
+        nowMs = Date.now() + 10_000;
+        const reqCache2 = createSearchRerankProjectionRequestCache(crossCache);
+        const afterEdit = await projectPublicationBoundSearchRerankDocument({
+            candidateId: searchRerankCandidateId(resBeta),
+            codebaseRoot: root,
+            semanticQuery: "how does alpha call beta",
+            result: resBeta,
+            registry: reg,
+            requestCache: reqCache2,
+        });
+        assert.deepEqual(afterEdit, {
+            ok: false,
+            candidateId: searchRerankCandidateId(resBeta),
             reason: "source_hash_mismatch",
         });
     } finally {

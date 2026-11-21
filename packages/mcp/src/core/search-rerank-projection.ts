@@ -3,14 +3,22 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import type {
     RelationshipRecord,
+    RootBoundFileIdentity,
     SymbolRecord,
     SymbolRegistry,
 } from "@satori-code/core";
 import {
+    canPublishRootBoundFileIdentity,
+    openRegularFileWithIdentityInsideRoot,
     readStableRootBoundFileWindow,
     RootBoundFileWindowLimitError,
+    sameRootBoundFileIdentity,
 } from "@satori-code/core";
-import { readCurrentSourceEvidence } from "./current-source-symbols.js";
+import {
+    readCurrentSourceEvidence,
+    type CurrentSourceEvidence,
+} from "./current-source-symbols.js";
+import type { InspectableSourceObservedStat } from "./inspectable-source.js";
 import { buildSearchRerankSourceReferences } from "./search-rerank-source-references.js";
 import { READ_FILE_MAX_BYTES_DEFAULT } from "./published-source-reader.js";
 import { resolveSearchCandidateRole } from "./search-candidate-role.js";
@@ -33,10 +41,235 @@ import type {
 type CurrentSourceEvidenceReader = typeof readCurrentSourceEvidence;
 
 const RERANK_PROJECTION_WINDOW_MAX_BYTES = 256 * 1024;
+export const VERIFIED_RERANK_SOURCE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+// Racily-clean window: never trust a stat witness for a file modified within the
+// last second, so rapid same-second edits always re-read and re-hash from disk.
+export const VERIFIED_RERANK_SOURCE_RACILY_CLEAN_MS = 1_000;
+
+type ManifestFileEntry = SymbolRegistry["manifest"]["files"][number];
+const manifestFileIndexByRegistry = new WeakMap<SymbolRegistry, ReadonlyMap<string, ManifestFileEntry>>();
+
+function lookupManifestFile(
+    registry: SymbolRegistry,
+    relativePath: string,
+): ManifestFileEntry | undefined {
+    let index = manifestFileIndexByRegistry.get(registry);
+    if (!index) {
+        const built = new Map<string, ManifestFileEntry>();
+        for (const file of registry.manifest.files) {
+            if (!built.has(file.path)) built.set(file.path, file);
+        }
+        index = built;
+        manifestFileIndexByRegistry.set(registry, index);
+    }
+    return index.get(relativePath);
+}
+
+type CachedVerifiedSourceEntry = Readonly<{
+    evidence: CurrentSourceEvidence;
+    identity: RootBoundFileIdentity;
+    observedStat: InspectableSourceObservedStat;
+    sourceLines: readonly string[];
+    retainedBytes: number;
+}>;
+
+/**
+ * Byte-bounded cross-request cache of publication-verified current source files.
+ * Every cache hit still opens the path root-bound via
+ * `openRegularFileWithIdentityInsideRoot` and verifies `(dev, ino, size, mtimeMs,
+ * ctimeMs)` plus a racily-clean guard before skipping byte reads and SHA-256
+ * hashing. Any stat drift, symlink change, or recent edit falls back to a full
+ * read + hash.
+ */
+export class VerifiedRerankSourceCache {
+    private readonly entries = new Map<string, CachedVerifiedSourceEntry>();
+    private readonly limitBytes: number;
+    private readonly nowMs: () => number;
+    private retainedBytes = 0;
+
+    constructor(
+        maxBytes = VERIFIED_RERANK_SOURCE_CACHE_MAX_BYTES,
+        nowMs: () => number = () => Date.now(),
+    ) {
+        if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+            throw new Error("Verified rerank source cache limit must be a positive integer.");
+        }
+        this.limitBytes = maxBytes;
+        this.nowMs = nowMs;
+    }
+
+    get size(): number {
+        return this.entries.size;
+    }
+
+    get bytes(): number {
+        return this.retainedBytes;
+    }
+
+    private keyFor(canonicalRoot: string, relativeFile: string): string {
+        return `${canonicalRoot}\0${relativeFile.replace(/\\/g, "/")}`;
+    }
+
+    private touch(key: string, entry: CachedVerifiedSourceEntry): void {
+        this.entries.delete(key);
+        this.entries.set(key, entry);
+    }
+
+    private evict(key: string): void {
+        const existing = this.entries.get(key);
+        if (!existing) return;
+        this.entries.delete(key);
+        this.retainedBytes -= existing.retainedBytes;
+    }
+
+    private store(key: string, evidence: CurrentSourceEvidence, sourceLines: readonly string[]): void {
+        if (!evidence.identity || !evidence.observedStat) return;
+        this.evict(key);
+        // UTF-16 string + raw Uint8Array + overhead estimate.
+        const retainedBytes = evidence.sourceBytes.byteLength * 3 + 512;
+        if (retainedBytes > this.limitBytes) return;
+        this.entries.set(key, {
+            evidence,
+            identity: evidence.identity,
+            observedStat: evidence.observedStat,
+            sourceLines,
+            retainedBytes,
+        });
+        this.retainedBytes += retainedBytes;
+        while (this.retainedBytes > this.limitBytes) {
+            const oldest = this.entries.entries().next();
+            if (oldest.done) break;
+            this.entries.delete(oldest.value[0]);
+            this.retainedBytes -= oldest.value[1].retainedBytes;
+        }
+    }
+
+    async readVerifiedSource(
+        canonicalRoot: string,
+        codebaseRoot: string,
+        relativeFile: string,
+        readFallback: CurrentSourceEvidenceReader = readCurrentSourceEvidence,
+    ): Promise<Readonly<{ evidence: CurrentSourceEvidence; sourceLines: readonly string[] }> | undefined> {
+        const normalizedRelative = relativeFile.replace(/\\/g, "/");
+        const key = this.keyFor(canonicalRoot, normalizedRelative);
+        const cached = this.entries.get(key);
+        if (cached) {
+            const logicalFile = path.resolve(canonicalRoot, normalizedRelative);
+            const relCheck = path.relative(canonicalRoot, logicalFile);
+            const insideRoot = !path.isAbsolute(normalizedRelative)
+                && relCheck.length > 0
+                && relCheck !== ".."
+                && !relCheck.startsWith(`..${path.sep}`)
+                && !path.isAbsolute(relCheck);
+            if (insideRoot) {
+                let opened: Awaited<ReturnType<typeof openRegularFileWithIdentityInsideRoot>> | undefined;
+                try {
+                    opened = await openRegularFileWithIdentityInsideRoot(logicalFile, canonicalRoot);
+                    const stat = opened.observedStat;
+                    const now = this.nowMs();
+                    const racilyClean = (now - stat.mtimeMs) < VERIFIED_RERANK_SOURCE_RACILY_CLEAN_MS
+                        || (now - stat.ctimeMs) < VERIFIED_RERANK_SOURCE_RACILY_CLEAN_MS;
+                    if (
+                        !racilyClean
+                        && canPublishRootBoundFileIdentity(opened.identity)
+                        && sameRootBoundFileIdentity(cached.identity, opened.identity)
+                        && stat.size === cached.observedStat.size
+                        && stat.mtimeMs === cached.observedStat.mtimeMs
+                        && stat.ctimeMs === cached.observedStat.ctimeMs
+                    ) {
+                        this.touch(key, cached);
+                        return { evidence: cached.evidence, sourceLines: cached.sourceLines };
+                    }
+                } catch {
+                    // Fall through to authoritative reader which classifies failures identically.
+                } finally {
+                    await opened?.handle.close().catch(() => undefined);
+                }
+            }
+            this.evict(key);
+        }
+
+        const fresh = await readFallback(codebaseRoot, relativeFile);
+        if (!fresh) return undefined;
+        const sourceLines = fresh.source.split(/\r?\n/);
+        this.store(key, fresh, sourceLines);
+        return { evidence: fresh, sourceLines };
+    }
+}
+
+/**
+ * Per-search-request cache that coalesces duplicate concurrent file reads,
+ * `realpath(codebaseRoot)` calls, and line-splitting across candidates sharing
+ * the same file (typically ~60-68% of the 128 candidates in a rerank batch).
+ */
+export interface SearchRerankProjectionRequestCache {
+    getCanonicalRoot(codebaseRoot: string): Promise<string>;
+    readSource(
+        codebaseRoot: string,
+        relativeFile: string,
+        readFallback?: CurrentSourceEvidenceReader,
+    ): Promise<Readonly<{ evidence: CurrentSourceEvidence; sourceLines: readonly string[] }> | undefined>;
+}
+
+export function createSearchRerankProjectionRequestCache(
+    crossRequestCache?: VerifiedRerankSourceCache,
+): SearchRerankProjectionRequestCache {
+    const canonicalRoots = new Map<string, Promise<string>>();
+    const inFlight = new Map<
+        string,
+        Promise<Readonly<{ evidence: CurrentSourceEvidence; sourceLines: readonly string[] }> | undefined>
+    >();
+
+    const getCanonicalRoot = (codebaseRoot: string): Promise<string> => {
+        let pending = canonicalRoots.get(codebaseRoot);
+        if (!pending) {
+            pending = fs.realpath(codebaseRoot);
+            canonicalRoots.set(codebaseRoot, pending);
+        }
+        return pending;
+    };
+
+    return {
+        getCanonicalRoot,
+        readSource(codebaseRoot, relativeFile, readFallback) {
+            const key = `${codebaseRoot}\0${relativeFile.replace(/\\/g, "/")}`;
+            let pending = inFlight.get(key);
+            if (!pending) {
+                pending = (async () => {
+                    if (crossRequestCache && !readFallback) {
+                        let canonicalRoot: string;
+                        try {
+                            canonicalRoot = await getCanonicalRoot(codebaseRoot);
+                        } catch {
+                            return undefined;
+                        }
+                        return crossRequestCache.readVerifiedSource(
+                            canonicalRoot,
+                            codebaseRoot,
+                            relativeFile,
+                        );
+                    }
+                    const fresh = await (readFallback ?? readCurrentSourceEvidence)(
+                        codebaseRoot,
+                        relativeFile,
+                    );
+                    if (!fresh) return undefined;
+                    return {
+                        evidence: fresh,
+                        sourceLines: fresh.source.split(/\r?\n/),
+                    };
+                })();
+                inFlight.set(key, pending);
+            }
+            return pending;
+        },
+    };
+}
 
 interface PublicationBoundSourceEvidence {
     readonly relativeFile: string;
     readonly source: string;
+    readonly sourceLines?: readonly string[];
     readonly observedHash: string;
     readonly sourceStartLine: number;
 }
@@ -87,15 +320,16 @@ async function resolvePublicationBoundEvidence(input: {
     registry: SymbolRegistry;
     maxSourceBytes?: number;
     readSourceEvidence?: CurrentSourceEvidenceReader;
+    requestCache?: SearchRerankProjectionRequestCache;
 }): Promise<
     | { ok: true; evidence: PublicationBoundSourceEvidence }
     | { ok: false; reason: SearchRerankProjectionFailureReason }
 > {
     const dirtyOverlaySourceHash = input.result.dirtyOverlaySourceHash;
     const owner = dirtyOverlaySourceHash ? undefined : resolveCanonicalOwner(input.result, input.registry);
-    const manifestFile = dirtyOverlaySourceHash ? undefined : input.registry.manifest.files.find(
-        (file) => file.path === input.result.relativePath,
-    );
+    const manifestFile = dirtyOverlaySourceHash
+        ? undefined
+        : lookupManifestFile(input.registry, input.result.relativePath);
     const expectedFile = dirtyOverlaySourceHash ? input.result.relativePath : owner?.file ?? manifestFile?.path;
     const expectedHash = dirtyOverlaySourceHash ?? owner?.fileHash ?? manifestFile?.hash;
     const startLine = input.result.startLine;
@@ -124,12 +358,23 @@ async function resolvePublicationBoundEvidence(input: {
         return { ok: false, reason: "candidate_span_invalid" };
     }
 
-    let currentSourceEvidence;
+    let currentSourceEvidence: CurrentSourceEvidence | undefined;
+    let cachedSourceLines: readonly string[] | undefined;
     try {
-        currentSourceEvidence = await (input.readSourceEvidence ?? readCurrentSourceEvidence)(
-            input.codebaseRoot,
-            expectedFile,
-        );
+        if (input.requestCache) {
+            const loaded = await input.requestCache.readSource(
+                input.codebaseRoot,
+                expectedFile,
+                input.readSourceEvidence,
+            );
+            currentSourceEvidence = loaded?.evidence;
+            cachedSourceLines = loaded?.sourceLines;
+        } else {
+            currentSourceEvidence = await (input.readSourceEvidence ?? readCurrentSourceEvidence)(
+                input.codebaseRoot,
+                expectedFile,
+            );
+        }
     } catch {
         return { ok: false, reason: "source_unavailable" };
     }
@@ -142,6 +387,7 @@ async function resolvePublicationBoundEvidence(input: {
         evidence = {
             relativeFile: currentSourceEvidence.relativeFile,
             source: currentSourceEvidence.source,
+            ...(cachedSourceLines ? { sourceLines: cachedSourceLines } : {}),
             observedHash: currentSourceEvidence.observedHash,
             sourceStartLine: 1,
         };
@@ -149,7 +395,9 @@ async function resolvePublicationBoundEvidence(input: {
         return { ok: false, reason: "source_unavailable" };
     } else {
         try {
-            const canonicalRoot = await fs.realpath(input.codebaseRoot);
+            const canonicalRoot = input.requestCache
+                ? await input.requestCache.getCanonicalRoot(input.codebaseRoot)
+                : await fs.realpath(input.codebaseRoot);
             const window = await readStableRootBoundFileWindow({
                 canonicalRoot,
                 relativePath: expectedFile,
@@ -230,6 +478,7 @@ export async function projectPublicationBoundSearchRerankDocument(input: {
     structuralContextStatus?: SearchRerankStructuralContextStatus;
     maxSourceBytes?: number;
     readSourceEvidence?: CurrentSourceEvidenceReader;
+    requestCache?: SearchRerankProjectionRequestCache;
 }): Promise<SearchRerankProjectionResult> {
     const { candidateId } = input;
     const resolved = await resolvePublicationBoundEvidence(input);
@@ -268,6 +517,9 @@ export async function projectPublicationBoundSearchRerankDocument(input: {
                 owner: resolveCanonicalOwner(input.result, input.registry),
                 registry: input.registry,
                 source: resolved.evidence.source,
+                ...(resolved.evidence.sourceLines
+                    ? { sourceLines: resolved.evidence.sourceLines }
+                    : {}),
                 sourceStartLine: resolved.evidence.sourceStartLine,
                 observedHash: resolved.evidence.observedHash,
                 query: input.semanticQuery,

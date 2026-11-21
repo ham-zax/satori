@@ -476,3 +476,39 @@ test("an implementation question about an MCP server retains the requested adapt
     assert.equal(outcome.kind, "ok");
     assert.equal(outcome.scored[0]?.result.relativePath, "packages/helper-mcp-server/src/index.ts");
 });
+
+test("implementation focus skips reranking supporting test chunks when enough production candidates fill the window", async () => {
+    const tests = Array.from({ length: 6 }, (_, index) => candidate(`tests/cleanup-${index}.test.ts`, 0.99 - index * 0.01));
+    const production = Array.from({ length: 10 }, (_, index) => candidate(`src/core/impl-${index}.ts`, 0.80 - index * 0.01));
+    const results = [...tests, ...production];
+
+    const seenByReranker: string[] = [];
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "voyage", model: "test", profile: "test" }),
+        rerank: async (_query, documents) => {
+            seenByReranker.push(...documents);
+            return documents.map((_doc, index) => ({ index, relevanceScore: index + 1 })).reverse();
+        },
+    };
+    const outcome = await run(buildInput("how does cleanup work"), buildHost(results, reranker));
+    assert.equal(outcome.kind, "ok");
+    assert.equal(seenByReranker.length, 10, "supporting test chunks must not be sent to the reranker");
+    assert.ok(seenByReranker.every((doc) => !doc.includes("tests/cleanup-")));
+    // All 10 reranked production candidates must precede the skipped test chunks.
+    assert.ok(outcome.scored.slice(0, 10).every((entry) => entry.result.relativePath.startsWith("src/core/")));
+    assert.ok(outcome.scored.slice(10).every((entry) => entry.result.relativePath.startsWith("tests/")));
+
+    // Explicit test-seeking queries must still send test chunks to the reranker.
+    const testSeen: string[] = [];
+    const testReranker: Reranker = {
+        getIdentity: () => ({ provider: "voyage", model: "test", profile: "test" }),
+        rerank: async (_query, documents) => {
+            testSeen.push(...documents);
+            return documents.map((_doc, index) => ({ index, relevanceScore: documents.length - index }));
+        },
+    };
+    const testOutcome = await run(buildInput("where are the tests for cleanup"), buildHost(results, testReranker));
+    assert.equal(testOutcome.kind, "ok");
+    assert.equal(testSeen.length, results.length);
+    assert.ok(testSeen.some((doc) => doc.includes("tests/cleanup-")));
+});

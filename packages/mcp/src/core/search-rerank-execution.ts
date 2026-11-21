@@ -25,6 +25,7 @@ import {
 } from "./search-candidate-survival.js";
 import { WARNING_CODES, type WarningCode } from "./warnings.js";
 import {
+    partitionImplementationCandidates,
     preferImplementationCandidates,
 } from "./search-ranking-policy.js";
 import type { SearchQueryPlan, SearchResultLike } from "./search-lexical-scoring.js";
@@ -96,6 +97,8 @@ export type BuildRerankInputResult = RerankInputStats & {
         rerankDocuments: string[];
         byteBudgetOmittedCandidates: SearchCandidate[];
         byteSelectionInputBytes: number;
+        /** Size of the full selected window before omitting unconditionally-demoted supporting candidates. */
+        selectedWindowSize: number;
         rerankInputMetadata: ReadonlyMap<
             string,
             NonNullable<SearchCandidateSurvivalOccurrence["rerankInput"]>
@@ -201,6 +204,33 @@ export async function buildRerankInput(args: {
         )),
         providerMaximumDocuments: host.reranker?.getMaxDocuments?.(),
     });
+    const executionFlags = resolveSearchFlags(input.flags, {
+        rerankBlend: rerankerIdentity(host)?.provider === "lateon",
+    });
+    const hasPathConstraint = input.parsedOperators.path.length > 0
+        || input.requestedSubdirectory != null;
+    // Partition AFTER selectRerankCandidates so the candidate pool never pulls
+    // deeper low-relevance candidates beyond the provider window. When
+    // implementation role preference applies and enough production/adapter
+    // candidates exist to fill the top-K window, skip projecting and reranking
+    // supporting/test chunks that post-rerank role ordering would
+    // unconditionally place below every production candidate.
+    const implPartition = partitionImplementationCandidates({
+        candidates: selection.selected,
+        relativePath: (candidate) => candidate.result.relativePath,
+        answerFocus: input.answerFocus,
+        queryPlan: input.queryPlan,
+        hasPathConstraint,
+        neutralPrefersImplementation: executionFlags.neutral_owner_preference === true,
+    });
+    const productionInWindow = [...implPartition.implementations, ...implPartition.adapters];
+    const minimumProductionToOmitSupporting = Math.max(input.limit, 8);
+    const selectedWindowSize = selection.selected.length;
+    const providerBoundedSelection = implPartition.applies
+        && implPartition.supporting.length > 0
+        && productionInWindow.length >= minimumProductionToOmitSupporting
+        ? productionInWindow
+        : selection.selected;
     const stats: RerankInputStats = {
         rerankerFamilyCount: selection.familyCount,
         rerankerSupplementalCandidates: selection.supplementalCandidateCount,
@@ -212,7 +242,6 @@ export async function buildRerankInput(args: {
     let projection: SearchRerankProjectionSummary | undefined;
     let rerankerByteBudgetOmittedCandidates = 0;
     try {
-        const providerBoundedSelection = selection.selected;
         let rerankSlice: SearchCandidate[];
         let rerankDocuments: string[];
         let byteBudgetOmittedCandidatesList: SearchCandidate[];
@@ -371,6 +400,7 @@ export async function buildRerankInput(args: {
                 rerankDocuments,
                 byteBudgetOmittedCandidates: byteBudgetOmittedCandidatesList,
                 byteSelectionInputBytes,
+                selectedWindowSize,
                 rerankInputMetadata: rerankInputMetadataMap,
             },
         };
@@ -521,9 +551,10 @@ export function applyRerankOrder(args: {
     scored: SearchCandidate[];
     rerankSlice: SearchCandidate[];
     rerankResults: RerankResult[];
+    selectedWindowSize?: number;
     candidateSurvival?: SearchCandidateSurvivalDebug;
 }): { rerankerApplied: boolean; orderAuthority: SearchOrderAuthority } {
-    const { input, host, scored, rerankSlice, rerankResults, candidateSurvival } = args;
+    const { input, host, scored, rerankSlice, rerankResults, selectedWindowSize, candidateSurvival } = args;
     let rerankerApplied: boolean;
     let orderAuthority: SearchOrderAuthority;
     try {
@@ -572,6 +603,15 @@ export function applyRerankOrder(args: {
                 items: validatedItems,
                 query: [input.semanticQuery, ...definitionAltTerms].join(" "),
                 metadata: index => host.definitionMetadata!(rerankSlice[index]!.result),
+                ...(selectedWindowSize !== undefined && selectedWindowSize > validatedItems.length
+                    ? { totalWindowSize: selectedWindowSize }
+                    : {}),
+                ...(input.parsedOperators.lang.length === 0
+                    ? {
+                        candidateLanguage: index => rerankSlice[index]!.result.language,
+                        candidatePath: index => rerankSlice[index]!.result.relativePath,
+                    }
+                    : {}),
             });
             itemsForPolicy = fusion.items;
             definitionFusionApplied = fusion.applied;
@@ -601,20 +641,32 @@ export function applyRerankOrder(args: {
                 })),
             );
         }
+        const hasPathConstraint = input.parsedOperators.path.length > 0
+            || input.requestedSubdirectory != null;
         const effectiveRerankItems = preferImplementationCandidates({
             candidates: itemsForPolicy,
             relativePath: (item) => rerankSlice[item.originalIndex]!.result.relativePath,
             answerFocus: input.answerFocus,
             queryPlan: input.queryPlan,
-            hasPathConstraint: input.parsedOperators.path.length > 0
-                || input.requestedSubdirectory != null,
+            hasPathConstraint,
             neutralPrefersImplementation: executionFlags.neutral_owner_preference === true,
         });
-        const reordered = applyNativeRerankToSelectedSlots({
+        const slotReordered = applyNativeRerankToSelectedSlots({
             allCandidates: scored,
             selectedCandidateIds,
             orderedItems: effectiveRerankItems,
             identify: (candidate) => searchCandidateIdentity(candidate.result).candidateId,
+        });
+        // Keep the full post-rerank list aligned with implementation role
+        // ordering so supporting candidates skipped ahead of reranking never
+        // remain ahead of reranked production candidates.
+        const reordered = preferImplementationCandidates({
+            candidates: slotReordered,
+            relativePath: (candidate) => candidate.result.relativePath,
+            answerFocus: input.answerFocus,
+            queryPlan: input.queryPlan,
+            hasPathConstraint,
+            neutralPrefersImplementation: executionFlags.neutral_owner_preference === true,
         });
         // scored is still in first-stage order here: a pinned top candidate
         // kept its slot above, otherwise the top may have been buried by the
@@ -790,6 +842,7 @@ export async function rerankSearchCandidates(
                 scored,
                 rerankSlice,
                 rerankResults,
+                selectedWindowSize: build.ready.selectedWindowSize,
                 candidateSurvival,
             });
             rerankerApplied = applied.rerankerApplied;

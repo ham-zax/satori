@@ -181,21 +181,27 @@ export function buildSearchCandidateProvenance(
     };
 }
 
+export type ImplementationCandidatePartition<T> = Readonly<{
+    applies: boolean;
+    implementations: T[];
+    adapters: T[];
+    supporting: T[];
+}>;
+
 /**
- * Apply answer intent without blending relevance scores or reordering peers.
- *
- * `neutralPrefersImplementation` extends the implementation role split to
- * neutral answer focus. It never overrides an explicit test, documentation,
- * configuration, reference, exact-path or path-constrained request.
+ * Partition candidates by implementation role using the single authoritative
+ * answer-intent policy. Callers both before rerank selection and after rerank
+ * ordering share this partition so skipped supporting candidates can never
+ * outrank reranked implementations.
  */
-export function preferImplementationCandidates<T>(input: {
+export function partitionImplementationCandidates<T>(input: {
     candidates: readonly T[];
     relativePath: (candidate: T) => string;
     answerFocus: SearchAnswerFocus;
     queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
     hasPathConstraint: boolean;
     neutralPrefersImplementation?: boolean;
-}): T[] {
+}): ImplementationCandidatePartition<T> {
     const plan = input.queryPlan;
     const prefersImplementation = input.answerFocus === "implementation"
         || (input.neutralPrefersImplementation === true && input.answerFocus === "neutral");
@@ -203,7 +209,12 @@ export function preferImplementationCandidates<T>(input: {
         || plan.testSeeking || plan.documentationSeeking || plan.referenceSeeking
         || plan.route.kind === "exact_path" || plan.route.kind === "configuration"
         || plan.route.kind === "references") {
-        return [...input.candidates];
+        return {
+            applies: false,
+            implementations: [...input.candidates],
+            adapters: [],
+            supporting: [],
+        };
     }
     const queryTerms = new Set(plan.lexicalTerms.map((term) => term.value.toLowerCase()));
     const implementations: T[] = [];
@@ -227,5 +238,34 @@ export function preferImplementationCandidates<T>(input: {
             implementations.push(candidate);
         }
     }
-    return [...implementations, ...adapters, ...supporting];
+    return {
+        applies: true,
+        implementations,
+        adapters,
+        supporting,
+    };
+}
+
+/**
+ * Apply answer intent without blending relevance scores or reordering peers.
+ *
+ * `neutralPrefersImplementation` extends the implementation role split to
+ * neutral answer focus. It never overrides an explicit test, documentation,
+ * configuration, reference, exact-path or path-constrained request.
+ */
+export function preferImplementationCandidates<T>(input: {
+    candidates: readonly T[];
+    relativePath: (candidate: T) => string;
+    answerFocus: SearchAnswerFocus;
+    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
+    hasPathConstraint: boolean;
+    neutralPrefersImplementation?: boolean;
+}): T[] {
+    const partitioned = partitionImplementationCandidates(input);
+    if (!partitioned.applies) return partitioned.implementations;
+    return [
+        ...partitioned.implementations,
+        ...partitioned.adapters,
+        ...partitioned.supporting,
+    ];
 }

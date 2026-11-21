@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowsDefinitionDiscovery, fuseDefinitionDiscovery, type DefinitionDiscoveryMetadata } from "./search-definition-discovery.js";
+import {
+    allowsDefinitionDiscovery,
+    extractExplicitQueryLanguages,
+    fuseDefinitionDiscovery,
+    type DefinitionDiscoveryMetadata,
+} from "./search-definition-discovery.js";
 import { parseSearchOperators, buildSearchQueryPlan } from "./search-query-planning.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
 
@@ -158,4 +163,68 @@ test("explicit evidence intent and constrained queries bypass the engine", () =>
     const ownershipPlan = buildSearchQueryPlan(ownership.semanticQuery, true, ownership);
     assert.equal(ownershipPlan.route.kind, "ownership");
     assert.equal(allowsDefinitionDiscovery({ ...input, queryPlan: ownershipPlan, answerFocus: resolveSearchAnswerFocus(ownershipPlan).focus }), true);
+});
+
+test("polyglot natural-language language affinity boosts the requested runtime without affecting single-language pools", () => {
+    assert.deepEqual(extractExplicitQueryLanguages("in the Kotlin runtime where does the builder grow its buffer"), ["kotlin"]);
+    assert.deepEqual(extractExplicitQueryLanguages("where does the C++ generator emit code for a table"), ["cpp"]);
+    assert.deepEqual(extractExplicitQueryLanguages("where does React flush passive effects"), []);
+
+    const rows = [
+        { meta: metadata("growByteBuffer", "go/builder.go"), lang: "go" },
+        { meta: metadata("growByteBuffer", "ts/builder.ts"), lang: "typescript" },
+        { meta: metadata("requestCapacity", "kotlin/Buffers.kt"), lang: "kotlin" },
+    ];
+    const polyglot = fuseDefinitionDiscovery({
+        items: rows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "in the Kotlin runtime where does the builder grow its buffer",
+        metadata: (index) => rows[index]!.meta,
+        candidateLanguage: (index) => rows[index]!.lang,
+        candidatePath: (index) => rows[index]!.meta.file,
+    });
+    assert.equal(polyglot.applied, true);
+    assert.equal(polyglot.items[0]?.originalIndex, 2);
+
+    // Single-language pool: language affinity must stay a no-op.
+    const monoRows = [
+        { meta: metadata("first", "src/a.py"), lang: "python" },
+        { meta: metadata("second", "src/b.py"), lang: "python" },
+    ];
+    const mono = fuseDefinitionDiscovery({
+        items: monoRows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "in the Python module where is unrelated behavior",
+        metadata: (index) => monoRows[index]!.meta,
+        candidateLanguage: (index) => monoRows[index]!.lang,
+        candidatePath: (index) => monoRows[index]!.meta.file,
+    });
+    assert.equal(mono.applied, false);
+    assert.deepEqual(mono.items.map((item) => item.originalIndex), [0, 1]);
+});
+
+test("totalWindowSize preserves provider rank spread when supporting candidates were omitted before reranking", () => {
+    const rows = [
+        metadata("ownerImpl", "src/core/hooks.js"),
+        metadata("dispatchSetStateInternal", "src/core/hooks.js"),
+        metadata("shim", "src/shim.js"),
+        metadata("helper", "src/helper.js"),
+        metadata("validateNoSetStateInRender", "compiler/validate_no_set_state_in_render.rs"),
+    ];
+    const compressed = fuseDefinitionDiscovery({
+        items: rows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "where does useState schedule a re-render when you call the setter",
+        metadata: (index) => rows[index],
+    });
+    const scaled = fuseDefinitionDiscovery({
+        items: rows.map((_, index) => ({ originalIndex: index, providerRank: index + 1 })),
+        query: "where does useState schedule a re-render when you call the setter",
+        metadata: (index) => rows[index],
+        totalWindowSize: 128,
+    });
+    const rankIn = (result: typeof compressed, targetIndex: number) => (
+        result.items.findIndex((item) => item.originalIndex === targetIndex)
+    );
+    assert.ok(
+        rankIn(scaled, 1) <= rankIn(compressed, 1),
+        "preserving original window rank spread must not demote top provider picks below late BM25 matches",
+    );
 });

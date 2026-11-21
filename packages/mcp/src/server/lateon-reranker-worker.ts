@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { maxSimScore } from "./lateon-reranker-encoder.js";
 import type {
     LateOnEncoderRequest,
     LateOnEncoderResponse,
@@ -11,26 +12,37 @@ import type {
     LateOnWorkerResponse,
 } from "./lateon-reranker-protocol.js";
 
-type Encoder = Readonly<{
+export type LateOnEncoderHandle = Readonly<{
     request: (message: LateOnEncoderRequest) => Promise<LateOnEncoderResponse>;
     terminate: () => Promise<number>;
 }>;
 
-type QueryEncoding = Readonly<{
+export type QueryEncoding = Readonly<{
     vectors: Float64Array;
     dimensions: number;
     tokenCount: number;
 }>;
 
-type DocumentScore = Readonly<{
+export type DocumentEncoding = Readonly<{
+    vectors: Float64Array;
+    dimensions: number;
+    tokenCount: number;
+}>;
+
+export type DocumentScore = Readonly<{
     relevanceScore: number;
     tokenCount: number;
 }>;
 
-// Both caches live on the worker runtime, so a worker restart discards them and
+// All caches live on the worker runtime, so a worker restart discards them and
 // a stale projection can never outlive the process that produced it.
 export const QUERY_CACHE_LIMIT = 64;
 export const SCORE_CACHE_LIMIT = 4096;
+// 64 MiB retains ~500-900 encoded ColBERT document projections (~70-130 KiB each
+// in Float64) so follow-up queries with overlapping candidates skip ONNX encoding
+// while staying bit-identical and strictly bounded within the worker's RAM budget.
+export const DOCUMENT_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+export const DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES = 256;
 
 // Insertion-ordered bounded cache. A hit re-inserts the key, so the first entry
 // is always the least recently used one.
@@ -68,6 +80,81 @@ export class BoundedCache<Value> {
     }
 }
 
+// Insertion-ordered byte-bounded LRU cache. Entries larger than `maxBytes` are
+// declined without evicting existing entries (though any stale entry under the
+// same key is removed so stale data can never be served).
+export class ByteBoundedCache<Value> {
+    private readonly entries = new Map<string, Readonly<{ value: Value; bytes: number }>>();
+    private readonly limitBytes: number;
+    private readonly sizeOf: (value: Value) => number;
+    private retainedBytes = 0;
+
+    constructor(maxBytes: number, sizeOf: (value: Value) => number) {
+        if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+            throw new Error("LateOn byte cache limit must be a positive integer.");
+        }
+        this.limitBytes = maxBytes;
+        this.sizeOf = sizeOf;
+    }
+
+    get size(): number {
+        return this.entries.size;
+    }
+
+    get bytes(): number {
+        return this.retainedBytes;
+    }
+
+    get maxBytes(): number {
+        return this.limitBytes;
+    }
+
+    get(key: string): Value | undefined {
+        const entry = this.entries.get(key);
+        if (entry === undefined) return undefined;
+        this.entries.delete(key);
+        this.entries.set(key, entry);
+        return entry.value;
+    }
+
+    set(key: string, value: Value): boolean {
+        const entryBytes = this.sizeOf(value);
+        if (!Number.isSafeInteger(entryBytes) || entryBytes < 1) {
+            throw new Error("LateOn byte cache entry size must be a positive integer.");
+        }
+        const existing = this.entries.get(key);
+        if (existing !== undefined) {
+            this.entries.delete(key);
+            this.retainedBytes -= existing.bytes;
+        }
+        if (entryBytes > this.limitBytes) {
+            return false;
+        }
+        this.entries.set(key, { value, bytes: entryBytes });
+        this.retainedBytes += entryBytes;
+        while (this.retainedBytes > this.limitBytes) {
+            const oldest = this.entries.entries().next();
+            if (oldest.done) break;
+            this.entries.delete(oldest.value[0]);
+            this.retainedBytes -= oldest.value[1].bytes;
+        }
+        return true;
+    }
+}
+
+export function estimateDocumentEncodingBytes(encoding: DocumentEncoding): number {
+    return encoding.vectors.byteLength + DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES;
+}
+
+// The worker is bound to one verified model directory and profile for its
+// entire lifetime, so the exact canonical document text uniquely determines
+// its tokenized sequence and normalized ColBERT token vectors.
+export function createDocumentCacheKey(documentText: string): string {
+    return crypto.createHash("sha256")
+        .update(documentText)
+        .digest("hex");
+}
+
 // The query is length-prefixed before the NUL separator, so a query that
 // contains a NUL byte cannot shift the boundary: `("a\0b", "c")` and
 // `("a", "b\0c")` hash different inputs.
@@ -77,15 +164,19 @@ export function createScoreCacheKey(query: string, documentText: string): string
         .digest("hex");
 }
 
-type RuntimeState = Readonly<{
-    profile: LateOnRuntimeProfile;
-    encoders: readonly Encoder[];
-    queryCache: BoundedCache<QueryEncoding>;
+export type ScoreDocumentsState = Readonly<{
+    encoders: readonly LateOnEncoderHandle[];
+    documentCache: ByteBoundedCache<DocumentEncoding>;
     scoreCache: BoundedCache<DocumentScore>;
 }>;
 
+type RuntimeState = ScoreDocumentsState & Readonly<{
+    profile: LateOnRuntimeProfile;
+    queryCache: BoundedCache<QueryEncoding>;
+}>;
+
 let runtime: RuntimeState | null = null;
-let encoders: readonly Encoder[] = [];
+let encoders: readonly LateOnEncoderHandle[] = [];
 let shuttingDown = false;
 let operation: Promise<void> = Promise.resolve();
 
@@ -125,7 +216,7 @@ function assertArtifacts(profile: LateOnRuntimeProfile, modelDirectory: string):
     }
 }
 
-function startEncoder(): Encoder {
+function startEncoder(): LateOnEncoderHandle {
     const thread = new Worker(new URL("./lateon-reranker-encoder.js", import.meta.url));
     let pending: Readonly<{
         resolve: (response: LateOnEncoderResponse) => void;
@@ -200,6 +291,7 @@ async function initialize(
         profile: request.profile,
         encoders,
         queryCache: new BoundedCache(QUERY_CACHE_LIMIT),
+        documentCache: new ByteBoundedCache(DOCUMENT_CACHE_MAX_BYTES, estimateDocumentEncodingBytes),
         scoreCache: new BoundedCache(SCORE_CACHE_LIMIT),
     };
     send({
@@ -224,34 +316,71 @@ async function encodeQuery(state: RuntimeState, query: string): Promise<QueryEnc
     return encoding;
 }
 
-async function scoreDocuments(
-    state: RuntimeState,
+export async function scoreDocuments(
+    state: ScoreDocumentsState,
     query: string,
     documents: readonly string[],
     queryEncoding: QueryEncoding,
+    documentCacheKey: (documentText: string) => string = createDocumentCacheKey,
 ): Promise<Readonly<{ scores: readonly number[]; tokenCount: number }>> {
     const scores = new Array<number>(documents.length);
-    const cacheKeys = documents.map((document) => createScoreCacheKey(query, document));
+    const scoreKeys = documents.map((document) => createScoreCacheKey(query, document));
     // Cached documents still contribute their token count, so the aggregate
     // request budget is enforced exactly as it was before caching existed.
     let tokenCount = 0;
-    const pending: number[] = [];
+    const pendingByDocKey = new Map<string, number[]>();
     for (let index = 0; index < documents.length; index++) {
-        const cached = state.scoreCache.get(cacheKeys[index]);
-        if (!cached) {
-            pending.push(index);
+        const cachedScore = state.scoreCache.get(scoreKeys[index]);
+        if (cachedScore) {
+            scores[index] = cachedScore.relevanceScore;
+            tokenCount += cachedScore.tokenCount;
             continue;
         }
-        scores[index] = cached.relevanceScore;
-        tokenCount += cached.tokenCount;
+        const docKey = documentCacheKey(documents[index]);
+        const cachedDoc = state.documentCache.get(docKey);
+        if (cachedDoc && cachedDoc.dimensions === queryEncoding.dimensions) {
+            const relevanceScore = maxSimScore(
+                queryEncoding.vectors,
+                queryEncoding.dimensions,
+                cachedDoc.vectors,
+                cachedDoc.dimensions,
+            );
+            scores[index] = relevanceScore;
+            tokenCount += cachedDoc.tokenCount;
+            state.scoreCache.set(scoreKeys[index], {
+                relevanceScore,
+                tokenCount: cachedDoc.tokenCount,
+            });
+            continue;
+        }
+        const indices = pendingByDocKey.get(docKey);
+        if (indices) {
+            indices.push(index);
+        } else {
+            pendingByDocKey.set(docKey, [index]);
+        }
     }
-    // Every document was already scored for this query: no encoder work at all.
-    if (pending.length === 0) return { scores, tokenCount };
+    // Every document was served from scoreCache or documentCache: no encoder work at all.
+    if (pendingByDocKey.size === 0) return { scores, tokenCount };
+    const pendingGroups = Array.from(pendingByDocKey.entries()).map(([docKey, indices]) => ({
+        docKey,
+        representativeIndex: indices[0],
+        indices,
+    }));
     // Longest documents first, so the last job to finish is a short one.
-    pending.sort((left, right) => documents[right].length - documents[left].length || left - right);
-    // Each encoder scores against its own resident query projection, so the
-    // query is installed once per lane before any document is dispatched.
-    const installed = await Promise.all(state.encoders.map((encoder) => encoder.request({
+    pendingGroups.sort((left, right) => (
+        documents[right.representativeIndex].length - documents[left.representativeIndex].length
+        || left.representativeIndex - right.representativeIndex
+    ));
+    // Only install the query on encoder lanes that will actually process a miss.
+    const activeEncoders = state.encoders.slice(
+        0,
+        Math.min(state.encoders.length, pendingGroups.length),
+    );
+    if (activeEncoders.length === 0) {
+        throw new Error("LateOn worker has no encoder lanes available.");
+    }
+    const installed = await Promise.all(activeEncoders.map((encoder) => encoder.request({
         type: "set_query",
         vectors: queryEncoding.vectors,
         dimensions: queryEncoding.dimensions,
@@ -263,25 +392,37 @@ async function scoreDocuments(
     }
     let next = 0;
     let failure: { error: unknown } | null = null;
-    // Each encoder takes the next document when it finishes one. After a failure
-    // no new jobs start, and every lane settles before this returns or throws.
-    await Promise.all(state.encoders.map(async (encoder) => {
-        while (!failure && next < pending.length) {
-            const index = pending[next++];
+    // Each encoder takes the next unique document when it finishes one. After a
+    // failure no new jobs start, and every lane settles before this returns or throws.
+    await Promise.all(activeEncoders.map(async (encoder) => {
+        while (!failure && next < pendingGroups.length) {
+            const group = pendingGroups[next++];
             try {
                 const response = await encoder.request({
                     type: "score_document",
-                    text: documents[index],
+                    text: documents[group.representativeIndex],
                 });
-                if (response.type !== "scored") {
+                if (
+                    response.type !== "scored"
+                    || response.dimensions !== queryEncoding.dimensions
+                    || !(response.vectors instanceof Float64Array)
+                    || response.vectors.length % response.dimensions !== 0
+                ) {
                     throw new Error("LateOn encoder emitted an unexpected response.");
                 }
-                scores[index] = response.relevanceScore;
-                tokenCount += response.tokenCount;
-                state.scoreCache.set(cacheKeys[index], {
-                    relevanceScore: response.relevanceScore,
+                state.documentCache.set(group.docKey, {
+                    vectors: response.vectors,
+                    dimensions: response.dimensions,
                     tokenCount: response.tokenCount,
                 });
+                for (const index of group.indices) {
+                    scores[index] = response.relevanceScore;
+                    tokenCount += response.tokenCount;
+                    state.scoreCache.set(scoreKeys[index], {
+                        relevanceScore: response.relevanceScore,
+                        tokenCount: response.tokenCount,
+                    });
+                }
             } catch (error) {
                 failure ??= { error };
             }

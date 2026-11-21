@@ -125,7 +125,9 @@ export type LateOnWorkerResponse =
 // Token projections travel as one flat Float64Array plus the stride between
 // token vectors, so a document never crosses the thread boundary as a boxed
 // array per token. `set_query` installs the query projection an encoder scores
-// against, which keeps the query out of every `score_document` message.
+// against, which keeps the query out of every `score_document` message; each
+// `scored` response transfers the normalized document vectors back zero-copy
+// so the worker can reuse them across future queries.
 export type LateOnEncoderRequest =
     | Readonly<{
         type: "initialize";
@@ -156,5 +158,11 @@ export type LateOnEncoderResponse =
         tokenCount: number;
     }>
     | Readonly<{ type: "query_set" }>
-    | Readonly<{ type: "scored"; relevanceScore: number; tokenCount: number }>
+    | Readonly<{
+        type: "scored";
+        relevanceScore: number;
+        tokenCount: number;
+        vectors: Float64Array;
+        dimensions: number;
+    }>
     | Readonly<{ type: "error"; message: string }>;

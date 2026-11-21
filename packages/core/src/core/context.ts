@@ -1048,9 +1048,19 @@ export class Context {
 
     private isPublicationFormatCurrent(publication: Publication): boolean {
         const current = this.buildPublicationFormat();
-        return publication.format.indexFormatVersion === current.indexFormatVersion
-            && publication.format.embeddingIdentity === current.embeddingIdentity
-            && publication.format.relationshipVersion === current.relationshipVersion;
+        if (
+            publication.format.embeddingIdentity !== current.embeddingIdentity
+            || publication.format.relationshipVersion !== current.relationshipVersion
+        ) return false;
+        if (publication.format.indexFormatVersion === current.indexFormatVersion) return true;
+
+        // The navigation reader also supports the plain shards written before
+        // the encoding became part of the format identity.
+        const legacyIndexFormat = JSON.stringify(
+            JSON.parse(current.indexFormatVersion),
+            (key, value: unknown) => key === 'navigationShardEncoding' ? undefined : value,
+        );
+        return publication.format.indexFormatVersion === legacyIndexFormat;
     }
 
     private resolvedPolicyMatchesPublication(

@@ -190,6 +190,73 @@ function isInsideDirectory(parentDir: string, candidatePath: string): boolean {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function isStrictlyInsideDirectory(parentDir: string, candidatePath: string): boolean {
+    const relative = path.relative(parentDir, candidatePath);
+    return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * Checks whether any path component strictly beneath `baseDir` down to
+ * `targetPath` is a symbolic link. Does not reject symlinks above `baseDir`
+ * (such as `/tmp -> /private/tmp` on macOS).
+ */
+function hasSymlinkComponentUnder(baseDir: string, targetPath: string): boolean {
+    const resolvedBase = path.resolve(baseDir);
+    const resolvedTarget = path.resolve(targetPath);
+    if (!isInsideDirectory(resolvedBase, resolvedTarget)) return true;
+    const rel = path.relative(resolvedBase, resolvedTarget);
+    if (!rel) return false;
+    let current = resolvedBase;
+    for (const segment of rel.split(path.sep).filter(Boolean)) {
+        current = path.join(current, segment);
+        try {
+            if (fs.lstatSync(current).isSymbolicLink()) return true;
+        } catch (error) {
+            return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+        }
+    }
+    return false;
+}
+
+/**
+ * Verifies that `targetPath` is strictly contained within `allowedBaseDir`
+ * (using canonical real paths) and that neither `targetPath` nor any parent
+ * directory beneath `allowedBaseDir` is a symbolic link.
+ */
+function isSafeDeletionTargetWithin(allowedBaseDir: string, targetPath: string): boolean {
+    let canonicalBase: string;
+    try {
+        canonicalBase = fs.realpathSync.native(path.resolve(allowedBaseDir));
+    } catch {
+        return false;
+    }
+    const resolvedBase = path.resolve(allowedBaseDir);
+    const resolvedTarget = path.resolve(targetPath);
+    if (!isStrictlyInsideDirectory(resolvedBase, resolvedTarget)) {
+        return false;
+    }
+    if (hasSymlinkComponentUnder(resolvedBase, resolvedTarget)) {
+        return false;
+    }
+    let targetLstat: fs.Stats;
+    try {
+        targetLstat = fs.lstatSync(resolvedTarget);
+    } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT';
+    }
+    if (targetLstat.isSymbolicLink()) {
+        return false;
+    }
+    try {
+        const canonicalParent = fs.realpathSync.native(path.dirname(resolvedTarget));
+        const canonicalTarget = fs.realpathSync.native(resolvedTarget);
+        return isInsideDirectory(canonicalBase, canonicalParent)
+            && isStrictlyInsideDirectory(canonicalBase, canonicalTarget);
+    } catch {
+        return false;
+    }
+}
+
 function hasSymlinkComponent(targetPath: string): boolean {
     const resolved = path.resolve(targetPath);
     const root = path.parse(resolved).root;
@@ -784,9 +851,29 @@ export function runPublicationStorageMaintenance(
     const publicationsRoot = path.join(stateRoot, 'publications');
     const inspectedRoots: InspectedPublicationRoot[] = [];
     let rootEntries: fs.Dirent[] = [];
+    let publicationsRootSafe = true;
     try {
-        rootEntries = fs.readdirSync(publicationsRoot, { withFileTypes: true });
-    } catch { /* ENOENT */ }
+        const pubStat = fs.lstatSync(publicationsRoot);
+        if (pubStat.isSymbolicLink() || !pubStat.isDirectory() || hasSymlinkComponentUnder(stateRoot, publicationsRoot)) {
+            publicationsRootSafe = false;
+            warnings.push(`Refused to traverse unsafe publications directory '${publicationsRoot}' (symbolic link or outside state root).`);
+        }
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            publicationsRootSafe = false;
+            warnings.push(`Could not verify publications directory '${publicationsRoot}'.`);
+        }
+    }
+    if (publicationsRootSafe) {
+        try {
+            rootEntries = fs.readdirSync(publicationsRoot, { withFileTypes: true });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                publicationsRootSafe = false;
+                warnings.push(`Could not read publications directory '${publicationsRoot}'.`);
+            }
+        }
+    }
 
     for (const entry of rootEntries.sort((a, b) => a.name.localeCompare(b.name))) {
         const fullPath = path.join(publicationsRoot, entry.name);
@@ -807,7 +894,8 @@ export function runPublicationStorageMaintenance(
         inspectedRoots.push(inspected);
     }
 
-    const anyCollectionReferencesIncomplete = inspectedRoots.some((r) => r.collectionReferencesIncomplete);
+    const anyCollectionReferencesIncomplete = !publicationsRootSafe
+        || inspectedRoots.some((r) => r.collectionReferencesIncomplete);
     const removedCollections = new Set<string>();
     const removedTsFiles = new Set<string>();
     let projectedVectorCollectionCount = before.vectorCollectionCount;
@@ -826,7 +914,15 @@ export function runPublicationStorageMaintenance(
         return referenced;
     };
 
-    const removeTarget = (targetPath: string, recursive: boolean): number => {
+    const removeTarget = (
+        targetPath: string,
+        recursive: boolean,
+        allowedBaseDir: string = stateRoot,
+    ): number => {
+        if (!isSafeDeletionTargetWithin(allowedBaseDir, targetPath)) {
+            warnings.push(`Refused to delete path outside owned storage boundary: '${targetPath}'.`);
+            return 0;
+        }
         const freed = tracker.removePath(targetPath);
         if (!dryRun) {
             fs.rmSync(targetPath, { recursive, force: true });
@@ -848,19 +944,32 @@ export function runPublicationStorageMaintenance(
             return 0;
         }
         if (!stat.isDirectory() || stat.isSymbolicLink()) return 0;
+        const allowedVectorBase = vectorDb.insideStateRoot ? stateRoot : vectorDb.dbPath;
+        if (!isSafeDeletionTargetWithin(allowedVectorBase, lanceDir)) {
+            warnings.push(`Refused to delete vector collection outside owned boundary: '${lanceDir}'.`);
+            return 0;
+        }
         removedCollections.add(collectionName);
         projectedVectorCollectionCount = Math.max(0, projectedVectorCollectionCount - 1);
-        return removeTarget(lanceDir, true);
+        return removeTarget(lanceDir, true, allowedVectorBase);
+    };
+
+    const tsDir = path.join(stateRoot, 'typescript-resolution');
+    const readTsCacheEntries = (): fs.Dirent[] => {
+        try {
+            const stat = fs.lstatSync(tsDir);
+            if (!stat.isDirectory()) {
+                warnings.push(`Refused to clean unsafe typescript-resolution directory '${tsDir}'.`);
+                return [];
+            }
+            return fs.readdirSync(tsDir, { withFileTypes: true });
+        } catch {
+            return [];
+        }
     };
 
     const removeTsForRoot = (rootKey: string): { count: number; bytes: number } => {
-        const tsDir = path.join(stateRoot, 'typescript-resolution');
-        let entries: fs.Dirent[];
-        try {
-            entries = fs.readdirSync(tsDir, { withFileTypes: true });
-        } catch {
-            return { count: 0, bytes: 0 };
-        }
+        const entries = readTsCacheEntries();
         let count = 0;
         let bytes = 0;
         for (const entry of entries) {
@@ -1038,15 +1147,11 @@ export function runPublicationStorageMaintenance(
             }
 
             const survivingRootKeys = new Set(inspectedRoots.filter((r) => !r.removed).map((r) => r.rootKey));
-            const tsDir = path.join(stateRoot, 'typescript-resolution');
-            let tsEntries: fs.Dirent[] = [];
-            try {
-                tsEntries = fs.readdirSync(tsDir, { withFileTypes: true });
-            } catch { /* ENOENT */ }
+            const tsEntries = readTsCacheEntries();
             for (const entry of tsEntries.sort((a, b) => a.name.localeCompare(b.name))) {
                 if (!entry.isFile() || entry.isSymbolicLink()) continue;
                 const prefix = entry.name.slice(0, 64);
-                if (!ROOT_KEY_RE.test(prefix) || survivingRootKeys.has(prefix)) continue;
+                if (!ROOT_KEY_RE.test(prefix) || survivingRootKeys.has(prefix) || !publicationsRootSafe) continue;
                 const fullPath = path.join(tsDir, entry.name);
                 if (removedTsFiles.has(fullPath)) continue;
                 if (!isSoleOwnerNow() || hasAnyActiveLease()) break;

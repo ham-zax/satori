@@ -10,6 +10,8 @@ import {
     type SymbolRegistryManifest,
 } from "@satori-code/core";
 import type { SearchResultLike } from "./search-lexical-scoring.js";
+import { SearchRequestCoordinator, type SearchRequestCoordinatorCollaborators } from "./search-request-coordinator.js";
+import type { SearchQuerySupport } from "./search-query-support.js";
 import {
     buildSearchRerankStructuralContext,
     prepareSearchRerankStructuralRelationships,
@@ -318,4 +320,48 @@ test("structural context is deterministically sorted and capped", () => {
         ["tests/veto-1.test.ts", "tests/veto-2.test.ts"],
         "tests are sorted by path and capped at 2",
     );
+});
+
+test("prepared structural context follows relationship publications sharing one symbol manifest", async (t) => {
+    const owner = createSymbol({ file: "src/owner.ts", name: "owner", startLine: 10, endLine: 20, fileHash: "owner" });
+    const oldCaller = createSymbol({ file: "src/old.ts", name: "old", startLine: 1, endLine: 5, fileHash: "old" });
+    const newCaller = createSymbol({ file: "src/new.ts", name: "new", startLine: 1, endLine: 5, fileHash: "new" });
+    const registry = buildRegistry([owner, oldCaller, newCaller]);
+    const symbolManifestHash = "shared-symbol-manifest";
+    const publications = [
+        { publication: { id: "old" }, relationshipHash: "relationships-old", caller: oldCaller },
+        { publication: { id: "new" }, relationshipHash: "relationships-new", caller: newCaller },
+        { publication: { id: "unsealed-old" }, relationshipHash: undefined, caller: oldCaller },
+        { publication: { id: "unsealed-new" }, relationshipHash: undefined, caller: newCaller },
+    ];
+    const coordinator = new SearchRequestCoordinator({
+        preparedRead: {
+            loadPreparedNavigationCompatibility: async (read: { publication: { id: string } }, expectedHash: string) => {
+                assert.equal(expectedHash, symbolManifestHash);
+                const publication = publications.find(fixture => fixture.publication.id === read.publication.id)!;
+                return {
+                    relationships: {
+                        status: "ok",
+                        manifestHash: publication.relationshipHash,
+                        records: [calls(publication.caller, owner)],
+                    },
+                };
+            },
+        },
+    } as unknown as SearchRequestCoordinatorCollaborators, {} as SearchQuerySupport, null);
+    t.after(() => coordinator.releaseContinuationOwnership());
+    const structuralLoader = coordinator as unknown as {
+        loadRerankStructuralContext(
+            read: { publication: { id: string } },
+            hash: string,
+        ): Promise<{ preparedRelationships?: ReturnType<typeof prepareSearchRerankStructuralRelationships> }>;
+    };
+    for (const publication of [...publications, publications[0]!]) {
+        const { preparedRelationships } = await structuralLoader.loadRerankStructuralContext(publication, symbolManifestHash);
+        assert.deepEqual(buildSearchRerankStructuralContext({
+            candidate: candidateFor(owner),
+            registry,
+            preparedRelationships,
+        }).directCallers, [reference("caller", publication.caller)]);
+    }
 });

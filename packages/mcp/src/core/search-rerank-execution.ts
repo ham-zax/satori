@@ -226,11 +226,10 @@ export async function buildRerankInput(args: {
     const productionInWindow = [...implPartition.implementations, ...implPartition.adapters];
     const minimumProductionToOmitSupporting = Math.max(input.limit, 8);
     const selectedWindowSize = selection.selected.length;
-    const providerBoundedSelection = implPartition.applies
-        && implPartition.supporting.length > 0
-        && productionInWindow.length >= minimumProductionToOmitSupporting
-        ? productionInWindow
-        : selection.selected;
+    const omittedSupporting = implPartition.applies && productionInWindow.length >= minimumProductionToOmitSupporting
+        ? implPartition.supporting
+        : [];
+    const providerBoundedSelection = omittedSupporting.length > 0 ? productionInWindow : selection.selected;
     const stats: RerankInputStats = {
         rerankerFamilyCount: selection.familyCount,
         rerankerSupplementalCandidates: selection.supplementalCandidateCount,
@@ -252,41 +251,54 @@ export async function buildRerankInput(args: {
         > | undefined;
         if (host.buildRerankDocument) {
             const buildProjection = host.buildRerankDocument;
-            const projectionRows = await Promise.all(providerBoundedSelection.map(async (candidate) => ({
-                candidate,
-                projection: await buildProjection(input.semanticQuery, candidate.result),
-            })));
             const failureCounts: Partial<Record<SearchRerankProjectionFailureReason, number>> = {};
             let firstFailure: SearchRerankProjectionSummary["firstFailure"];
             const structuralContextStatuses = new Set<SearchRerankStructuralContextStatus>();
             const failedCandidateIds: string[] = [];
-            const projectableRows: Array<{
+            type ProjectableRow = {
                 candidate: SearchCandidate;
                 projection: Extract<SearchRerankProjectionResult, { ok: true }>;
-            }> = [];
-            for (const row of projectionRows) {
-                if (
-                    row.projection.ok
-                    && typeof row.projection.document === "string"
-                    && row.projection.document.length > 0
-                ) {
-                    projectableRows.push({ candidate: row.candidate, projection: row.projection });
-                    if (row.projection.structuralContextStatus !== undefined) {
-                        structuralContextStatuses.add(row.projection.structuralContextStatus);
+            };
+            const project = async (candidates: readonly SearchCandidate[]): Promise<ProjectableRow[]> => {
+                const rows = await Promise.all(candidates.map(async (candidate) => ({
+                    candidate,
+                    projection: await buildProjection(input.semanticQuery, candidate.result),
+                })));
+                const projectable: ProjectableRow[] = [];
+                for (const row of rows) {
+                    if (row.projection.ok && typeof row.projection.document === "string" && row.projection.document.length > 0) {
+                        projectable.push({ candidate: row.candidate, projection: row.projection });
+                        if (row.projection.structuralContextStatus !== undefined) {
+                            structuralContextStatuses.add(row.projection.structuralContextStatus);
+                        }
+                        continue;
                     }
-                    continue;
+                    const reason = row.projection.ok ? "projection_contract_failed" : row.projection.reason;
+                    const candidateId = row.projection.ok
+                        ? searchCandidateIdentity(row.candidate.result).candidateId
+                        : row.projection.candidateId;
+                    failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
+                    failedCandidateIds.push(candidateId);
+                    firstFailure ??= { candidateId, reason };
                 }
-                const reason: SearchRerankProjectionFailureReason = row.projection.ok
-                    ? "projection_contract_failed"
-                    : row.projection.reason;
-                const failedCandidateId = row.projection.ok
-                    ? searchCandidateIdentity(row.candidate.result).candidateId
-                    : row.projection.candidateId;
-                failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
-                failedCandidateIds.push(failedCandidateId);
-                if (!firstFailure) {
-                    firstFailure = { candidateId: failedCandidateId, reason };
-                }
+                return projectable;
+            };
+            const selectWithinBudget = (rows: readonly ProjectableRow[]) => selectRerankInputWithinUtf8Budget({
+                candidates: rows,
+                documents: rows.map((row) => row.projection.document),
+                maxInputBytes: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
+            });
+            const projectableRows = await project(providerBoundedSelection);
+            let requestedCandidates = providerBoundedSelection.length;
+            let byteSelection = selectWithinBudget(projectableRows);
+            if (omittedSupporting.length > 0 && !shouldCallRerankerForProjectedCandidateCount(byteSelection.candidates.length)) {
+                input.signal?.throwIfAborted();
+                const supportingRows = await project(omittedSupporting);
+                requestedCandidates += omittedSupporting.length;
+                // The admitted production prefix still leads. Give supporting
+                // rows a chance before the production row that exhausted the budget.
+                projectableRows.splice(byteSelection.candidates.length, 0, ...supportingRows);
+                byteSelection = selectWithinBudget(projectableRows);
             }
             if (candidateSurvival) {
                 for (const failedCandidateId of failedCandidateIds) {
@@ -306,9 +318,9 @@ export async function buildRerankInput(args: {
                             ? "available"
                             : undefined;
             projection = {
-                requestedCandidates: providerBoundedSelection.length,
+                requestedCandidates,
                 projectedCandidates: projectableRows.length,
-                skippedCandidates: providerBoundedSelection.length - projectableRows.length,
+                skippedCandidates: failedCandidateIds.length,
                 failureCounts,
                 ...(firstFailure ? { firstFailure } : {}),
                 ...(structuralContextStatus ? { structuralContextStatus } : {}),
@@ -316,39 +328,35 @@ export async function buildRerankInput(args: {
             if (structuralContextStatus === "incompatible") {
                 warnings.push(WARNING_CODES.RERANKER_CONTEXT_DEGRADED);
             }
-            if (!shouldCallRerankerForProjectedCandidateCount(projectableRows.length)) {
+            rerankerByteBudgetOmittedCandidates = byteSelection.omittedCandidateCount;
+            if (!shouldCallRerankerForProjectedCandidateCount(byteSelection.candidates.length)) {
                 // Fewer than two safe documents remain: skip the provider
                 // and preserve retrieval order without counting a
                 // provider failure.
                 warnings.push(WARNING_CODES.RERANKER_SKIPPED_INPUT);
                 if (candidateSurvival) {
-                    for (const row of projectableRows) {
+                    for (const [index, row] of projectableRows.entries()) {
                         appendSearchCandidateRemoval(candidateSurvival, {
                             candidateId: searchCandidateIdentity(row.candidate.result).candidateId,
                             afterStage: "mcp_ranked",
-                            reason: "reranker_input_insufficient",
+                            reason: index < byteSelection.candidates.length
+                                ? "reranker_input_insufficient"
+                                : "reranker_input_byte_budget",
                         });
                     }
                 }
                 return { ...stats, rerankerByteBudgetOmittedCandidates, warnings, projection, ready: null };
             }
-            if (projectableRows.length < providerBoundedSelection.length) {
+            if (failedCandidateIds.length > 0) {
                 warnings.push(WARNING_CODES.RERANKER_INPUT_DEGRADED);
             }
-            const projectableCandidates = projectableRows.map((row) => row.candidate);
-            const byteSelection = selectRerankInputWithinUtf8Budget({
-                candidates: projectableCandidates,
-                documents: projectableRows.map((row) => row.projection.document),
-                maxInputBytes: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
-            });
-            rerankSlice = [...byteSelection.candidates];
+            rerankSlice = byteSelection.candidates.map((row) => row.candidate);
             rerankDocuments = [...byteSelection.documents];
-            byteBudgetOmittedCandidatesList = projectableCandidates.slice(byteSelection.candidates.length);
+            byteBudgetOmittedCandidatesList = projectableRows.slice(rerankSlice.length).map((row) => row.candidate);
             byteSelectionInputBytes = byteSelection.inputBytes;
-            rerankerByteBudgetOmittedCandidates = byteSelection.omittedCandidateCount;
             rerankInputMetadataMap = new Map(
-                rerankSlice.map((candidate, index) => {
-                    const row = projectableRows[index]!;
+                byteSelection.candidates.map((row) => {
+                    const { candidate } = row;
                     return [
                         searchCandidateIdentity(candidate.result).candidateId,
                         {

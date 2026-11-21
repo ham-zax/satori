@@ -755,27 +755,26 @@ export class JsonNavigationStore {
             navigationRoot: input.navigationRoot,
             expectedSymbolRegistryManifestHash,
         };
-        // The superseded state of this root seeds shard reuse; it is released
-        // from the cache below and only its shared projections survive the load.
-        const previous = this.relationships.peek(input.normalizedRootPath);
         return this.relationships.get(
             input.normalizedRootPath,
             relationshipIdentity(relationshipInput),
-            async () => {
-                const previousState = await previous?.catch(() => undefined);
-                const previousShards = previousState?.status === 'ok'
-                    ? previousState.shardsByReuseKey
-                    : undefined;
-                const loaded = await readRelationshipState(relationshipInput, previousShards);
-                if (loaded.status === 'ok' && this.shardReuseRetentionMs > 0 && loaded.shardsByReuseKey && loaded.shardsByReuseKey.size > 0) {
-                    const timer = setTimeout(() => {
-                        loaded.shardsByReuseKey = undefined;
-                    }, this.shardReuseRetentionMs);
-                    timer.unref?.();
-                }
-                return loaded;
-            },
+            (previous) => readRelationshipState(
+                relationshipInput,
+                previous?.status === 'ok' ? previous.shardsByReuseKey : undefined,
+            ),
             (state) => state.status === 'ok',
+            (state) => {
+                if (state.status !== 'ok' || this.shardReuseRetentionMs === 0 || !state.shardsByReuseKey?.size) {
+                    return undefined;
+                }
+                const releaseShards = () => { state.shardsByReuseKey = undefined; };
+                const timer = setTimeout(releaseShards, this.shardReuseRetentionMs);
+                timer.unref?.();
+                return () => {
+                    clearTimeout(timer);
+                    releaseShards();
+                };
+            },
         );
     }
 

@@ -327,3 +327,32 @@ test('a newer Publication releases the previous Publication state for the root',
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('relationship replacement and LRU eviction release shard reuse timers immediately', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-lru-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const first = await writeShardPublication(root, 'publication-a', { 'a.ts': 'target' });
+    const replacement = await writeShardPublication(root, 'publication-b', { 'a.ts': 'target' });
+    const other = await writeShardPublication(path.join(root, 'other'), 'publication-c', { 'b.ts': 'target' });
+    const store = new JsonNavigationStore({ maxRelationshipRoots: 1, idleMs: 0, shardReuseRetentionMs: 60_000 });
+    const internalStore = store as unknown as {
+        readRelationships(input: typeof first): Promise<{ status: string; shardsByReuseKey?: ReadonlyMap<string, unknown> }>;
+    };
+    const setTimer = t.mock.method(globalThis, 'setTimeout');
+    const clearTimer = t.mock.method(globalThis, 'clearTimeout');
+    t.after(() => {
+        for (const call of setTimer.mock.calls) clearTimeout(call.result as NodeJS.Timeout);
+    });
+
+    const firstState = await internalStore.readRelationships(first);
+    assert.equal(firstState.shardsByReuseKey?.size, 1);
+    const replacementState = await internalStore.readRelationships(replacement);
+    assert.equal(firstState.shardsByReuseKey, undefined);
+    assert.ok(clearTimer.mock.calls.some(call => call.arguments[0] === setTimer.mock.calls[0]?.result));
+
+    assert.equal(replacementState.shardsByReuseKey?.size, 1);
+    await internalStore.readRelationships(other);
+    assert.equal(store.hasResidentRelationships(replacement), false);
+    assert.equal(replacementState.shardsByReuseKey, undefined);
+    assert.ok(clearTimer.mock.calls.some(call => call.arguments[0] === setTimer.mock.calls[1]?.result));
+});

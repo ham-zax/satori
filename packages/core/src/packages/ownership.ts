@@ -54,15 +54,6 @@ export interface DiscoveredPackageOwnership {
     readonly controlFiles: readonly (readonly [string, string])[];
 }
 
-type NativeGlobSync = (
-    pattern: string,
-    options: {
-        cwd: string;
-        withFileTypes?: false;
-        exclude?: (candidate: string) => boolean;
-    },
-) => string[];
-
 function canonicalizeRoot(root: string): string {
     const absolute = path.resolve(root);
     try {
@@ -332,48 +323,63 @@ function packageJsonWorkspacePatterns(
     return entries.map((entry) => normalizeWorkspacePattern(String(entry)));
 }
 
-function nativeGlobSync(): NativeGlobSync {
-    const candidate = (fs as unknown as { globSync?: NativeGlobSync }).globSync;
-    if (typeof candidate !== 'function') {
-        throw new Error('Package ownership requires Node.js fs.globSync support.');
-    }
-    return candidate;
-}
-
-function createGlobExclude(cwd: string, excludedDirs: ReadonlySet<string>): (candidate: string) => boolean {
-    return (candidate: string): boolean => {
-        if (excludedDirs.has(path.basename(candidate))) return true;
-        try {
-            const stat = fs.lstatSync(path.join(cwd, candidate), { throwIfNoEntry: false });
-            if (stat?.isSymbolicLink()) return true;
-        } catch {
-            return true;
-        }
-        return false;
-    };
-}
-
-function packageManifestMatchesForPattern(
-    canonicalRoot: string,
+/**
+ * Walk only directory prefixes admitted by the workspace pattern. Globstars
+ * carry both their current and next positions, so a directory is visited once
+ * even when several globstars can match its path.
+ */
+function* matchingManifestPaths(
+    root: string,
     pattern: string,
-): string[] {
-    const body = pattern.startsWith('!') ? pattern.slice(1) : pattern;
-    const manifestPattern = body === '.'
-        ? 'package.json'
-        : body + '/package.json';
+    manifestName: string,
+    excludedDirs: ReadonlySet<string>,
+): Generator<string> {
+    const segments = pattern.split('/').filter(segment => segment && segment !== '.');
+    const addPositions = (positions: Set<number>, start: number): void => {
+        let index = start;
+        positions.add(index);
+        while (segments[index] === '**') positions.add(++index);
+    };
+    function* visit(relativeDir: string, positions: ReadonlySet<number>): Generator<string> {
+        const directory = path.join(root, relativeDir);
+        if (positions.has(segments.length)) {
+            const relativeManifest = path.posix.join(relativeDir, manifestName);
+            if (fs.lstatSync(path.join(root, relativeManifest), { throwIfNoEntry: false })?.isFile()) {
+                yield relativeManifest;
+            }
+            if (positions.size === 1) return;
+        }
 
-    return nativeGlobSync()(manifestPattern, {
-        cwd: canonicalRoot,
-        withFileTypes: false,
-        exclude: createGlobExclude(canonicalRoot, NODE_DISCOVERY_EXCLUDED_DIRS),
-    })
-        .map((candidate) => normalizeRelativePath(candidate))
-        .filter((candidate) => (
-            !candidate.split('/').includes('node_modules')
-            && !candidate.split('/').includes('.git')
-        ))
-        .sort(compareContractStrings)
-        .slice(0, MAX_WORKSPACE_MANIFEST_MATCHES);
+        const dir = fs.opendirSync(directory);
+        try {
+            for (let entry = dir.readSync(); entry !== null; entry = dir.readSync()) {
+                if (!entry.isDirectory() || excludedDirs.has(entry.name)) continue;
+                const next = new Set<number>();
+                for (const position of positions) {
+                    const segment = segments[position];
+                    if (segment === '**') {
+                        if (!entry.name.startsWith('.')) addPositions(next, position);
+                    } else if (segment !== undefined && path.matchesGlob(entry.name, segment)) {
+                        addPositions(next, position + 1);
+                    }
+                }
+                if (next.size > 0) yield* visit(path.posix.join(relativeDir, entry.name), next);
+            }
+        } finally {
+            dir.closeSync();
+        }
+    }
+
+    const positions = new Set<number>();
+    addPositions(positions, 0);
+    if (fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) yield* visit('', positions);
+}
+
+function addDiscoveredManifest(manifests: Set<string>, candidate: string, manifestName: string): void {
+    if (manifests.size >= MAX_WORKSPACE_MANIFEST_MATCHES && !manifests.has(candidate)) {
+        throw new Error(`Workspace ${manifestName} discovery exceeds the ${MAX_WORKSPACE_MANIFEST_MATCHES.toLocaleString('en-US')} manifest limit.`);
+    }
+    manifests.add(candidate);
 }
 
 function discoverWorkspaceManifestPaths(
@@ -381,14 +387,11 @@ function discoverWorkspaceManifestPaths(
     patterns: readonly string[],
 ): string[] {
     const included = new Set<string>();
-    for (const pattern of patterns.filter((candidate) => !candidate.startsWith('!'))) {
-        for (const candidate of packageManifestMatchesForPattern(canonicalRoot, pattern)) {
-            included.add(candidate);
-        }
-    }
-    for (const pattern of patterns.filter((candidate) => candidate.startsWith('!'))) {
-        for (const candidate of packageManifestMatchesForPattern(canonicalRoot, pattern)) {
-            included.delete(candidate);
+    const excluded = patterns.filter(pattern => pattern.startsWith('!')).map(pattern => pattern.slice(1));
+    for (const pattern of patterns.filter(pattern => !pattern.startsWith('!'))) {
+        for (const candidate of matchingManifestPaths(canonicalRoot, pattern, 'package.json', NODE_DISCOVERY_EXCLUDED_DIRS)) {
+            if (excluded.some(pattern => path.matchesGlob(candidate, `${pattern}/package.json`))) continue;
+            addDiscoveredManifest(included, candidate, 'package.json');
         }
     }
     return [...included].sort(compareContractStrings);
@@ -571,11 +574,11 @@ function discoverCargoOwnership(canonicalRoot: string): {
     packages: PackageOwnershipPackage[];
     controlFiles: Array<readonly [string, string]>;
 } {
-    const manifestPaths = nativeGlobSync()('**/Cargo.toml', {
-        cwd: canonicalRoot,
-        withFileTypes: false,
-        exclude: createGlobExclude(canonicalRoot, CARGO_DISCOVERY_EXCLUDED_DIRS),
-    }).map((candidate) => normalizeRelativePath(candidate)).sort(compareContractStrings).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES);
+    const discoveredPaths = new Set<string>();
+    for (const candidate of matchingManifestPaths(canonicalRoot, '**', 'Cargo.toml', CARGO_DISCOVERY_EXCLUDED_DIRS)) {
+        addDiscoveredManifest(discoveredPaths, candidate, 'Cargo.toml');
+    }
+    const manifestPaths = [...discoveredPaths].sort(compareContractStrings);
     const manifests = new Map<string, { source: string; hash: string }>();
     for (const manifestPath of manifestPaths) {
         const read = readControlFile(canonicalRoot, manifestPath);
@@ -591,25 +594,13 @@ function discoverCargoOwnership(canonicalRoot: string): {
         const excluded = parseCargoStringList(tomlField(manifest.source, 'workspace', 'exclude'), manifestPath);
         cargoWorkspaces.push({ kind: 'cargo', root, manifestPath, patterns });
         controls.set(manifestPath, manifest.hash);
-        const workspaceCwd = path.join(canonicalRoot, root);
-        const cargoExclude = createGlobExclude(workspaceCwd, CARGO_DISCOVERY_EXCLUDED_DIRS);
         const members = new Set<string>();
-        for (const pattern of patterns) {
-            for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
-                cwd: workspaceCwd,
-                withFileTypes: false,
-                exclude: cargoExclude,
-            }).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES)) {
-                members.add(normalizeRelativePath(path.posix.join(root, found)));
-            }
-        }
-        for (const pattern of excluded) {
-            for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
-                cwd: workspaceCwd,
-                withFileTypes: false,
-                exclude: cargoExclude,
-            }).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES)) {
-                members.delete(normalizeRelativePath(path.posix.join(root, found)));
+        for (const candidate of manifests.keys()) {
+            const relative = root === '' ? candidate : candidate.slice(root.length + 1);
+            if (root !== '' && !candidate.startsWith(root + '/')) continue;
+            if (patterns.some(pattern => path.matchesGlob(relative, `${pattern}/Cargo.toml`))
+                && !excluded.some(pattern => path.matchesGlob(relative, `${pattern}/Cargo.toml`))) {
+                members.add(candidate);
             }
         }
         if (tomlField(manifest.source, 'package', 'name') !== undefined) members.add(manifestPath);

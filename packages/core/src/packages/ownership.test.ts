@@ -345,21 +345,9 @@ test('ownership parser rejects incoherent workspace/package semantics', () => {
     );
 });
 
-test('unsafe workspace glob expansion is rejected before filesystem globbing', () => {
+test('unsafe workspace glob expansion is rejected before filesystem traversal', (t) => {
     const fixture = createRepo();
-    const mutableFs = require('node:fs') as {
-        globSync?: (
-            pattern: string,
-            options: { cwd: string; withFileTypes?: false },
-        ) => string[];
-    };
-    const originalGlobSync = mutableFs.globSync;
-    assert.ok(originalGlobSync);
-    let globCalls = 0;
-    mutableFs.globSync = (pattern, options) => {
-        globCalls += 1;
-        return originalGlobSync(pattern, options);
-    };
+    const openDirectory = t.mock.method(require('node:fs') as typeof fs, 'opendirSync');
 
     try {
         for (const pattern of [
@@ -380,10 +368,9 @@ test('unsafe workspace glob expansion is rejected before filesystem globbing', (
                 () => discoverPackageOwnership(fixture.root),
                 /Invalid workspace package pattern/,
             );
-            assert.equal(globCalls, 0);
+            assert.equal(openDirectory.mock.calls.length, 0);
         }
     } finally {
-        mutableFs.globSync = originalGlobSync;
         fixture.cleanup();
     }
 });
@@ -464,8 +451,7 @@ test('discoverPackageOwnership rejects oversized control files and skips node_mo
         fixture.cleanup();
     });
 
-    // Case 1: recursive pnpm workspace pattern must never descend into node_modules
-    // (an unreadable directory inside node_modules causes EACCES if globSync omits exclude).
+    // A recursive pnpm workspace pattern must never descend into node_modules.
     writeFile(fixture.root, 'package.json', JSON.stringify({ name: 'root' }));
     writeFile(fixture.root, 'pnpm-workspace.yaml', "packages:\n  - '**'\n");
     writeFile(fixture.root, 'packages/app/package.json', JSON.stringify({ name: '@fixture/app' }));
@@ -489,4 +475,44 @@ test('discoverPackageOwnership rejects oversized control files and skips node_mo
         () => discoverPackageOwnership(oversizedFixture.root),
         /exceeds.*byte.*limit/i,
     );
+});
+
+test('workspace discovery rejects the first distinct manifest beyond the cap across patterns', (t) => {
+    const fixture = createRepo();
+    t.after(fixture.cleanup);
+    writeFile(fixture.root, 'package.json', JSON.stringify({ workspaces: ['packages/a*', 'packages/*', 'plugins/*'] }));
+    for (let index = 0; index < 2_000; index += 1) {
+        writeFile(fixture.root, `packages/a${index}/package.json`, JSON.stringify({ name: `package-${index}` }));
+    }
+    const atLimit = discoverPackageOwnership(fixture.root);
+    assert.equal(atLimit.packages.filter(pkg => pkg.workspaceMember).length, 2_000);
+    assert.equal(atLimit.packages.find(pkg => pkg.workspaceMember)?.name, 'package-0');
+
+    writeFile(fixture.root, 'plugins/overflow/package.json', '{"name":"overflow"}');
+    assert.throws(() => discoverPackageOwnership(fixture.root), /package\.json.*exceeds.*2,000.*manifest/i);
+});
+
+test('Cargo discovery rejects overflow and skips excluded or symlinked trees', (t) => {
+    const fixture = createRepo();
+    t.after(fixture.cleanup);
+    writeFile(fixture.root, 'Cargo.toml', '[workspace]\nmembers = ["crates/**"]\nexclude = ["crates/ignored"]\n');
+    writeFile(fixture.root, 'crates/app/Cargo.toml', '[package]\nname = "app"\n');
+    writeFile(fixture.root, 'crates/ignored/Cargo.toml', '[package]\nname = "ignored"\n');
+    for (const directory of ['target', '.git', 'node_modules']) {
+        writeFile(fixture.root, `${directory}/hidden/Cargo.toml`, '[package]\nname = "hidden"\n');
+    }
+    fs.symlinkSync(path.join(fixture.root, 'crates', 'app'), path.join(fixture.root, 'crates', 'linked'), 'dir');
+    assert.deepEqual(discoverPackageOwnership(fixture.root).packages.map(pkg => [pkg.name, pkg.workspaceMember]), [
+        ['app', true], ['ignored', false],
+    ]);
+
+    for (let index = 0; index < 2_005; index += 1) {
+        writeFile(fixture.root, `crates/crate-${index}/Cargo.toml`, '[package]\nname = "overflow"\n');
+    }
+    const stat = t.mock.method(require('node:fs') as typeof fs, 'lstatSync');
+    assert.throws(() => discoverPackageOwnership(fixture.root), /Cargo\.toml.*exceeds.*2,000.*manifest/i);
+    const manifestsVisited = stat.mock.calls.filter(call => (
+        String(call.arguments[0]).endsWith('/Cargo.toml') && call.result?.isFile()
+    )).length;
+    assert.equal(manifestsVisited, 2_001);
 });

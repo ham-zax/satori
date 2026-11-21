@@ -728,3 +728,79 @@ test("getPreparedReadObservation prefers an available result over an unavailable
     }
     assert.deepEqual(unavailableOnly.getPreparedReadObservation("/some/root"), first);
 });
+
+test("local publication validation accepts the exact legacy plain-shard format", async (t) => {
+    const context = createLocalOnlyContext(baseConfig({ vectorStoreProvider: "LanceDB" }));
+    t.after(() => context.dispose());
+    type Format = { indexFormatVersion: string; embeddingIdentity: string; relationshipVersion: string };
+    const internals = context as unknown as {
+        buildPublicationFormat(): Format;
+        isPublicationFormatCurrent(publication: { format: Format }): boolean;
+    };
+    const current = internals.buildPublicationFormat();
+    const indexFormat = JSON.parse(current.indexFormatVersion) as Record<string, unknown>;
+    assert.equal(indexFormat.navigationShardEncoding, "gzip_v1");
+    delete indexFormat.navigationShardEncoding;
+    const legacy = { ...current, indexFormatVersion: JSON.stringify(indexFormat) };
+    assert.equal(internals.isPublicationFormatCurrent({ format: current }), true);
+    assert.equal(internals.isPublicationFormatCurrent({ format: legacy }), true);
+    for (const format of [
+        { ...legacy, indexFormatVersion: JSON.stringify({ ...indexFormat, parserVersion: "different" }) },
+        { ...legacy, indexFormatVersion: JSON.stringify({ ...indexFormat, navigationShardEncoding: "unknown" }) },
+        { ...legacy, embeddingIdentity: "different" },
+        { ...legacy, relationshipVersion: "different" },
+    ]) {
+        assert.equal(internals.isPublicationFormatCurrent({ format }), false);
+    }
+});
+
+for (const survivorState of ["in-flight", "active"] as const) {
+    test(`failed vector-only startup preserves the shared backend of an ${survivorState} embedding context`, async (t) => {
+        const { runtime, events, state, startupError } = startupFixture(t);
+        const vectorDraining = deferred();
+        const finishVectorDrain = deferred();
+        const embeddingWatching = deferred();
+        const finishEmbeddingWatcher = deferred();
+        const internals = runtime as unknown as {
+            createReranker(bootstrap: { embeddingCapable: boolean }): Reranker | null;
+            createVectorBackend: { mock: { calls: readonly { result: Promise<VectorDatabase> }[] } };
+        };
+        t.mock.method(internals, "createReranker", ({ embeddingCapable }: { embeddingCapable: boolean }) => {
+            if (!embeddingCapable) throw startupError;
+            return null;
+        });
+        t.mock.method(SyncManager.prototype, "startWatcherMode", async () => {
+            embeddingWatching.resolve();
+            await finishEmbeddingWatcher.promise;
+        });
+        state.drain = async () => {
+            vectorDraining.resolve();
+            await finishVectorDrain.promise;
+        };
+        const vectorFailure = assert.rejects(runtime.requireToolContext("vector_only"), startupError);
+        await vectorDraining.promise;
+        const embedding = runtime.requireToolContext("embedding_vector");
+        try {
+            await embeddingWatching.promise;
+            if (survivorState === "active") {
+                finishEmbeddingWatcher.resolve();
+                await embedding;
+            }
+            finishVectorDrain.resolve();
+            await vectorFailure;
+            assert.equal(events.includes("backend"), false);
+            finishEmbeddingWatcher.resolve();
+            const result = await embedding;
+            assert.ok("context" in result);
+            assert.equal(internals.createVectorBackend.mock.calls.length, 1);
+            assert.equal(result.context.getVectorStore(), await internals.createVectorBackend.mock.calls[0]!.result);
+            assert.equal(events.includes("backend"), false);
+        } finally {
+            finishVectorDrain.resolve();
+            finishEmbeddingWatcher.resolve();
+            await Promise.allSettled([vectorFailure, embedding]);
+            await runtime.shutdown();
+        }
+        assert.equal(events.filter(event => event === "backend").length, 1);
+    });
+}

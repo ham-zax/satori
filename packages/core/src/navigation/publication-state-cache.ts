@@ -15,6 +15,7 @@ type Entry<T> = {
     identity: string;
     value: Promise<T>;
     timer?: ReturnType<typeof setTimeout>;
+    retained?: { value: T; release?: () => void };
 };
 
 /**
@@ -35,22 +36,33 @@ export class PublicationStateCache<T> {
     public get(
         root: string,
         identity: string,
-        load: () => Promise<T>,
+        load: (previous: T | undefined) => Promise<T>,
         isRetainable: (value: T) => boolean,
+        onRetain?: (value: T) => (() => void) | undefined,
     ): Promise<T> {
         const existing = this.entries.get(root);
         if (existing?.identity === identity) {
             this.touch(root, existing);
             return existing.value;
         }
+        // A replacement can synchronously borrow reusable data before the old
+        // entry's release callback drops its references.
+        const value = load(existing?.retained?.value);
         if (existing) this.release(root, existing);
 
-        const entry: Entry<T> = { identity, value: load() };
+        const entry: Entry<T> = { identity, value };
         this.touch(root, entry);
         const evict = () => {
             if (this.entries.get(root) === entry) this.release(root, entry);
         };
-        entry.value.then((value) => { if (!isRetainable(value)) evict(); }, evict);
+        entry.value.then((value) => {
+            if (this.entries.get(root) !== entry) return;
+            if (!isRetainable(value)) {
+                evict();
+                return;
+            }
+            entry.retained = { value, release: onRetain?.(value) };
+        }, evict);
         while (this.entries.size > this.effectiveMaxRoots()) {
             const oldestRoot = this.entries.keys().next().value as string;
             this.release(oldestRoot, this.entries.get(oldestRoot)!);
@@ -71,11 +83,6 @@ export class PublicationStateCache<T> {
         return Number.isFinite(available) && available < threshold
             ? Math.max(1, pressureCap)
             : baseCap;
-    }
-
-    /** The resident state of `root` for any identity, without touching it. */
-    public peek(root: string): Promise<T> | undefined {
-        return this.entries.get(root)?.value;
     }
 
     public has(root: string, identity: string): boolean {
@@ -103,5 +110,7 @@ export class PublicationStateCache<T> {
     private release(root: string, entry: Entry<T>): void {
         if (entry.timer) clearTimeout(entry.timer);
         if (this.entries.get(root) === entry) this.entries.delete(root);
+        entry.retained?.release?.();
+        entry.retained = undefined;
     }
 }

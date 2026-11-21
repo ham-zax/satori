@@ -3,12 +3,16 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
 
 import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
 import { buildSymbolRegistry, SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols';
 import { readTypeScriptFileBytes } from './typescript-bounded-reader';
+import { ScriptTarget } from './typescript-api';
+import { TypeScriptFsBoundary } from './typescript-fs-boundary';
+import { TypeScriptProgramSession } from './typescript-program-session';
 
 function writeFile(filePath: string, content: string): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -168,4 +172,33 @@ test('readTypeScriptFileBytes rejects a FIFO without hanging (P4-1)', {
     assert.equal(result.status, 42, `expected regular-file rejection exit 42, got ${result.status}: ${result.stderr}`);
     assert.match(result.stderr, /not a regular file/i);
     assert.equal(typeof readTypeScriptFileBytes, 'function');
+});
+
+test('an ES2022 program with the repository boundary loads native platform standard libraries', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-stdlib-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const main = path.join(root, 'main.ts');
+    writeFile(main, [
+        'export const values: Array<string> = ["value"];',
+        'export const lookup = new Map<string, number>([[values[0], 1]]);',
+        'export const result: Promise<number | undefined> = Promise.resolve(lookup.get(values[0]));',
+    ].join('\n'));
+
+    const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const requireFromTypeScript = createRequire(require.resolve('typescript/package.json'));
+    const libDir = fs.realpathSync(path.join(path.dirname(requireFromTypeScript.resolve(`${platformPackage}/package.json`)), 'lib'));
+    const session = new TypeScriptProgramSession(
+        root, [main], { target: ScriptTarget.ES2022, strict: true, types: [] },
+        undefined, undefined, undefined, new TypeScriptFsBoundary(root),
+    );
+    try {
+        const program = session.getProgram();
+        assert.deepEqual(program.getSemanticDiagnostics(), []);
+        const loadedFiles = program.getSourceFileNames().map(file => fs.realpathSync(file));
+        for (const library of ['lib.es2022.d.ts', 'lib.es5.d.ts', 'lib.es2015.collection.d.ts', 'lib.es2015.promise.d.ts']) {
+            assert.ok(loadedFiles.includes(path.join(libDir, library)), `expected platform declaration ${library}`);
+        }
+    } finally {
+        session.dispose();
+    }
 });

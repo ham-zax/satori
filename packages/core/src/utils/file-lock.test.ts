@@ -60,3 +60,27 @@ test('claimAndUnlinkStaleFileLock backs off on replacement or concurrent peer cl
         [],
     );
 });
+
+test('stale lock recovery prunes abandoned helper links and backs off for a live helper', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-file-lock-helpers-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const lockPath = path.join(dir, 'test.lock');
+    const deadPid = 2_147_483_647;
+    const abandoned = [
+        `${lockPath}.${deadPid}.00000000-0000-4000-8000-000000000001.stale-claim`,
+        `${lockPath}.${deadPid}.00000000-0000-4000-8000-000000000002.candidate`,
+    ];
+    const live = `${lockPath}.${process.pid}.00000000-0000-4000-8000-000000000003.stale-claim`;
+    fs.writeFileSync(lockPath, 'stale');
+    for (const helper of [...abandoned, live]) fs.linkSync(lockPath, helper);
+    assert.equal(fs.lstatSync(lockPath).nlink, 4);
+
+    assert.equal(claimAndUnlinkStaleFileLock(lockPath, () => true), false);
+    assert.equal(fs.existsSync(live), true);
+    assert.equal(fs.lstatSync(lockPath).nlink, 2);
+    fs.unlinkSync(live);
+
+    for (const helper of abandoned) fs.linkSync(lockPath, helper);
+    assert.equal(claimAndUnlinkStaleFileLock(lockPath, () => true), true);
+    assert.deepEqual(fs.readdirSync(dir), []);
+});

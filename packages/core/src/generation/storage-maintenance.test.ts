@@ -521,3 +521,43 @@ test('custom LANCEDB_PATH is accounted and swept while Milvus and unowned DBs ar
     assert.equal(fs.existsSync(path.join(customLance, `${orphan.currentCollection}.lance`)), false);
     assert.equal(fs.existsSync(stray), true, 'external DB skips arbitrary unreferenced-table sweep without namespace proof');
 });
+
+test('storage maintenance refuses symlinked publication and TypeScript cache directories and targets', (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-storage-symlinks-'));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    const stateRoot = path.join(tmp, 'state');
+    const outside = path.join(tmp, 'outside');
+    const fixture = writePublicationFixture({
+        stateRoot: outside, canonicalRoot: path.join(tmp, 'orphan'), currentId: 'gen-1',
+    });
+    const publicationFile = path.join(fixture.pubRoot, 'generations', 'gen-1', 'publication.json');
+    const outsideCache = path.join(outside, 'typescript-resolution', `${fixture.key}.json`);
+    const originalPublication = fs.readFileSync(publicationFile, 'utf8');
+    const originalCache = fs.readFileSync(outsideCache, 'utf8');
+    fs.mkdirSync(stateRoot);
+    const publications = path.join(stateRoot, 'publications');
+    const tsCache = path.join(stateRoot, 'typescript-resolution');
+    fs.symlinkSync(path.join(outside, 'publications'), publications, 'dir');
+    fs.symlinkSync(path.dirname(outsideCache), tsCache, 'dir');
+
+    const options = { stateRoot, soleOwner: true, ...leasePortForStateRoot(stateRoot) };
+    const readDir = t.mock.method(fs, 'readdirSync');
+    const result = runPublicationStorageMaintenance(options);
+    assert.equal(readDir.mock.calls.some(call => call.arguments[0] === publications || call.arguments[0] === tsCache), false);
+    assert.match(result.warnings.join('\n'), /unsafe publications directory/);
+    assert.match(result.warnings.join('\n'), /unsafe typescript-resolution directory/);
+    assert.deepEqual(result.removedRoots, []);
+    assert.equal(result.removedTypescriptResolutionFiles, 0);
+    assert.equal(fs.readFileSync(publicationFile, 'utf8'), originalPublication);
+    assert.equal(fs.readFileSync(outsideCache, 'utf8'), originalCache);
+
+    fs.unlinkSync(publications);
+    fs.mkdirSync(publications);
+    fs.unlinkSync(tsCache);
+    fs.mkdirSync(tsCache);
+    const linkedCache = path.join(tsCache, path.basename(outsideCache));
+    fs.symlinkSync(outsideCache, linkedCache);
+    assert.equal(runPublicationStorageMaintenance(options).removedTypescriptResolutionFiles, 0);
+    assert.equal(fs.lstatSync(linkedCache).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(outsideCache, 'utf8'), originalCache);
+});

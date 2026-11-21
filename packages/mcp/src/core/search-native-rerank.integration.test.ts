@@ -1063,3 +1063,43 @@ test("incompatible structural context keeps candidates and emits a dedicated int
     assert.ok(!outcome.searchWarnings.includes("RERANKER_FAILED"));
     assert.deepEqual(outcome.scored.map((entry) => entry.result.candidateId), ["b", "a"]);
 });
+
+for (const shortfall of ["projection", "UTF-8 budget"] as const) {
+    test(`implementation focus restores supporting candidates after a ${shortfall} shortfall`, async () => {
+        const production = Array.from({ length: 8 }, (_, index) => candidate(
+            `impl-${index}`, `src/cleanup-${index}.ts`, 0.95 - index * 0.01,
+        ));
+        const supporting = candidate("support", "tests/cleanup.test.ts", 0.99);
+        const projectedPaths: string[] = [];
+        const received: string[][] = [];
+        const oversizedDocument = "é".repeat(SEARCH_RERANK_INPUT_MAX_UTF8_BYTES / 2);
+        const oversizedDocumentHash = crypto.createHash("sha256").update(oversizedDocument).digest("hex");
+        const reranker = buildReranker(reverseResults, documents => { received.push([...documents]); });
+        const outcome = await run(buildInput("how does cleanup work"), buildHost([supporting, ...production], reranker, {
+            buildRerankDocument: async (_query, result) => {
+                projectedPaths.push(result.relativePath);
+                if (result.relativePath === production[0]!.relativePath || result.relativePath === supporting.relativePath) {
+                    return typedOkProjection(result);
+                }
+                if (shortfall === "projection") {
+                    return { ok: false, candidateId: searchRerankCandidateId(result), reason: "registry_load_failed" };
+                }
+                return {
+                    ...typedOkProjection(result),
+                    document: oversizedDocument,
+                    utf8Bytes: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
+                    sha256: oversizedDocumentHash,
+                };
+            },
+        }));
+        assert.equal(outcome.kind, "ok");
+        if (outcome.kind !== "ok") return;
+        assert.deepEqual(projectedPaths, [...production, supporting].map(result => result.relativePath));
+        assert.deepEqual(received, [[typedOkProjection(production[0]!).document, typedOkProjection(supporting).document]]);
+        assert.equal(outcome.searchWarnings.includes("RERANKER_SKIPPED_INPUT"), false);
+        assert.equal(outcome.rerankerProjection?.requestedCandidates, 9);
+        assert.equal(outcome.rerankerProjection?.projectedCandidates, shortfall === "projection" ? 2 : 9);
+        assert.equal(outcome.rerankerProjection?.skippedCandidates, shortfall === "projection" ? 7 : 0);
+        assert.equal(outcome.rerankerByteBudgetOmittedCandidates, shortfall === "projection" ? 0 : 7);
+    });
+}

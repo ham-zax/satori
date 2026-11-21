@@ -204,3 +204,41 @@ test("concurrent ensureModel calls for the same revision serialize cleanly witho
         assert.equal(fetchCount, 1, "concurrent callers for the same model revision must serialize rather than racing on .partial");
     });
 });
+
+test("model staging recovers an abandoned lock helper and waits for a live peer", async (t) => {
+    await withHome(async (homeDir) => {
+        const modelDirectory = resolveModelDirectory(homeDir, spec());
+        const parent = path.dirname(modelDirectory);
+        const lockPath = path.join(parent, `.${path.basename(modelDirectory)}.lock`);
+        const deadPid = 2_147_483_647;
+        const abandoned = `${lockPath}.${deadPid}.00000000-0000-4000-8000-000000000001.candidate`;
+        const live = `${lockPath}.${process.pid}.00000000-0000-4000-8000-000000000002.stale-claim`;
+        fs.mkdirSync(parent, { recursive: true });
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: deadPid }));
+        fs.linkSync(lockPath, abandoned);
+        fs.linkSync(lockPath, live);
+        assert.equal(fs.lstatSync(lockPath).nlink, 3);
+
+        const unlinkSync = fs.unlinkSync;
+        let peerAtBackoff: { live: boolean; abandoned: boolean; links: number | undefined } | undefined;
+        t.mock.method(fs, "unlinkSync", (file: fs.PathLike) => {
+            unlinkSync(file);
+            if (String(file).startsWith(`${lockPath}.`) && String(file).endsWith(".stale-claim") && !peerAtBackoff) {
+                peerAtBackoff = {
+                    live: fs.existsSync(live),
+                    abandoned: fs.existsSync(abandoned),
+                    links: fs.lstatSync(lockPath, { throwIfNoEntry: false })?.nlink,
+                };
+                if (fs.existsSync(live)) unlinkSync(live);
+                if (fs.existsSync(abandoned)) unlinkSync(abandoned);
+            }
+        });
+        const result = await ensureModel({
+            homeDir, spec: spec(), env: {}, retryDelaysMs: [],
+            fetchImpl: async () => new Response(CONTENT),
+        });
+        assert.deepEqual(peerAtBackoff, { live: true, abandoned: false, links: 2 });
+        assert.equal(fs.readFileSync(path.join(result.modelDirectory, "model.bin"), "utf8"), CONTENT);
+        assert.deepEqual(fs.readdirSync(parent), [path.basename(modelDirectory)]);
+    });
+});

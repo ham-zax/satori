@@ -617,7 +617,7 @@ export class SearchRequestCoordinator {
     private readonly freshness: SearchFreshnessCollaborator;
     private readonly environment: SearchEnvironmentCollaborator;
     private readonly verifiedRerankSourceCache = new VerifiedRerankSourceCache();
-    private readonly preparedRelationshipsByManifestHash = new Map<
+    private readonly preparedRelationshipsByKey = new Map<
         string,
         PreparedSearchRerankStructuralRelationships
     >();
@@ -642,6 +642,38 @@ export class SearchRequestCoordinator {
     public releaseContinuationOwnership(): void {
         this.continuationCoordinator.unregisterOwner(this);
     }
+    private async loadRerankStructuralContext(
+        preparedRead: Parameters<SearchPreparedReadCollaborator["loadPreparedNavigationCompatibility"]>[0],
+        symbolManifestHash: string,
+        operations?: SearchReadinessDebugHint["operations"],
+    ): Promise<{
+        status: ReturnType<typeof resolveSearchRerankStructuralContextStatus>;
+        preparedRelationships?: PreparedSearchRerankStructuralRelationships;
+    }> {
+        const { relationships } = await this.preparedRead.loadPreparedNavigationCompatibility(
+            preparedRead,
+            symbolManifestHash,
+            operations,
+        );
+        const status = resolveSearchRerankStructuralContextStatus({ relationshipStatus: relationships.status });
+        if (status !== "available" || relationships.status !== "ok") return { status };
+
+        // The relationship manifest seals the edges as well as their symbol registry.
+        const key = relationships.manifestHash;
+        if (!key) {
+            return { status, preparedRelationships: prepareSearchRerankStructuralRelationships(relationships.records) };
+        }
+        let preparedRelationships = this.preparedRelationshipsByKey.get(key);
+        if (preparedRelationships) this.preparedRelationshipsByKey.delete(key);
+        else preparedRelationships = prepareSearchRerankStructuralRelationships(relationships.records);
+        this.preparedRelationshipsByKey.set(key, preparedRelationships);
+        if (this.preparedRelationshipsByKey.size > 8) {
+            const oldest = this.preparedRelationshipsByKey.keys().next();
+            if (!oldest.done) this.preparedRelationshipsByKey.delete(oldest.value);
+        }
+        return { status, preparedRelationships };
+    }
+
     private createSearchPhaseTimings(): SearchPhaseTimings {
         return {
             prepareRead: 0,
@@ -1535,11 +1567,7 @@ export class SearchRequestCoordinator {
                 let exactRegistryDebug: ExactRegistryLookupDebug | undefined = exactFastPath.exactRegistryDebug;
                 let searchSymbolRegistry: SymbolRegistry | undefined = exactFastPath.searchSymbolRegistry;
                 let searchSymbolRegistryManifestHash: string | undefined = exactFastPath.searchSymbolRegistryManifestHash;
-                let preparedSearchRerankStructuralRelationships: PreparedSearchRerankStructuralRelationships | undefined;
-                let structuralContextLoad: Promise<Readonly<{
-                    status: "available" | "unavailable" | "incompatible";
-                    preparedRelationships?: PreparedSearchRerankStructuralRelationships;
-                }>> | undefined;
+                let structuralContextLoad: ReturnType<SearchRequestCoordinator["loadRerankStructuralContext"]> | undefined;
                 let exactRegistryFallbackForTrackedLexical = exactFastPath.exactRegistryFallbackForTrackedLexical;
 
                 if (exactFastPath.kind === 'handled') {
@@ -1834,44 +1862,11 @@ export class SearchRequestCoordinator {
                                     searchSymbolRegistryManifestHash = registryState.manifestHash;
                                 }
                                 const structuralContext = wantsStructuralContext
-                                    ? await (structuralContextLoad ??= (async () => {
-                                        const compatibility = await this.preparedRead.loadPreparedNavigationCompatibility(
-                                            preparedReadState,
-                                            searchSymbolRegistryManifestHash!,
-                                            readinessDebug.operations,
-                                        );
-                                        const status = resolveSearchRerankStructuralContextStatus({
-                                            relationshipStatus: compatibility.relationships.status,
-                                        });
-                                        if (status !== "available" || compatibility.relationships.status !== "ok") {
-                                            return { status };
-                                        }
-                                        const manifestHashKey = searchSymbolRegistryManifestHash!;
-                                        const cachedPrepared = this.preparedRelationshipsByManifestHash.get(manifestHashKey);
-                                        if (cachedPrepared) {
-                                            this.preparedRelationshipsByManifestHash.delete(manifestHashKey);
-                                            this.preparedRelationshipsByManifestHash.set(manifestHashKey, cachedPrepared);
-                                            preparedSearchRerankStructuralRelationships = cachedPrepared;
-                                        } else {
-                                            preparedSearchRerankStructuralRelationships
-                                                = prepareSearchRerankStructuralRelationships(
-                                                    compatibility.relationships.records,
-                                                );
-                                            this.preparedRelationshipsByManifestHash.set(
-                                                manifestHashKey,
-                                                preparedSearchRerankStructuralRelationships,
-                                            );
-                                            while (this.preparedRelationshipsByManifestHash.size > 8) {
-                                                const oldestKey = this.preparedRelationshipsByManifestHash.keys().next();
-                                                if (oldestKey.done) break;
-                                                this.preparedRelationshipsByManifestHash.delete(oldestKey.value);
-                                            }
-                                        }
-                                        return {
-                                            status,
-                                            preparedRelationships: preparedSearchRerankStructuralRelationships,
-                                        };
-                                    })())
+                                    ? await (structuralContextLoad ??= this.loadRerankStructuralContext(
+                                        preparedReadState,
+                                        searchSymbolRegistryManifestHash,
+                                        readinessDebug.operations,
+                                    ))
                                     : undefined;
                                 return projectPublicationBoundSearchRerankDocument({
                                     candidateId,

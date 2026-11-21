@@ -309,6 +309,7 @@ export class ProviderRuntime {
     private sharedVectorBackendPromise: Promise<VectorDatabase> | null = null;
     private activeContexts: ToolContext[] = [];
     private readonly activeVectorBackends = new Set<VectorDatabase>();
+    private readonly inFlightVectorBackendConsumers = new Map<VectorDatabase, number>();
     private readonly activeEmbeddings = new Set<Embedding>();
     private readonly activeRerankers = new Set<Reranker>();
     private readonly detachedMutationCompletions = new Set<Promise<void>>();
@@ -507,12 +508,18 @@ export class ProviderRuntime {
         const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
         const embedding = await this.createEmbeddingProvider(bootstrap);
         let vectorDatabase: VectorDatabase | null = null;
+        let vectorBackendTrackedInFlight = false;
         let context: Context | null = null;
         let syncManager: SyncManager | null = null;
         let reranker: Reranker | null = null;
         let toolHandlers: ToolHandlers | null = null;
         try {
             vectorDatabase = await this.acquireSharedVectorBackend(bootstrap);
+            this.inFlightVectorBackendConsumers.set(
+                vectorDatabase,
+                (this.inFlightVectorBackendConsumers.get(vectorDatabase) ?? 0) + 1,
+            );
+            vectorBackendTrackedInFlight = true;
             context = new Context({
                 embedding,
                 vectorDatabase,
@@ -596,6 +603,12 @@ export class ProviderRuntime {
                 workspacePolicy: UNBOUND_WORKSPACE_POLICY,
             };
             this.activeVectorBackends.add(vectorDatabase);
+            if (vectorBackendTrackedInFlight) {
+                const remaining = (this.inFlightVectorBackendConsumers.get(vectorDatabase) ?? 1) - 1;
+                if (remaining <= 0) this.inFlightVectorBackendConsumers.delete(vectorDatabase);
+                else this.inFlightVectorBackendConsumers.set(vectorDatabase, remaining);
+                vectorBackendTrackedInFlight = false;
+            }
             this.activeEmbeddings.add(embedding);
             if (reranker) this.activeRerankers.add(reranker);
             this.activeContexts.push(toolContext);
@@ -613,10 +626,18 @@ export class ProviderRuntime {
             };
             await cleanup(() => syncManager?.stopAndDrainLifecycle());
             await cleanup(() => toolHandlers?.releaseSearchContinuationOwnership());
-            if (vectorDatabase && !this.activeVectorBackends.has(vectorDatabase)) {
-                this.sharedVectorBackendPromise = null;
-                this.sharedVectorBackendKey = null;
-                await cleanup(() => vectorDatabase?.close?.());
+            if (vectorDatabase) {
+                let remainingInFlight = this.inFlightVectorBackendConsumers.get(vectorDatabase) ?? 0;
+                if (vectorBackendTrackedInFlight) {
+                    remainingInFlight = Math.max(0, remainingInFlight - 1);
+                    if (remainingInFlight === 0) this.inFlightVectorBackendConsumers.delete(vectorDatabase);
+                    else this.inFlightVectorBackendConsumers.set(vectorDatabase, remainingInFlight);
+                }
+                if (!this.activeVectorBackends.has(vectorDatabase) && remainingInFlight === 0) {
+                    this.sharedVectorBackendPromise = null;
+                    this.sharedVectorBackendKey = null;
+                    await cleanup(() => vectorDatabase?.close?.());
+                }
             }
             await cleanup(() => context?.dispose());
             await cleanup(() => reranker?.close?.());

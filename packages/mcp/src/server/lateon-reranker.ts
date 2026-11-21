@@ -38,7 +38,7 @@ export type LateOnOperationalReason =
 
 export class LateOnOperationalError extends Error {
     readonly reason: LateOnOperationalReason;
-    readonly cause?: unknown;
+    override readonly cause?: unknown;
 
     constructor(reason: LateOnOperationalReason, message: string, cause?: unknown) {
         super(message);

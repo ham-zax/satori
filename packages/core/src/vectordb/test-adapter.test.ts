@@ -3,7 +3,7 @@ import test from 'node:test';
 import { VectorDatabaseTestAdapter } from './test-adapter';
 
 class FocusedVectorDatabase extends VectorDatabaseTestAdapter {
-    async hasCollection(name: string): Promise<boolean> {
+    override async hasCollection(name: string): Promise<boolean> {
         return name === 'present';
     }
 }

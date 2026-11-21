@@ -382,7 +382,7 @@ export class VoyageAIEmbedding extends Embedding {
         return this.buildIdentity(this.config.model);
     }
 
-    getBatchPolicy(): EmbeddingBatchPolicy | null {
+    override getBatchPolicy(): EmbeddingBatchPolicy | null {
         if ((this.config.model || 'voyage-4') !== 'voyage-code-3') return null;
         return {
             preferredMaxItems: VOYAGE_CODE_3_MAX_BATCH_ITEMS,
@@ -392,7 +392,7 @@ export class VoyageAIEmbedding extends Embedding {
         };
     }
 
-    getOperationMetricsSnapshot(): EmbeddingOperationMetricsSnapshot {
+    override getOperationMetricsSnapshot(): EmbeddingOperationMetricsSnapshot {
         return { ...this.operationMetrics };
     }
 

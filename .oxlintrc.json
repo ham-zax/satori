@@ -3,6 +3,9 @@
   "plugins": [
     "typescript"
   ],
+  "jsPlugins": [
+    "./scripts/oxlint-satori-guardrails.mjs"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -104,6 +107,10 @@
     "typescript/no-wrapper-object-types": "error",
     "typescript/prefer-as-const": "error",
     "typescript/prefer-namespace-keyword": "error",
-    "typescript/triple-slash-reference": "error"
+    "typescript/triple-slash-reference": "error",
+    "satori-guardrails/no-raw-git-exec": "error",
+    "satori-guardrails/no-shell-true": "error",
+    "satori-guardrails/no-json-stringify-shell-hook": "error",
+    "satori-guardrails/no-raw-lock-unlink": "error"
   }
 }

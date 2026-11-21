@@ -195,7 +195,7 @@ test('Voyage embedding accepts numeric-array responses as a compatibility fallba
 
 test('Voyage embedding exposes retries instead of hiding them inside the SDK', async () => {
     class ImmediateRetryEmbedding extends VoyageAIEmbedding {
-        protected async waitBeforeRetry(): Promise<void> {
+        protected override async waitBeforeRetry(): Promise<void> {
             return undefined;
         }
     }
@@ -248,7 +248,7 @@ test('Voyage embedding classifies and redacts terminal authentication failures w
 
 test('Voyage embedding preserves retryability when classifying exhausted provider failures', async () => {
     class ImmediateRetryEmbedding extends VoyageAIEmbedding {
-        protected async waitBeforeRetry(): Promise<void> {
+        protected override async waitBeforeRetry(): Promise<void> {
             return undefined;
         }
     }
@@ -318,7 +318,7 @@ test('Voyage embedding preserves retryability when classifying exhausted provide
 
 test('Voyage embedding keeps document and query roles isolated across overlapping retries', async () => {
     class ImmediateRetryEmbedding extends VoyageAIEmbedding {
-        protected async waitBeforeRetry(): Promise<void> {
+        protected override async waitBeforeRetry(): Promise<void> {
             return undefined;
         }
     }

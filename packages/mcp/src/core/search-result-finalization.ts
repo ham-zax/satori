@@ -21,6 +21,7 @@ import {
     buildRawSearchResults as buildRawSearchResultsHelper,
     buildVisibleGroupedSearchResults as buildVisibleGroupedSearchResultsHelper,
 } from "./search-group-results.js";
+import type { SearchAnswerFocus } from "./search-answer-focus.js";
 import type { SearchQueryPlan, SearchResultLike } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { SearchQuerySupport } from "./search-query-support.js";
@@ -29,6 +30,7 @@ import {
     buildRawSearchEnvelope as buildRawSearchEnvelopeHelper,
     projectGroupedResultV2,
 } from "./search-response-envelopes.js";
+import type { SearchActionIntent } from "./search-response-helpers.js";
 import type {
     CallGraphHint,
     SearchDebugHint,
@@ -112,6 +114,7 @@ type FinalizeSearchResultsInput = {
     readiness: SearchReadinessDebugHint;
     parsedOperators: ParsedSearchOperators;
     queryPlan: SearchQueryPlan;
+    answerFocus?: SearchAnswerFocus;
     maxAttempts: number;
     exactRegistryDebug?: ExactRegistryLookupDebug;
     searchSymbolRegistry?: SymbolRegistry;
@@ -690,6 +693,14 @@ export async function finalizeSearchResults(
         returnedGroupCount: 0,
     });
     const eligibleResults = completeDisclosureOrder.slice(0, frozenCounts.effectiveFrozenTotal);
+    const actionIntent: SearchActionIntent = {
+        semanticQuery: input.queryPlan.semanticQuery,
+        referenceSeeking: input.queryPlan.referenceSeeking || input.answerFocus === "references",
+        implementationSeeking: input.answerFocus !== undefined
+            ? input.answerFocus === "implementation"
+            : input.queryPlan.implementationSeeking,
+    };
+
     const disclosureProjection = projectGroupedDisclosure({
         // The projector needs the complete order to report caller_limit
         // truthfully, while the continuation cache below remains bounded by the
@@ -723,7 +734,7 @@ export async function finalizeSearchResults(
             );
             const mustConstraintHint = buildMustConstraintHint();
             const envelope = buildGroupedSearchEnvelopeHelper({
-                actionIntent: input.queryPlan,
+                actionIntent,
                 ...(searchSymbolRegistry ? {
                     structuralAnalysis: computeSymbolQualitySummaryFromRegistry(searchSymbolRegistry).structuralAnalysis,
                 } : {}),
@@ -794,7 +805,7 @@ export async function finalizeSearchResults(
         ? {
             orderedResults: eligibleResults.map(projectGroupedResultV2),
             recommendedActions: eligibleResults.map((result) => (
-                buildSearchGroupRecommendedAction(input.effectiveRoot, result, undefined, input.queryPlan) ?? null
+                buildSearchGroupRecommendedAction(input.effectiveRoot, result, undefined, actionIntent) ?? null
             )),
             initialReturnedCount: disclosureProjection.results.length,
         }

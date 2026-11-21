@@ -1984,6 +1984,7 @@ export class SearchRequestCoordinator {
                     readiness: readinessDebug,
                     parsedOperators,
                     queryPlan,
+                    answerFocus,
                     maxAttempts,
                     exactRegistryDebug,
                     searchSymbolRegistry,

@@ -538,6 +538,92 @@ export function buildSearchGroupRecommendedAction(
     };
 }
 
+const COARSE_CONTAINER_SYMBOL_KINDS = new Set([
+    "file",
+    "module",
+    "namespace",
+    "class",
+    "struct",
+    "interface",
+    "type",
+    "enum",
+    "trait",
+]);
+
+const EXECUTABLE_IMPLEMENTATION_KINDS = new Set([
+    "function",
+    "method",
+    "constructor",
+]);
+
+function isCoarseContainerResult(result: SearchGroupResult): boolean {
+    if (typeof result.target.symbolId !== "string" || result.target.symbolId.trim().length === 0) {
+        return true;
+    }
+    const kind = result.symbolKind?.toLowerCase() ?? "";
+    return COARSE_CONTAINER_SYMBOL_KINDS.has(kind);
+}
+
+function resolveUnambiguousSameFileExecutableAction(
+    codebaseRoot: string,
+    results: SearchGroupResult[],
+    firstActionableIndex: number,
+    intent?: SearchActionIntent,
+): SearchRecommendedNextAction | undefined {
+    if (!intent?.implementationSeeking || intent.referenceSeeking) {
+        return undefined;
+    }
+    const first = results[firstActionableIndex];
+    if (!first || !isCoarseContainerResult(first)) {
+        return undefined;
+    }
+
+    const candidates: Array<{
+        result: SearchGroupResult;
+        action: SearchRecommendedNextAction;
+    }> = [];
+    for (let index = firstActionableIndex + 1; index < results.length; index += 1) {
+        const candidate = results[index];
+        if (!candidate || candidate.target.file !== first.target.file) {
+            continue;
+        }
+        const kind = candidate.symbolKind?.toLowerCase() ?? "";
+        if (!EXECUTABLE_IMPLEMENTATION_KINDS.has(kind)) {
+            continue;
+        }
+        if (typeof candidate.target.symbolId !== "string" || candidate.target.symbolId.trim().length === 0) {
+            continue;
+        }
+        const action = buildSearchGroupRecommendedAction(codebaseRoot, candidate, index, intent);
+        if (!action || !("open_symbol" in action.args)) {
+            continue;
+        }
+        candidates.push({ result: candidate, action });
+    }
+
+    if (candidates.length === 1) {
+        return candidates[0].action;
+    }
+    const firstKind = first.symbolKind?.toLowerCase() ?? "";
+    if (
+        candidates.length > 1
+        && firstKind !== ""
+        && firstKind !== "file"
+        && firstKind !== "module"
+        && isValidSearchSpan(first.target.span)
+    ) {
+        const contained = candidates.filter(({ result }) => (
+            isValidSearchSpan(result.target.span)
+            && result.target.span.startLine >= first.target.span.startLine
+            && result.target.span.endLine <= first.target.span.endLine
+        ));
+        if (contained.length === 1) {
+            return contained[0].action;
+        }
+    }
+    return undefined;
+}
+
 export function buildTopRecommendedSearchAction(
     codebaseRoot: string,
     results: SearchGroupResult[],
@@ -548,6 +634,15 @@ export function buildTopRecommendedSearchAction(
     );
     if (firstActionableIndex < 0) {
         return undefined;
+    }
+    const executableAction = resolveUnambiguousSameFileExecutableAction(
+        codebaseRoot,
+        results,
+        firstActionableIndex,
+        intent,
+    );
+    if (executableAction) {
+        return executableAction;
     }
     return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex, intent);
 }

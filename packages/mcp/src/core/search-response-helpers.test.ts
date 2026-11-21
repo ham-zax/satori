@@ -249,6 +249,169 @@ test("top recommendation preserves ranked order instead of skipping a span-only 
     });
 });
 
+test("top recommendation targets an unambiguous verified executable in the same file when #1 is a coarse container on implementation queries", () => {
+    const structHit = baseGroup({
+        symbolKind: "struct",
+        displayLabel: "struct defaultValidator",
+        target: {
+            file: "binding/default_validator.go",
+            span: { startLine: 18, endLine: 24 },
+            symbolId: "sym_struct",
+        },
+    });
+    const methodHit = baseGroup({
+        symbolKind: "method",
+        displayLabel: "method ValidateStruct",
+        target: {
+            file: "binding/default_validator.go",
+            span: { startLine: 44, endLine: 68 },
+            symbolId: "sym_validate",
+        },
+    });
+    const implIntent = {
+        semanticQuery: "where does gin validate a bound struct using its validate tags",
+        referenceSeeking: false,
+        implementationSeeking: true,
+    };
+    const action = buildTopRecommendedSearchAction("/repo", [structHit, methodHit], implIntent);
+    assert.equal(action?.resultIndex, 1);
+    assert.equal(action?.tool, "read_file");
+    assert.ok(action && "open_symbol" in action.args);
+    const openExec = exactSymbolOpenRequestSchema.parse(action.args.open_symbol);
+    assert.equal(openExec.symbolId, "sym_validate");
+    assert.equal(openExec.context?.preset, "implementation");
+
+    // Non-implementation query keeps #1 (definition preset on the container).
+    const defAction = buildTopRecommendedSearchAction("/repo", [structHit, methodHit], {
+        semanticQuery: "defaultValidator struct",
+        referenceSeeking: false,
+        implementationSeeking: false,
+    });
+    assert.equal(defAction?.resultIndex, 0);
+    assert.ok(defAction && "open_symbol" in defAction.args);
+    const openDef = exactSymbolOpenRequestSchema.parse(defAction.args.open_symbol);
+    assert.equal(openDef.symbolId, "sym_struct");
+    assert.equal(openDef.context?.preset, "definition");
+});
+
+test("top recommendation targets an unambiguous same-file function when #1 is a file hit on implementation queries, and preserves #1 when ambiguous", () => {
+    const fileHit = baseGroup({
+        symbolKind: "file",
+        displayLabel: "file crates/polars-compute/src/rolling/nulls/mean.rs:1",
+        target: {
+            file: "crates/polars-compute/src/rolling/nulls/mean.rs",
+            span: { startLine: 1, endLine: 120 },
+        },
+        navigation: { graph: "missing_symbol" },
+    });
+    const fnHit = baseGroup({
+        symbolKind: "function",
+        displayLabel: "function rolling_mean",
+        target: {
+            file: "crates/polars-compute/src/rolling/nulls/mean.rs",
+            span: { startLine: 40, endLine: 95 },
+            symbolId: "sym_rolling_mean",
+        },
+    });
+    const secondFnHit = baseGroup({
+        symbolKind: "function",
+        displayLabel: "function rolling_mean_weighted",
+        target: {
+            file: "crates/polars-compute/src/rolling/nulls/mean.rs",
+            span: { startLine: 97, endLine: 118 },
+            symbolId: "sym_rolling_mean_weighted",
+        },
+    });
+    const implIntent = {
+        semanticQuery: "how does polars compute a rolling mean",
+        referenceSeeking: false,
+        implementationSeeking: true,
+    };
+
+    const singleAction = buildTopRecommendedSearchAction("/repo", [fileHit, fnHit], implIntent);
+    assert.equal(singleAction?.resultIndex, 1);
+    assert.ok(singleAction && "open_symbol" in singleAction.args);
+    const openSingle = exactSymbolOpenRequestSchema.parse(singleAction.args.open_symbol);
+    assert.equal(openSingle.symbolId, "sym_rolling_mean");
+    assert.equal(openSingle.context?.preset, "implementation");
+
+    // Two competing executables in the same file are ambiguous -> preserve #1.
+    const ambiguousAction = buildTopRecommendedSearchAction("/repo", [fileHit, fnHit, secondFnHit], implIntent);
+    assert.equal(ambiguousAction?.resultIndex, 0);
+    assert.deepEqual(ambiguousAction?.args, {
+        path: "/repo/crates/polars-compute/src/rolling/nulls/mean.rs",
+        start_line: 1,
+        end_line: 120,
+    });
+});
+
+test("top recommendation disambiguates multiple same-file executables by class/struct span containment", () => {
+    const classHit = baseGroup({
+        symbolKind: "class",
+        displayLabel: "class SessionManager",
+        target: {
+            file: "src/sessions.py",
+            span: { startLine: 10, endLine: 80 },
+            symbolId: "sym_session_manager",
+        },
+    });
+    const containedMethod = baseGroup({
+        symbolKind: "method",
+        displayLabel: "method save_session",
+        target: {
+            file: "src/sessions.py",
+            span: { startLine: 20, endLine: 40 },
+            symbolId: "sym_save_session",
+        },
+    });
+    const secondContainedMethod = baseGroup({
+        symbolKind: "method",
+        displayLabel: "method open_session",
+        target: {
+            file: "src/sessions.py",
+            span: { startLine: 45, endLine: 65 },
+            symbolId: "sym_open_session",
+        },
+    });
+    const outsideFunction = baseGroup({
+        symbolKind: "function",
+        displayLabel: "function parse_cookie_header",
+        target: {
+            file: "src/sessions.py",
+            span: { startLine: 90, endLine: 105 },
+            symbolId: "sym_parse_cookie",
+        },
+    });
+    const implIntent = {
+        semanticQuery: "where does session manager write the signed session cookie",
+        referenceSeeking: false,
+        implementationSeeking: true,
+    };
+
+    // Two same-file executables exist, but only one is contained inside class SessionManager -> targets #2.
+    const containedAction = buildTopRecommendedSearchAction(
+        "/repo",
+        [classHit, containedMethod, outsideFunction],
+        implIntent,
+    );
+    assert.equal(containedAction?.resultIndex, 1);
+    assert.ok(containedAction && "open_symbol" in containedAction.args);
+    const openContained = exactSymbolOpenRequestSchema.parse(containedAction.args.open_symbol);
+    assert.equal(openContained.symbolId, "sym_save_session");
+    assert.equal(openContained.context?.preset, "implementation");
+
+    // Two executables both contained inside class SessionManager remain ambiguous -> preserves #1.
+    const ambiguousContainedAction = buildTopRecommendedSearchAction(
+        "/repo",
+        [classHit, containedMethod, secondContainedMethod, outsideFunction],
+        implIntent,
+    );
+    assert.equal(ambiguousContainedAction?.resultIndex, 0);
+    assert.ok(ambiguousContainedAction && "open_symbol" in ambiguousContainedAction.args);
+    const openClass = exactSymbolOpenRequestSchema.parse(ambiguousContainedAction.args.open_symbol);
+    assert.equal(openClass.symbolId, "sym_session_manager");
+});
+
 test("caller term is a complete bounded ASCII identifier and only accompanies graph-ready state", () => {
     assert.equal(buildCallerSearchTerm("checkMutation"), "checkMutation");
     assert.equal(buildCallerSearchTerm("member.call"), undefined);

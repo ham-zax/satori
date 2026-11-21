@@ -45,6 +45,7 @@ export type {
 } from './core/ignore-matcher';
 export {
     computeIndexPolicyControlSignature,
+    observeIndexPolicyInputs,
 } from './core/index-policy-input-observer';
 export {
     EMBEDDING_PROJECTION_VERSION,

@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import {
+    DEFAULT_IGNORE_PATTERNS,
     createIndexIgnoreMatcher,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
+    observeIndexPolicyInputs,
     recordSourceProcessing,
 } from "@satori-code/core";
 import {
@@ -365,19 +367,36 @@ function resolvePublishedRelativePaths(codebaseRoot: string, ctx: ToolContext): 
 }
 
 /**
- * Active ignore matcher for live-path admission, mirroring the search lane's
- * policy (active patterns from the session context; a matcher failure denies).
+ * Active ignore matcher for live-path admission, failing closed whenever
+ * active session patterns or live disk ignore control files (`.satoriignore`,
+ * `.gitignore`, `.git/info/exclude`) cannot be verified.
  */
-function buildReadFileIgnoreMatcher(codebaseRoot: string, ctx: ToolContext): ((relativePath: string) => boolean) | undefined {
-    const patterns = (ctx.context as { getActiveIgnorePatterns?: (root: string) => string[] } | undefined)
-        ?.getActiveIgnorePatterns?.(codebaseRoot);
-    if (!Array.isArray(patterns) || patterns.length === 0) {
-        return undefined;
+async function buildReadFileIgnoreMatcher(
+    codebaseRoot: string,
+    ctx: ToolContext,
+): Promise<(relativePath: string) => boolean> {
+    let activePatterns: unknown;
+    try {
+        activePatterns = (ctx.context as { getActiveIgnorePatterns?: (root: string) => string[] } | undefined)
+            ?.getActiveIgnorePatterns?.(codebaseRoot);
+    } catch {
+        return () => true;
+    }
+    if (!Array.isArray(activePatterns) || activePatterns.length === 0) {
+        return () => true;
+    }
+    let observedPatterns: readonly string[];
+    try {
+        observedPatterns = (await observeIndexPolicyInputs(codebaseRoot)).fileBasedIgnorePatterns;
+    } catch {
+        return () => true;
     }
     try {
-        const matcher = createIndexIgnoreMatcher(
-            patterns.filter((pattern): pattern is string => typeof pattern === "string"),
-        );
+        const matcher = createIndexIgnoreMatcher([
+            ...DEFAULT_IGNORE_PATTERNS,
+            ...activePatterns.filter((pattern): pattern is string => typeof pattern === "string"),
+            ...observedPatterns,
+        ]);
         return (relativePath: string) => {
             const normalized = relativePath.replace(/\\/g, "/");
             if (!normalized) {
@@ -397,9 +416,13 @@ function buildReadFileIgnoreMatcher(codebaseRoot: string, ctx: ToolContext): ((r
 /**
  * Live-path admission for one requested file, mirroring the search freshness
  * policy: the path must be changed/untracked per git status, language-capable
- * for search, and not excluded by the active ignore rules.
+ * for search, and not excluded by the active or live on-disk ignore rules.
  */
-function isLivePathAdmittedForRead(codebaseRoot: string, relativePath: string, ctx: ToolContext): boolean {
+async function isLivePathAdmittedForRead(
+    codebaseRoot: string,
+    relativePath: string,
+    ctx: ToolContext,
+): Promise<boolean> {
     const changed = getChangedFilesForCodebase({
         codebasePath: codebaseRoot,
         nowMs: Date.now(),
@@ -412,8 +435,8 @@ function isLivePathAdmittedForRead(codebaseRoot: string, relativePath: string, c
     if (!isLanguageCapabilitySupportedForFilename(relativePath, "search")) {
         return false;
     }
-    const matcher = buildReadFileIgnoreMatcher(codebaseRoot, ctx);
-    if (matcher?.(relativePath)) {
+    const matcher = await buildReadFileIgnoreMatcher(codebaseRoot, ctx);
+    if (matcher(relativePath)) {
         return false;
     }
     return true;
@@ -586,7 +609,6 @@ export const readFileTool: McpTool = {
             // Schema already requires an absolute path; collapse . / .. and realpath when present.
             const resolvedPath = path.resolve(input.path);
             const absolutePath = canonicalizeFilesystemPath(resolvedPath);
-            const wantsStructuredError = mode === "annotated" || Boolean(input.open_symbol);
             const boundRoot = input.codebaseRoot ? canonicalizeFilesystemPath(input.codebaseRoot) : undefined;
             if (boundRoot) {
                 ctx.workspacePolicy.authorizeRoot(boundRoot);
@@ -653,7 +675,7 @@ export const readFileTool: McpTool = {
                         message: "Current navigation authority is unavailable; refresh the indexed root state and retry.",
                     });
                 }
-                return outsideIndexedRootResponse(absolutePath);
+                return outsideIndexedRootResponse(resolvedPath);
             }
 
             if (exactRequest) {
@@ -772,43 +794,26 @@ export const readFileTool: McpTool = {
                 }
             }
 
-            if (!fs.existsSync(absolutePath)) {
-                if (wantsStructuredError) {
-                    return readFileErrorResponse({
-                        status: "not_found",
-                        message: `Error: File '${absolutePath}' not found.`,
-                    });
-                }
-                return {
-                    content: [{ type: "text", text: `Error: File '${absolutePath}' not found.` }],
-                    isError: true
-                };
-            }
-
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isFile()) {
-                if (wantsStructuredError) {
-                    return readFileErrorResponse({
-                        status: "not_found",
-                        message: `Error: '${absolutePath}' is not a file.`,
-                    });
-                }
-                return {
-                    content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
-                    isError: true
-                };
-            }
-
             // Publication-bound authorization: the file must be in the current
             // published searchable-file manifest OR admitted by the live-path
             // source policy (changed/untracked, in-scope, non-ignored). Both
-            // paths open through the shared descriptor-bound helper.
+            // paths open through the shared descriptor-bound helper; existence,
+            // file-type, and symlink checks stay behind authorization so
+            // unpublished paths expose no existence/type/symlink-target oracle.
             const publishedRelativePaths = resolvePublishedRelativePaths(allowedRoot, ctx);
             const requestedRelativePath = normalizeRelativePath(path.relative(allowedRoot, absolutePath));
+            const isFinalSymlink = (() => {
+                try {
+                    return fs.lstatSync(resolvedPath).isSymbolicLink();
+                } catch {
+                    return false;
+                }
+            })();
             if (
-                requestedRelativePath.length > 0
+                !isFinalSymlink
+                && requestedRelativePath.length > 0
                 && !publishedRelativePaths.has(requestedRelativePath)
-                && isLivePathAdmittedForRead(allowedRoot, requestedRelativePath, ctx)
+                && await isLivePathAdmittedForRead(allowedRoot, requestedRelativePath, ctx)
             ) {
                 publishedRelativePaths.add(requestedRelativePath);
             }
@@ -845,7 +850,7 @@ export const readFileTool: McpTool = {
                 sourceObservation = sourceRead.sourceMeasurementObservation;
             } catch (error) {
                 if (error instanceof PublishedFileAuthorizationError) {
-                    return publishedFileAuthorizationDenial(error, absolutePath);
+                    return publishedFileAuthorizationDenial(error, resolvedPath);
                 }
                 if (error instanceof WorkspaceAuthorizationError) {
                     return readFileAuthorizationDenial({
@@ -855,7 +860,7 @@ export const readFileTool: McpTool = {
                         code: error.code === "WORKSPACE_POLICY_NOT_BOUND"
                             ? "WORKSPACE_POLICY_NOT_BOUND"
                             : "ROOT_NOT_AUTHORIZED",
-                        path: absolutePath,
+                        path: resolvedPath,
                         message: error.message,
                     });
                 }
@@ -864,7 +869,7 @@ export const readFileTool: McpTool = {
                         return readFileAuthorizationDenial({
                             reason: "file_too_large",
                             code: "FILE_TOO_LARGE",
-                            path: absolutePath,
+                            path: resolvedPath,
                             maxBytes,
                             message: error.message,
                         });
@@ -872,7 +877,7 @@ export const readFileTool: McpTool = {
                     return readFileAuthorizationDenial({
                         reason: "file_replaced",
                         code: "FILE_REPLACED",
-                        path: absolutePath,
+                        path: resolvedPath,
                         message: error.message,
                     });
                 }

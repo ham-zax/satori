@@ -1,6 +1,6 @@
 import * as path from "path";
-import { execFileSync } from "node:child_process";
 import type { ManageReindexPreflightOutcome } from "./manage-types.js";
+import { execReadOnlyGitTextSync } from "./read-only-git.js";
 import { WARNING_CODES, type WarningCode } from "./warnings.js";
 
 export type ChangedFilesState = {
@@ -133,10 +133,9 @@ export function getChangedFilesForCodebase(input: GetChangedFilesForCodebaseInpu
         expiresAtMs = cached.expiresAtMs;
     } else {
         try {
-            const stdout = execFileSync(
-                "git",
-                ["-C", cacheKey, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+            const stdout = execReadOnlyGitTextSync(
+                cacheKey,
+                ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             );
             state = { available: true, files: parseGitStatusChangedPathsZ(stdout, { includeUntracked: true }) };
         } catch {
@@ -157,10 +156,9 @@ export function getWorkingTreeChangedPathsForPreflight(
     codebasePath: string,
 ): WorkingTreeChangedPathsState {
     try {
-        const stdout = execFileSync(
-            "git",
-            ["-C", codebasePath, "status", "--porcelain"],
-            { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        const stdout = execReadOnlyGitTextSync(
+            codebasePath,
+            ["status", "--porcelain"],
         );
         const files = parseGitStatusChangedPaths(stdout, { includeUntracked: true });
         return { available: true, probeFailed: false, files };

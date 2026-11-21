@@ -2,6 +2,7 @@
 // require(ESM), supported by the package's Node 22.22 minimum.
 export type * from 'typescript/ast' with { 'resolution-mode': 'import' };
 export type * from 'typescript/sync' with { 'resolution-mode': 'import' };
+export type * from 'typescript/fs' with { 'resolution-mode': 'import' };
 export { version } from 'typescript';
 
 const ast = require('typescript/ast') as typeof import('typescript/ast', { with: { 'resolution-mode': 'import' } });

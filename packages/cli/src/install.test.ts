@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
 import {
+    formatSessionHookCommand,
     prepareClaudeInstall, prepareClaudeUninstall,
     prepareCodexInstall, prepareCodexUninstall,
     prepareOpenCodeInstall, prepareOpenCodeUninstall,
@@ -28,6 +29,7 @@ import {
     buildLauncherScript,
     parseManagedLauncherDescriptor,
 } from "./managed-launcher-script.mjs";
+import { acquireManagedRuntimeMutationLock } from "./managed-runtime-store.js";
 import {
     LATEON_FIXTURE_ARTIFACTS,
     writeLateOnAcquisitionFixture,
@@ -2758,7 +2760,7 @@ test("Claude install adds one SessionStart hook beside user hooks and uninstall 
         assert.equal(installed.hooks.SessionStart[1].matcher, undefined);
         assert.deepEqual(installed.hooks.SessionStart[1].hooks, [{
             type: "command",
-            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(shimPath)}`,
+            command: formatSessionHookCommand(process.execPath, shimPath),
             timeout: 5,
         }]);
         assert.equal(readFile(shimPath).includes("satori-managed-session-hook"), true);
@@ -4401,6 +4403,53 @@ test("uninstall purge refuses a symlinked Satori root", async () => {
         }
         assert.equal(fs.existsSync(path.join(homeDir, ".satori")), true);
         assert.equal(fs.existsSync(path.join(userData, "bin", "satori-mcp.js")), true);
+    });
+});
+
+test("uninstall purge re-verifies target inode and ownership after server termination (P2-7)", async () => {
+    await withTempHome(async (homeDir) => {
+        const customRoot = path.join(homeDir, "custom-state");
+        fs.mkdirSync(path.join(customRoot, "publications"), { recursive: true });
+        const victimDir = path.join(homeDir, "victim-user-data");
+        fs.mkdirSync(victimDir, { recursive: true });
+        fs.writeFileSync(path.join(victimDir, "precious.txt"), "do not delete");
+
+        await assert.rejects(executeInstallCommand({
+            kind: "uninstall", client: "all", dryRun: false, purge: true,
+        }, {
+            homeDir,
+            env: { SATORI_STATE_ROOT: customRoot },
+            terminateRunner: async () => {
+                // Swap customRoot to a symlink pointing at victimDir mid-termination.
+                fs.rmSync(customRoot, { recursive: true, force: true });
+                fs.symlinkSync(victimDir, customRoot);
+                return { status: "not_running" } as never;
+            },
+        }), /Refusing to purge/);
+
+        assert.equal(fs.existsSync(path.join(victimDir, "precious.txt")), true);
+        assert.equal(fs.readFileSync(path.join(victimDir, "precious.txt"), "utf8"), "do not delete");
+    });
+});
+
+test("uninstall acquires the managed runtime mutation lock when the runtime store exists (P3-2)", async () => {
+    await withTempHome(async (homeDir) => {
+        const storageRoot = path.join(homeDir, ".satori", "mcp-runtime");
+        fs.mkdirSync(storageRoot, { recursive: true });
+        // Hold .mutation.lock with the live current process so uninstall cannot bypass it.
+        const release = acquireManagedRuntimeMutationLock({ homeDir });
+        try {
+            await assert.rejects(executeInstallCommand({
+                kind: "uninstall", client: "all", dryRun: false, purge: true,
+            }, {
+                homeDir,
+                env: {},
+                terminateRunner: async () => { assert.fail("uninstall must not run while mutation lock is held"); },
+            }), /Timed out waiting for managed runtime lock/);
+            assert.equal(fs.existsSync(storageRoot), true);
+        } finally {
+            release();
+        }
     });
 });
 

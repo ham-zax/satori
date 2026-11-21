@@ -323,18 +323,72 @@ async function readWithStallTimeout<T>(
     }
 }
 
+const inFlightModelAcquisitions = new Map<string, Promise<EnsuredModel>>();
+
+function assertSafeStagingPath(stagingRoot: string, destination: string): void {
+    const stagingStat = fs.lstatSync(stagingRoot);
+    if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink()) {
+        throw new ModelAcquisitionError("integrity", `staging directory '${stagingRoot}' must be a real directory, not a symlink`);
+    }
+    const realStagingRoot = fs.realpathSync(stagingRoot);
+    const relative = path.relative(stagingRoot, destination);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new ModelAcquisitionError("integrity", `staging destination '${destination}' escapes '${stagingRoot}'`);
+    }
+    const components = relative.split(path.sep);
+    let current = stagingRoot;
+    for (const component of components.slice(0, -1)) {
+        current = path.join(current, component);
+        const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+        if (!stat) continue;
+        if (stat.isSymbolicLink() || !stat.isDirectory()) {
+            throw new ModelAcquisitionError("integrity", `staging path component '${current}' must not be a symlink`);
+        }
+    }
+    const destStat = fs.lstatSync(destination, { throwIfNoEntry: false });
+    if (destStat) {
+        if (destStat.isSymbolicLink() || !destStat.isFile()) {
+            throw new ModelAcquisitionError("integrity", `staging artifact '${destination}' must not be a symbolic link`);
+        }
+        if (!isRealPathWithin(realStagingRoot, fs.realpathSync(destination))) {
+            throw new ModelAcquisitionError("integrity", `staging artifact '${destination}' resolves outside staging directory`);
+        }
+    }
+}
+
+function openStagingFileNoFollow(stagingRoot: string, destination: string, append: boolean): number {
+    assertSafeStagingPath(stagingRoot, destination);
+    const flags = fs.constants.O_WRONLY
+        | fs.constants.O_CREAT
+        | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC)
+        | (fs.constants.O_NOFOLLOW ?? 0);
+    const fd = fs.openSync(destination, flags, 0o600);
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
+            throw new ModelAcquisitionError("integrity", `staging artifact '${destination}' is not a regular file`);
+        }
+        return fd;
+    } catch (error) {
+        fs.closeSync(fd);
+        throw error;
+    }
+}
+
 /**
  * Downloads one artifact into `destination`, resuming from any bytes already
  * staged. The caller verifies the completed file.
  */
 async function downloadArtifact(
     url: string,
+    stagingRoot: string,
     destination: string,
     artifact: ModelArtifact,
     fetchImpl: typeof fetch,
     stallTimeoutMs: number,
     onBytes: (artifactBytes: number) => void,
 ): Promise<void> {
+    assertSafeStagingPath(stagingRoot, destination);
     const offset = stagedBytes(destination);
     const abort = new AbortController();
     let currentUrl = url;
@@ -365,7 +419,7 @@ async function downloadArtifact(
         }
         // 206 continues the staged bytes; 200 means the server sent the whole file.
         const append = response.status === 206 && offset > 0;
-        const file = fs.openSync(destination, append ? "a" : "w", 0o600);
+        const file = openStagingFileNoFollow(stagingRoot, destination, append);
         let written = append ? offset : 0;
         const reader = response.body.getReader();
         try {
@@ -421,14 +475,179 @@ function acquisitionFailureMessage(spec: ModelSpec, endpoint: string, failure: M
     }
 }
 
+function detachAndRemoveDirectory(directoryPath: string): void {
+    const detached = `${directoryPath}.corrupt-${crypto.randomUUID()}`;
+    try {
+        fs.renameSync(directoryPath, detached);
+        fs.rmSync(detached, { recursive: true, force: true });
+    } catch {
+        fs.rmSync(directoryPath, { recursive: true, force: true });
+    }
+}
+
+function isProcessLiveForModelLock(pid: number): boolean {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+}
+
+const ABANDONED_MODEL_LOCK_HELPER_MAX_AGE_MS = 5_000;
+
+function parseModelLockHelperPid(fileName: string, lockBaseName: string): number | null {
+    const prefix = `${lockBaseName}.`;
+    if (!fileName.startsWith(prefix)) return null;
+    if (!fileName.endsWith(".stale-claim") && !fileName.endsWith(".candidate")) return null;
+    const rest = fileName.slice(prefix.length);
+    const dotIndex = rest.indexOf(".");
+    if (dotIndex <= 0) return null;
+    const pid = Number(rest.slice(0, dotIndex));
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function pruneAbandonedModelLockHelpers(
+    lockPath: string,
+    target: Readonly<{ dev: number; ino: number }>,
+    ownClaimPath: string,
+): void {
+    const lockDir = path.dirname(lockPath);
+    const lockBaseName = path.basename(lockPath);
+    const ownClaimBaseName = path.basename(ownClaimPath);
+    let entries: string[];
+    try {
+        entries = fs.readdirSync(lockDir);
+    } catch {
+        return;
+    }
+    const now = Date.now();
+    for (const entry of entries) {
+        if (entry === lockBaseName || entry === ownClaimBaseName) continue;
+        const helperPid = parseModelLockHelperPid(entry, lockBaseName);
+        if (helperPid === null) continue;
+        const helperPath = path.join(lockDir, entry);
+        let helperStat: fs.Stats;
+        try {
+            helperStat = fs.lstatSync(helperPath);
+        } catch {
+            continue;
+        }
+        if (helperStat.dev !== target.dev || helperStat.ino !== target.ino) continue;
+        const abandoned = !isProcessLiveForModelLock(helperPid)
+            || (now - helperStat.mtimeMs) > ABANDONED_MODEL_LOCK_HELPER_MAX_AGE_MS;
+        if (!abandoned) continue;
+        try {
+            fs.unlinkSync(helperPath);
+        } catch { /* ignore */ }
+    }
+}
+
+async function acquireModelStagingLock(lockPath: string, timeoutMs = 30_000): Promise<() => void> {
+    const deadline = Date.now() + timeoutMs;
+    const payload = JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() });
+    for (;;) {
+        const candidatePath = `${lockPath}.${process.pid}.${crypto.randomUUID()}.candidate`;
+        let fd: number | null = null;
+        try {
+            fd = fs.openSync(candidatePath, "wx", 0o600);
+            fs.writeFileSync(fd, payload, "utf8");
+            const stat = fs.fstatSync(fd);
+            fs.closeSync(fd);
+            fd = null;
+            fs.linkSync(candidatePath, lockPath);
+            try { fs.unlinkSync(candidatePath); } catch { /* ignore */ }
+            return () => {
+                try {
+                    const current = fs.lstatSync(lockPath);
+                    if (current.dev === stat.dev && current.ino === stat.ino) {
+                        fs.unlinkSync(lockPath);
+                    }
+                } catch { /* ignore */ }
+            };
+        } catch (error) {
+            if (fd !== null) {
+                try { fs.closeSync(fd); } catch { /* ignore */ }
+            }
+            try { fs.unlinkSync(candidatePath); } catch { /* ignore */ }
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+        // Check for dead-process stale lock using a hard-link claim.
+        const claimPath = `${lockPath}.${process.pid}.${crypto.randomUUID()}.stale-claim`;
+        try {
+            fs.linkSync(lockPath, claimPath);
+            try {
+                const claimStat = fs.lstatSync(claimPath);
+                let ownerPid: number | undefined;
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(claimPath, "utf8")) as { pid?: unknown };
+                    if (typeof parsed.pid === "number") ownerPid = parsed.pid;
+                } catch { /* malformed */ }
+                const stale = ownerPid !== undefined
+                    ? !isProcessLiveForModelLock(ownerPid)
+                    : Date.now() - claimStat.mtimeMs > 30_000;
+                if (stale) {
+                    let currentLock = fs.lstatSync(lockPath);
+                    let currentClaim = fs.lstatSync(claimPath);
+                    if (currentLock.dev === currentClaim.dev && currentLock.ino === currentClaim.ino && currentClaim.nlink > 2) {
+                        pruneAbandonedModelLockHelpers(lockPath, currentClaim, claimPath);
+                        currentLock = fs.lstatSync(lockPath);
+                        currentClaim = fs.lstatSync(claimPath);
+                    }
+                    if (currentLock.dev === currentClaim.dev && currentLock.ino === currentClaim.ino && currentClaim.nlink === 2) {
+                        fs.unlinkSync(lockPath);
+                        continue;
+                    }
+                }
+            } finally {
+                try { fs.unlinkSync(claimPath); } catch { /* ignore */ }
+            }
+        } catch {
+            // Lock vanished or contended; retry below.
+        }
+        if (Date.now() >= deadline) {
+            throw new ModelAcquisitionError("stalled", `timed out waiting for model staging lock '${lockPath}'`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+}
+
 /**
  * Returns a verified local copy of `spec`, downloading only what is missing.
- * A corrupt cached copy is discarded and re-acquired.
+ * A corrupt cached copy is discarded and re-acquired. Concurrent callers for
+ * the same model directory serialize both in-process and across processes so
+ * they never race on the shared `.partial` staging directory.
  */
 export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel> {
+    const modelDirectory = resolveModelDirectory(input.homeDir, input.spec);
+    while (inFlightModelAcquisitions.has(modelDirectory)) {
+        await inFlightModelAcquisitions.get(modelDirectory)!.catch(() => undefined);
+    }
+    const run = (async () => {
+        const parent = path.dirname(modelDirectory);
+        fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+        const lockPath = path.join(parent, `.${path.basename(modelDirectory)}.lock`);
+        const releaseLock = await acquireModelStagingLock(lockPath);
+        try {
+            return await ensureModelSerialized(input, modelDirectory);
+        } finally {
+            releaseLock();
+        }
+    })();
+    inFlightModelAcquisitions.set(modelDirectory, run);
+    try {
+        return await run;
+    } finally {
+        if (inFlightModelAcquisitions.get(modelDirectory) === run) {
+            inFlightModelAcquisitions.delete(modelDirectory);
+        }
+    }
+}
+
+async function ensureModelSerialized(input: EnsureModelInput, modelDirectory: string): Promise<EnsuredModel> {
     const { spec } = input;
     const totalBytes = totalModelBytes(spec);
-    const modelDirectory = resolveModelDirectory(input.homeDir, spec);
     const report = input.onProgress ?? (() => {});
     report({ phase: "checking", label: spec.label, modelDirectory, totalBytes });
 
@@ -446,7 +665,7 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
                 modelDirectory,
                 reason: error instanceof Error ? error.message : String(error),
             });
-            fs.rmSync(modelDirectory, { recursive: true, force: true });
+            detachAndRemoveDirectory(modelDirectory);
         }
     }
 
@@ -455,12 +674,18 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
     const staging = path.join(parent, `.${path.basename(modelDirectory)}.partial`);
     fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+    const stagingStat = fs.lstatSync(staging);
+    if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink()) {
+        throw new ModelAcquisitionError("integrity", `staging directory '${staging}' must not be a symbolic link`);
+    }
 
     const stagedPath = (artifact: ModelArtifact) => path.join(staging, ...artifact.path.split("/"));
     let resumedBytes = 0;
     for (const artifact of spec.artifacts) {
-        const staged = stagedBytes(stagedPath(artifact));
-        if (staged > artifact.sizeBytes) fs.rmSync(stagedPath(artifact), { force: true });
+        const dest = stagedPath(artifact);
+        assertSafeStagingPath(staging, dest);
+        const staged = stagedBytes(dest);
+        if (staged > artifact.sizeBytes) fs.rmSync(dest, { force: true });
         else resumedBytes += staged;
     }
     assertDiskSpace(spec, parent, totalBytes - resumedBytes, input.statfsImpl ?? ((dir) => fs.statfsSync(dir)));
@@ -477,9 +702,11 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
         fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
         for (let attempt = 0; ; attempt += 1) {
             try {
+                assertSafeStagingPath(staging, destination);
                 if (stagedBytes(destination) < artifact.sizeBytes) {
                     await downloadArtifact(
                         artifactUrl(endpoint, spec, artifact),
+                        staging,
                         destination,
                         artifact,
                         fetchImpl,
@@ -506,7 +733,9 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
             } catch (error) {
                 inFlightBytes.delete(artifact.path);
                 const { failure, retryable } = classifyFailure(error);
-                if (failure.reason === "integrity") fs.rmSync(destination, { force: true });
+                if (failure.reason === "integrity" && !/symlink|symbolic link/i.test(failure.message)) {
+                    fs.rmSync(destination, { force: true });
+                }
                 if (!retryable || attempt >= retryDelays.length) {
                     throw new ModelAcquisitionError(failure.reason, acquisitionFailureMessage(spec, endpoint, failure));
                 }

@@ -10,7 +10,7 @@ import {
 } from "./managed-launcher-script.mjs";
 import {
     acquireManagedRuntimeLeaseLock,
-    inspectManagedRuntimeLeases,
+    inspectAndPruneManagedRuntimeLeasesUnderLock,
 } from "./managed-runtime-store.js";
 import {
     terminateSatoriServers,
@@ -130,7 +130,7 @@ async function drainManagedLaunchers(
     const now = options.now ?? Date.now;
     const timeoutMs = options.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
 
-    let snapshot = inspectManagedRuntimeLeases({ homeDir });
+    let snapshot = inspectAndPruneManagedRuntimeLeasesUnderLock({ homeDir });
     if (snapshot.unsafe) {
         throw new CliError(
             "E_TERMINATION_FAILED",
@@ -162,7 +162,7 @@ async function drainManagedLaunchers(
 
     const deadline = now() + timeoutMs;
     while (true) {
-        snapshot = inspectManagedRuntimeLeases({ homeDir });
+        snapshot = inspectAndPruneManagedRuntimeLeasesUnderLock({ homeDir });
         if (snapshot.unsafe) {
             throw new CliError(
                 "E_TERMINATION_FAILED",

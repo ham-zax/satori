@@ -4,6 +4,14 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { compareContractStrings } from "@satori-code/core";
+import {
+    claimAndUnlinkStaleFileLock,
+    isLinuxProcessIdentityLive,
+    publishAtomicFileLock,
+    readLinuxProcessIdentity,
+    removeOwnedFileLockIfUnchanged,
+    type FileLockIdentity,
+} from "@satori-code/core/integration";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 
 /** Mutating manage_index actions that must honor the runtime-owner gate. */
@@ -788,53 +796,60 @@ function withOwnerLock<T>(
     fs.mkdirSync(stateDir, { recursive: true });
     const lockPath = path.join(stateDir, OWNER_LOCK_NAME);
     const deadline = Date.now() + lockWaitMs;
-    let fd: number | null = null;
+    const processIdentity = readLinuxProcessIdentity();
+    const lockPayload = JSON.stringify({
+        pid: process.pid,
+        ...(processIdentity
+            ? {
+                bootId: processIdentity.bootId,
+                processStartTime: processIdentity.startTime,
+            }
+            : {}),
+        acquiredAt: new Date().toISOString(),
+        ...(maintenance ? { maintenance: true } : {}),
+    });
+    let lockIdentity: FileLockIdentity | null = null;
     while (Date.now() <= deadline) {
         try {
-            fd = fs.openSync(lockPath, "wx");
-            fs.writeFileSync(fd, JSON.stringify({
-                pid: process.pid,
-                acquiredAt: new Date().toISOString(),
-                ...(maintenance ? { maintenance: true } : {}),
-            }));
+            lockIdentity = publishAtomicFileLock(lockPath, lockPayload, 0o600);
             break;
         } catch (error: unknown) {
             if (!isRecord(error) || error.code !== "EEXIST") {
                 throw error;
             }
-            if (shouldBreakOwnerLock(lockPath)) {
-                try {
-                    fs.unlinkSync(lockPath);
-                } catch {
-                    // Lock owner won the race; retry.
-                }
+            let reclaimed = false;
+            try {
+                reclaimed = claimAndUnlinkStaleFileLock(
+                    lockPath,
+                    (claimPath, claimStat) => shouldBreakOwnerLock(claimPath, claimStat),
+                );
+            } catch {
+                // Another contender resolved the stale lock first.
+            }
+            if (reclaimed) {
+                continue;
             }
             sleepSync(lockRetryMs);
         }
     }
-    if (fd === null) {
+    if (lockIdentity === null) {
         throw new Error(`Timed out acquiring runtime owner registry lock at ${lockPath}`);
     }
     try {
         return fn();
     } finally {
         try {
-            fs.closeSync(fd);
-        } catch {
-            // Best-effort close.
-        }
-        try {
-            fs.unlinkSync(lockPath);
+            removeOwnedFileLockIfUnchanged(lockPath, lockIdentity);
         } catch {
             // Best-effort unlock.
         }
     }
 }
 
-function shouldBreakOwnerLock(lockPath: string): boolean {
+function shouldBreakOwnerLock(lockPath: string, lockStat?: fs.Stats): boolean {
     let ageMs: number;
     try {
-        ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+        ageMs = Date.now() - (lockStat ?? fs.lstatSync(lockPath)).mtimeMs;
     } catch {
         return false;
     }
@@ -847,7 +862,24 @@ function shouldBreakOwnerLock(lockPath: string): boolean {
         if (pid === undefined) {
             return ageMs >= OWNER_LOCK_METADATALESS_STALE_MS;
         }
-        return !processExists(pid);
+        if (!processExists(pid)) {
+            return true;
+        }
+        const processStartTime = isRecord(parsed) && typeof parsed.processStartTime === "string"
+            && parsed.processStartTime.length > 0
+            ? parsed.processStartTime
+            : undefined;
+        const bootId = isRecord(parsed) && typeof parsed.bootId === "string" && parsed.bootId.length > 0
+            ? parsed.bootId
+            : undefined;
+        if (process.platform === "linux" && processStartTime) {
+            return !isLinuxProcessIdentityLive({
+                pid,
+                startTime: processStartTime,
+                ...(bootId ? { bootId } : {}),
+            });
+        }
+        return false;
     } catch {
         return ageMs >= OWNER_LOCK_METADATALESS_STALE_MS;
     }

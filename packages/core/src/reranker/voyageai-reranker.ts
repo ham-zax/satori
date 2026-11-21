@@ -55,6 +55,13 @@ export class RerankerRequestError extends Error {
 
 const RETRYABLE_NETWORK_CODES = new Set(["ETIMEDOUT", "ECONNRESET", "EAI_AGAIN"]);
 const MAX_RERANK_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_RERANK_ERROR_BODY_CHARS = 512;
+
+function sanitizeErrorBodyPreview(raw: string): string {
+    const trimmed = raw.trim();
+    if (trimmed.length <= MAX_RERANK_ERROR_BODY_CHARS) return trimmed;
+    return `${trimmed.slice(0, MAX_RERANK_ERROR_BODY_CHARS)}... [truncated]`;
+}
 
 async function readRerankResponseBody(response: Response): Promise<string> {
     if (!response.body) return '';
@@ -257,6 +264,7 @@ export class VoyageAIReranker implements Reranker {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify(requestBody),
+                    redirect: 'error',
                     signal: attemptSignal,
                 });
 
@@ -276,7 +284,7 @@ export class VoyageAIReranker implements Reranker {
                         // may use an empty body.
                     }
                     throw Object.assign(
-                        new Error(`VoyageAI Rerank API error (${status}): ${errorText}`),
+                        new Error(`VoyageAI Rerank API error (${status}): ${sanitizeErrorBodyPreview(errorText)}`),
                         { rerankerHttpStatus: status },
                     );
                 }

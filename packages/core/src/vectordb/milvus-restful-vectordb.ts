@@ -130,6 +130,23 @@ function normalizeHost(address: string): string {
     }
 }
 
+function isLoopbackAddress(address: string): boolean {
+    const host = normalizeHost(address);
+    return host === 'localhost'
+        || host === '127.0.0.1'
+        || host === '::1'
+        || host === '[::1]'
+        || host.endsWith('.localhost');
+}
+
+function normalizeRestAddress(address: string): string {
+    if (address.startsWith('http://') || address.startsWith('https://')) {
+        return address;
+    }
+    const scheme = isLoopbackAddress(address) ? 'http://' : 'https://';
+    return `${scheme}${address}`;
+}
+
 function looksLikeZillizAddress(address: string): boolean {
     const host = normalizeHost(address);
     return host.endsWith('cloud.zilliz.com') || host.endsWith('zillizcloud.com');
@@ -183,11 +200,9 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
     }
 
     private async initializeClient(address: string): Promise<void> {
-        // Ensure address has protocol prefix
-        let processedAddress = address;
-        if (!processedAddress.startsWith('http://') && !processedAddress.startsWith('https://')) {
-            processedAddress = `http://${processedAddress}`;
-        }
+        // Default non-loopback schemeless endpoints to HTTPS so credentials are
+        // not transmitted in plaintext; loopback development hosts keep HTTP.
+        const processedAddress = normalizeRestAddress(address);
 
         this.baseUrl = processedAddress.replace(/\/$/, '') + '/v2/vectordb';
         this.resolvedAddress = processedAddress;
@@ -270,6 +285,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         const requestOptions: RequestInit = {
             method,
             headers,
+            redirect: 'error',
         };
 
         if (data && method === 'POST') {

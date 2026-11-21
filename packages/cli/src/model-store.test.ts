@@ -161,3 +161,46 @@ test("ensureModel downloads several artifacts at once when concurrency is raised
         for (const file of files) assert.deepEqual(fs.readFileSync(path.join(modelDirectory, file.path)), file.body);
     });
 });
+
+test("ensureModel refuses to write through a symlink placed inside the staging directory (P1-4)", async () => {
+    await withHome(async (homeDir) => {
+        const victim = path.join(homeDir, "victim.txt");
+        fs.writeFileSync(victim, "untouched");
+        fs.mkdirSync(path.dirname(stagedFile(homeDir)), { recursive: true });
+        fs.symlinkSync(victim, stagedFile(homeDir));
+
+        const fetchImpl = (async () => new Response(CONTENT, { status: 200 })) as typeof fetch;
+        await assert.rejects(
+            ensureModel({ homeDir, spec: spec(), env: {}, fetchImpl, retryDelaysMs: [] }),
+            /symlink|symbolic link|ELOOP/i,
+        );
+        assert.equal(fs.readFileSync(victim, "utf8"), "untouched");
+    });
+});
+
+test("concurrent ensureModel calls for the same revision serialize cleanly without corrupting staging (P3-3)", async () => {
+    await withHome(async (homeDir) => {
+        let fetchCount = 0;
+        const fetchImpl = (async () => {
+            fetchCount += 1;
+            const chunks = [CONTENT.slice(0, 10), CONTENT.slice(10)];
+            return new Response(new ReadableStream({
+                async start(controller) {
+                    for (const part of chunks) {
+                        await new Promise((resolve) => setTimeout(resolve, 15));
+                        controller.enqueue(new TextEncoder().encode(part));
+                    }
+                    controller.close();
+                },
+            }), { status: 200 });
+        }) as typeof fetch;
+
+        const [first, second] = await Promise.all([
+            ensureModel({ homeDir, spec: spec(), env: {}, fetchImpl, retryDelaysMs: [] }),
+            ensureModel({ homeDir, spec: spec(), env: {}, fetchImpl, retryDelaysMs: [] }),
+        ]);
+        assert.equal(first.modelDirectory, second.modelDirectory);
+        assert.equal(fs.readFileSync(path.join(first.modelDirectory, "model.bin"), "utf8"), CONTENT);
+        assert.equal(fetchCount, 1, "concurrent callers for the same model revision must serialize rather than racing on .partial");
+    });
+});

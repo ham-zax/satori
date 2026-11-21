@@ -1269,3 +1269,25 @@ test("shared runtime disables session-start auto-indexing for cli/postflight att
     await waitForGate(() => indexedPolicies.length === 1);
     assert.deepEqual(indexedPolicies[0]?.roots, [workspace]);
 });
+
+test("acquireLifecycleLock release verifies inode identity and tolerates already-removed lock (P2-8)", async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lifecycle-release-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const lockPath = path.join(dir, "host.lock");
+
+    // Case 1: lock replaced with same ownershipToken content on a new inode -> release must NOT delete the replacement inode.
+    const held = await acquireLifecycleLock(lockPath);
+    const originalContent = fs.readFileSync(lockPath, "utf8");
+    fs.renameSync(lockPath, `${lockPath}.displaced`);
+    fs.writeFileSync(lockPath, originalContent, { mode: 0o600 });
+    const replacementStat = fs.lstatSync(lockPath);
+    held.release();
+    assert.equal(fs.existsSync(lockPath), true, "release must not unlink a different inode");
+    assert.equal(fs.lstatSync(lockPath).ino, replacementStat.ino);
+    fs.unlinkSync(lockPath);
+
+    // Case 2: lock already removed before release -> release must not throw ENOENT.
+    const held2 = await acquireLifecycleLock(lockPath);
+    fs.unlinkSync(lockPath);
+    assert.doesNotThrow(() => held2.release());
+});

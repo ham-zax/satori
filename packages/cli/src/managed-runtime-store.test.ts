@@ -10,6 +10,7 @@ import { buildLauncherScript } from "./managed-launcher-script.mjs";
 import {
     acquireManagedRuntimeMutationLock,
     acquireManagedRuntimeLeaseLock,
+    inspectManagedRuntimeLeases,
     pruneManagedRuntimeStore,
 } from "./managed-runtime-store.js";
 
@@ -547,5 +548,35 @@ test("store and generated lock publication failures preserve replacement locks",
                 fs.rmSync(lockPath, { force: true });
             }
         }
+    });
+});
+
+test("inspectManagedRuntimeLeases is read-only and does not delete dead or malformed leases without the lock (P3-4)", async () => {
+    await withTempHome((homeDir) => {
+        const runtimeRoot = writeRuntime(homeDir, "0.10.1");
+        const leasesRoot = path.join(homeDir, ".satori", "mcp-runtime", ".leases");
+        fs.mkdirSync(leasesRoot, { recursive: true });
+        const deadLeasePath = path.join(leasesRoot, "dead.json");
+        fs.writeFileSync(deadLeasePath, JSON.stringify({
+            formatVersion: 1,
+            leaseId: "dead-lease",
+            pid: 999_999,
+            processStartTime: "dead-start",
+            runtimeRoot,
+            acquiredAt: new Date(0).toISOString(),
+        }));
+        const oldMalformedPath = path.join(leasesRoot, "malformed.json");
+        fs.writeFileSync(oldMalformedPath, "{broken");
+        const oldTime = new Date(Date.now() - 120_000);
+        fs.utimesSync(oldMalformedPath, oldTime, oldTime);
+
+        const snapshot = inspectManagedRuntimeLeases({
+            homeDir,
+            inspectProcess: processInspector({}),
+        });
+        assert.deepEqual(snapshot.leases, []);
+        assert.equal(snapshot.unsafe, false);
+        assert.equal(fs.existsSync(deadLeasePath), true, "read-only inspection must not delete dead lease files");
+        assert.equal(fs.existsSync(oldMalformedPath), true, "read-only inspection must not delete malformed lease files");
     });
 });

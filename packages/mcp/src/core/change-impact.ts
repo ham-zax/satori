@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { compareContractStrings } from "@satori-code/core";
 import type {
     CallGraphEdgeResult,
@@ -10,8 +8,7 @@ import type {
     CallGraphNodeResult,
 } from "./search-types.js";
 import { areaForFile } from "./architecture-overview.js";
-
-const execFileAsync = promisify(execFile);
+import { execReadOnlyGitBuffer, execReadOnlyGitText } from "./read-only-git.js";
 
 /** Maximum serialized detect_changes response size (UTF-8 bytes of the MCP JSON payload). */
 export const DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
@@ -69,9 +66,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     // diff paths, outline files and publishedSourceByFile keys equal.
     const scope = path.relative(input.codebaseRoot, input.path);
     const scopePathspec = scope === "" ? "." : `:(literal)${scope.split(path.sep).join("/")}`;
-    const git = async (args: string[]) => (await execFileAsync("git", ["-C", input.codebaseRoot, ...args], {
-        encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
-    })).stdout;
+    const git = async (args: string[]) => execReadOnlyGitText(input.codebaseRoot, args);
     // Resolve the revision separately: revision strings never become options
     // or a pathspec. All subsequent operations use the immutable commit ID.
     const baseCommit = (await git(["rev-parse", "--verify", "--end-of-options", `${input.baseRef}^{commit}`])).trim();
@@ -111,9 +106,8 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         // coordinates and maps to published symbol spans.
         let publishedSource: Buffer | undefined;
         if (outline.status !== "ok" && outline.reason === "stale_symbol_ref" && !source) {
-            const baseBytes = await execFileAsync("git", ["-C", input.codebaseRoot, "show", `${baseCommit}:./${file}`], {
-                encoding: "buffer", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
-            }).then(result => result.stdout, () => undefined);
+            const baseBytes = await execReadOnlyGitBuffer(input.codebaseRoot, ["show", `${baseCommit}:./${file}`])
+                .then(result => result, () => undefined);
             const published = baseBytes && await ports.outline(file, baseBytes);
             if (published && published.status === "ok" && published.outline) {
                 outline = published;

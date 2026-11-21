@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { readTypeScriptFileBytes, TypeScriptReadLimitError } from './typescript-bounded-reader';
 import type { TypeScriptSourceBudget } from './typescript-configured-project';
+import type { TypeScriptFsBoundary } from './typescript-fs-boundary';
 import {
     isTypeScriptFsObservation, verifyTypeScriptFsObservation,
     type TypeScriptFsObservation,
@@ -84,7 +85,11 @@ export class TypeScriptReferenceDeclarationCache {
     get size(): number { return this.entries.size; }
     get bytes(): number { return this.retainedBytes; }
 
-    get(configPath: string, fingerprint: string): TypeScriptReferenceDeclarationState | undefined {
+    get(
+        configPath: string,
+        fingerprint: string,
+        boundary?: TypeScriptFsBoundary,
+    ): TypeScriptReferenceDeclarationState | undefined {
         const entry = this.entries.get(configPath);
         if (!entry) return undefined;
         this.remove(configPath);
@@ -92,7 +97,7 @@ export class TypeScriptReferenceDeclarationCache {
         // Admission and content checks need today's budget. Without one the
         // proof cannot be re-established, so a proven observation is not reused.
         if (!entry.state.unproven && entry.observation && (!this.options.resourceBudget
-            || !verifyTypeScriptFsObservation(entry.observation, this.options.resourceBudget))) return undefined;
+            || !verifyTypeScriptFsObservation(entry.observation, this.options.resourceBudget, boundary))) return undefined;
         this.entries.set(configPath, entry);
         this.retainedBytes += entry.bytes;
         return entry.state;

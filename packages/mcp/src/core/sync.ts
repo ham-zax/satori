@@ -413,7 +413,7 @@ function errorCode(error: unknown): string | undefined {
 }
 
 export class SyncOperationError extends Error {
-    public readonly cause: unknown;
+    public override readonly cause: unknown;
 
     constructor(
         message: string,

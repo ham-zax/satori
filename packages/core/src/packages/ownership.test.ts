@@ -455,3 +455,38 @@ test('memoized ownership agreement matches the uncached check for every rejectio
         assert.equal(manifestFilesMatchOwnedPaths(files, paths), expected, 'memoized');
     }
 });
+
+test('discoverPackageOwnership rejects oversized control files and skips node_modules/symlinks during workspace globs (P4-4)', (t) => {
+    const fixture = createRepo();
+    const restrictedDir = path.join(fixture.root, 'node_modules', 'unreadable');
+    t.after(() => {
+        try { fs.chmodSync(restrictedDir, 0o700); } catch { /* ignore */ }
+        fixture.cleanup();
+    });
+
+    // Case 1: recursive pnpm workspace pattern must never descend into node_modules
+    // (an unreadable directory inside node_modules causes EACCES if globSync omits exclude).
+    writeFile(fixture.root, 'package.json', JSON.stringify({ name: 'root' }));
+    writeFile(fixture.root, 'pnpm-workspace.yaml', "packages:\n  - '**'\n");
+    writeFile(fixture.root, 'packages/app/package.json', JSON.stringify({ name: '@fixture/app' }));
+    fs.mkdirSync(restrictedDir, { recursive: true });
+    fs.symlinkSync(fixture.root, path.join(fixture.root, 'packages', 'self-loop'));
+    if (process.platform !== 'win32') {
+        fs.chmodSync(restrictedDir, 0o000);
+    }
+
+    const discovered = discoverPackageOwnership(fixture.root);
+    assert.deepEqual(
+        discovered.packages.map((pkg) => pkg.name),
+        ['root', '@fixture/app'],
+    );
+
+    // Case 2: oversized package.json (> 1 MiB) is rejected without unbounded read.
+    const oversizedFixture = createRepo();
+    t.after(() => oversizedFixture.cleanup());
+    writeFile(oversizedFixture.root, 'package.json', `{"name":"big","pad":"${'x'.repeat(1_048_576 + 100)}"}`);
+    assert.throws(
+        () => discoverPackageOwnership(oversizedFixture.root),
+        /exceeds.*byte.*limit/i,
+    );
+});

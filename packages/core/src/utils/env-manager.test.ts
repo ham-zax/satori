@@ -86,3 +86,34 @@ for (const failRename of [false, true]) {
         assert.deepEqual(fs.readdirSync(path.dirname(envPath)), ['.env']);
     });
 }
+
+test('envManager rejects newline/NUL injection, invalid key names, symlinks, and handles CRLF (P4-6)', async (t) => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-env-sec-'));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    t.mock.method(os, 'homedir', () => temp);
+    const { EnvManager } = await import('./env-manager.js');
+    const manager = new EnvManager();
+
+    // Reject newline / CR / NUL injection in value and invalid key names.
+    assert.throws(() => manager.set('GOOD_KEY', 'val\nPOTION_HELPER_PATH=/tmp/evil'), /single line|newline|null|control/i);
+    assert.throws(() => manager.set('GOOD_KEY', 'val\rPOTION_HELPER_PATH=/tmp/evil'), /single line|newline|null|control/i);
+    assert.throws(() => manager.set('GOOD_KEY', 'val\0rest'), /single line|newline|null|control/i);
+    assert.throws(() => manager.set('BAD=KEY', 'val'), /invalid.*variable name/i);
+    assert.throws(() => manager.set('BAD\nKEY', 'val'), /invalid.*variable name/i);
+
+    // Handle CRLF cleanly without trailing \r.
+    const envDir = path.join(temp, '.satori');
+    const envPath = path.join(envDir, '.env');
+    fs.mkdirSync(envDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(envPath, 'CRLF_KEY=hello_crlf\r\nOTHER=1\r\n', { mode: 0o600 });
+    assert.equal(manager.get('CRLF_KEY'), 'hello_crlf');
+
+    // Reject symlinked .env on both read and write.
+    const outside = path.join(temp, 'outside.env');
+    fs.writeFileSync(outside, 'LEAKED_KEY=secret\n', { mode: 0o600 });
+    fs.unlinkSync(envPath);
+    fs.symlinkSync(outside, envPath);
+    assert.equal(manager.get('LEAKED_KEY'), undefined);
+    assert.throws(() => manager.set('SAFE_KEY', 'value'), /symbolic link|symlink/i);
+    assert.equal(fs.readFileSync(outside, 'utf8'), 'LEAKED_KEY=secret\n');
+});

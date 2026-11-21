@@ -238,7 +238,9 @@ function parseRuntimeUseLease(value: unknown): RuntimeUseLease | null {
 function collectLeaseProtectedRoots(
     storageRoot: string,
     inspectProcess: (pid: number) => ProcessIdentity | null,
+    options: { pruneStale?: boolean } = {},
 ): { roots: Set<string>; leases: RuntimeUseLease[]; warnings: string[]; unsafe: boolean } {
+    const pruneStale = options.pruneStale === true;
     const leasesRoot = path.join(storageRoot, LEASES_DIRECTORY);
     const roots = new Set<string>();
     const leases: RuntimeUseLease[] = [];
@@ -262,6 +264,16 @@ function collectLeaseProtectedRoots(
             continue;
         }
         const leasePath = path.join(leasesRoot, entry.name);
+        let observedStat: fs.Stats;
+        try {
+            observedStat = fs.lstatSync(leasePath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+        }
+        if (!observedStat.isFile() || observedStat.isSymbolicLink()) {
+            continue;
+        }
         let lease: RuntimeUseLease | null;
         try {
             lease = parseRuntimeUseLease(readJson(leasePath));
@@ -269,21 +281,20 @@ function collectLeaseProtectedRoots(
             lease = null;
         }
         if (!lease) {
-            let oldEnoughToRecover: boolean;
-            try {
-                oldEnoughToRecover = Date.now() - fs.statSync(leasePath).mtimeMs >= METADATALESS_LOCK_STALE_MS;
-            } catch {
-                oldEnoughToRecover = true;
-            }
+            const oldEnoughToRecover = Date.now() - observedStat.mtimeMs >= METADATALESS_LOCK_STALE_MS;
             if (oldEnoughToRecover) {
-                fs.rmSync(leasePath, { force: true });
+                if (pruneStale) {
+                    removeLockIfUnchanged(leasePath, observedStat);
+                }
                 continue;
             }
             warnings.push(`Managed runtime lease is malformed at ${leasePath}.`);
             return { roots, leases, warnings, unsafe: true };
         }
         if (!processIdentityMatches(lease, inspectProcess(lease.pid))) {
-            fs.rmSync(leasePath, { force: true });
+            if (pruneStale) {
+                removeLockIfUnchanged(leasePath, observedStat);
+            }
             continue;
         }
         const managedRoot = managedRuntimeRootContaining(storageRoot, lease.runtimeRoot)
@@ -438,7 +449,7 @@ function removeLockIfUnchanged(lockPath: string, expected: fs.Stats): void {
     try {
         const current = fs.lstatSync(lockPath);
         if (current.dev === expected.dev && current.ino === expected.ino) {
-            fs.rmSync(lockPath, { force: true });
+            fs.unlinkSync(lockPath);
         }
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -566,7 +577,39 @@ export function inspectManagedRuntimeLeases(
         return { leases: [], warnings: [], unsafe: false };
     }
     const inspectProcess = options.inspectProcess ?? inspectProcessDefault;
-    const result = collectLeaseProtectedRoots(storageRoot, inspectProcess);
+    const result = collectLeaseProtectedRoots(storageRoot, inspectProcess, { pruneStale: false });
+    return {
+        leases: result.leases,
+        warnings: result.warnings,
+        unsafe: result.unsafe,
+    };
+}
+
+/**
+ * Prunes dead or expired-malformed lease files with inode verification and
+ * returns the live lease snapshot. Callers MUST already hold
+ * `acquireManagedRuntimeLeaseLock` for `homeDir`.
+ */
+export function inspectAndPruneManagedRuntimeLeasesUnderLock(
+    options: ManagedRuntimeMutationLockOptions = {},
+): Readonly<{
+    leases: readonly RuntimeUseLease[];
+    warnings: readonly string[];
+    unsafe: boolean;
+}> {
+    const homeDir = options.homeDir ?? os.homedir();
+    const storageRoot = runtimeStorageRoot(homeDir);
+    if (!fs.existsSync(storageRoot)) {
+        return { leases: [], warnings: [], unsafe: false };
+    }
+    const lockPath = path.join(storageRoot, LEASE_LOCK_FILE);
+    if (!fs.existsSync(lockPath)) {
+        throw new Error(
+            `Cannot prune managed runtime leases without holding ${LEASE_LOCK_FILE}.`,
+        );
+    }
+    const inspectProcess = options.inspectProcess ?? inspectProcessDefault;
+    const result = collectLeaseProtectedRoots(storageRoot, inspectProcess, { pruneStale: true });
     return {
         leases: result.leases,
         warnings: result.warnings,
@@ -638,7 +681,7 @@ export function pruneManagedRuntimeStore(
                 warnings.push("Current managed runtime is not a valid direct child of the runtime store; cleanup was skipped.");
                 return;
             }
-            const leaseEvidence = collectLeaseProtectedRoots(storageRoot, inspectProcess);
+            const leaseEvidence = collectLeaseProtectedRoots(storageRoot, inspectProcess, { pruneStale: true });
             const ownerEvidence = collectLiveRuntimeOwnerVersions(homeDir, env, inspectProcess);
             const hostEvidence = collectSharedRuntimeProtectedRoots(homeDir, storageRoot, inspectProcess);
             warnings.push(...leaseEvidence.warnings, ...ownerEvidence.warnings, ...hostEvidence.warnings);

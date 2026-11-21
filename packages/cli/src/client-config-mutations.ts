@@ -133,23 +133,73 @@ export function updateSatoriProjectConfig(current: string, profile: InstallProfi
     return normalizeTrailingNewline(lines.join("\n"));
 }
 
+function assertNotSymlinkAndRegularIfPresent(filePath: string, label: string): void {
+    const stat = lstatIfExists(filePath);
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to write ${filePath}: ${label} must not be a symbolic link.`,
+            2,
+        );
+    }
+    if (!stat.isFile()) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to write ${filePath}: ${label} must be a regular file.`,
+            2,
+        );
+    }
+}
+
+function writeTextFileAtomicNoFollow(filePath: string, content: string, label: string, mode?: number): void {
+    assertNotSymlinkAndRegularIfPresent(filePath, label);
+    ensureParentDir(filePath);
+    if (mode === undefined) {
+        try {
+            mode = fs.lstatSync(filePath).mode & 0o7777;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+    }
+    const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    const fd = fs.openSync(tempPath, "wx", mode);
+    try {
+        try {
+            fs.writeFileSync(fd, content, "utf8");
+            if (mode !== undefined) fs.fchmodSync(fd, mode);
+        } finally {
+            fs.closeSync(fd);
+        }
+        assertNotSymlinkAndRegularIfPresent(filePath, label);
+        fs.renameSync(tempPath, filePath);
+    } finally {
+        fs.rmSync(tempPath, { force: true });
+    }
+}
+
 export function prepareProjectProfileInstall(repoDir: string, profile: InstallProfile | undefined): FileMutation & { filePath?: string } {
     if (!profile) {
         return { changed: false, apply: () => {} };
     }
     const filePath = path.join(repoDir, "satori.toml");
+    assertNotSymlinkAndRegularIfPresent(filePath, "satori.toml");
     const currentFile = readTextIfExists(filePath);
     const current = currentFile ?? "";
     const next = updateSatoriProjectConfig(current, profile);
     return {
         filePath,
         changed: next !== current,
-        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
+        assertUnchanged: () => {
+            assertNotSymlinkAndRegularIfPresent(filePath, "satori.toml");
+            assertFileContentUnchanged(filePath, currentFile);
+        },
         apply: () => {
+            assertNotSymlinkAndRegularIfPresent(filePath, "satori.toml");
             if (next === current) {
                 return;
             }
-            writeTextFileAtomic(filePath, next);
+            writeTextFileAtomicNoFollow(filePath, next, "satori.toml");
         },
     };
 }
@@ -621,6 +671,7 @@ function resolveSkillDirectory(skillDir: string): string {
 export function prepareSkillInstall(linkedSkillDir: string, source: string = readSatoriSkillSource()): FileMutation {
     const skillDir = resolveSkillDirectory(linkedSkillDir);
     const skillFile = path.join(skillDir, "SKILL.md");
+    assertNotSymlinkAndRegularIfPresent(skillFile, "SKILL.md");
     const current = readTextIfExists(skillFile);
     if (current !== null && !current.includes(SATORI_SKILL_OWNERSHIP_MARKER)) {
         throw new CliError("E_USAGE", `Refusing to overwrite unmanaged skill at ${skillFile}. Move it aside and rerun install.`, 2);
@@ -630,29 +681,39 @@ export function prepareSkillInstall(linkedSkillDir: string, source: string = rea
     }
     return {
         changed: true,
-        assertUnchanged: () => assertFileContentUnchanged(skillFile, current),
+        assertUnchanged: () => {
+            assertNotSymlinkAndRegularIfPresent(skillFile, "SKILL.md");
+            assertFileContentUnchanged(skillFile, current);
+        },
         apply: () => {
             fs.mkdirSync(skillDir, { recursive: true });
-            fs.writeFileSync(skillFile, source, "utf8");
+            writeTextFileAtomicNoFollow(skillFile, source, "SKILL.md");
         },
     };
 }
 
 function isSatoriManagedSkill(skillDir: string): boolean {
-    return readTextIfExists(path.join(skillDir, "SKILL.md"))?.includes(SATORI_SKILL_OWNERSHIP_MARKER) === true;
+    const skillFile = path.join(skillDir, "SKILL.md");
+    if (lstatIfExists(skillFile)?.isSymbolicLink()) return false;
+    return readTextIfExists(skillFile)?.includes(SATORI_SKILL_OWNERSHIP_MARKER) === true;
 }
 
 /** Removes only a real directory; a linked skill stays with the tool that owns the link. */
 export function prepareSkillRemoval(skillDir: string): FileMutation {
     const skillFile = path.join(skillDir, "SKILL.md");
-    const current = readTextIfExists(skillFile);
+    const skillFileStat = lstatIfExists(skillFile);
+    const current = skillFileStat && !skillFileStat.isSymbolicLink() ? readTextIfExists(skillFile) : null;
     if (!lstatIfExists(skillDir)?.isDirectory() || !current?.includes(SATORI_SKILL_OWNERSHIP_MARKER)) {
         return unchangedMutation();
     }
     return {
         changed: true,
-        assertUnchanged: () => assertFileContentUnchanged(skillFile, current),
+        assertUnchanged: () => {
+            assertNotSymlinkAndRegularIfPresent(skillFile, "SKILL.md");
+            assertFileContentUnchanged(skillFile, current);
+        },
         apply: () => {
+            assertNotSymlinkAndRegularIfPresent(skillFile, "SKILL.md");
             fs.rmSync(skillFile, { force: true });
             if (fs.readdirSync(skillDir).length === 0) {
                 fs.rmdirSync(skillDir);
@@ -753,8 +814,39 @@ function sessionStartEntries(filePath: string, settings: Record<string, unknown>
     return sessionStart;
 }
 
+function formatPosixShellArg(value: string): string {
+    return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Formats a shell-safe command string for Claude Code's `SessionStart` hook.
+ * Rejects newlines and NUL bytes; uses POSIX single-quote escaping on POSIX
+ * platforms so `$`, backticks, and backslashes in paths are never expanded.
+ */
+export function formatSessionHookCommand(
+    command: string,
+    shimPath: string,
+    platform: NodeJS.Platform = process.platform,
+): string {
+    for (const [label, value] of [["command", command], ["shim path", shimPath]] as const) {
+        if (/[\r\n\0]/.test(value)) {
+            throw new CliError(
+                "E_USAGE",
+                `SessionStart hook ${label} must not contain newline or null control characters.`,
+                2,
+            );
+        }
+    }
+    if (platform === "win32") {
+        return `${JSON.stringify(command)} ${JSON.stringify(shimPath)}`;
+    }
+    return `${formatPosixShellArg(command)} ${formatPosixShellArg(shimPath)}`;
+}
+
 /** Drops only hook commands that run this install's shim; other hooks and entries stay intact. */
 function withoutSatoriSessionHooks(entries: readonly unknown[], shimPath: string): unknown[] {
+    const escapedShim = formatPosixShellArg(shimPath);
+    const jsonShim = JSON.stringify(shimPath);
     const result: unknown[] = [];
     for (const entry of entries) {
         const hooks = objectValue(entry)?.hooks;
@@ -764,7 +856,14 @@ function withoutSatoriSessionHooks(entries: readonly unknown[], shimPath: string
         }
         const kept = hooks.filter((hook) => {
             const hookCommand = objectValue(hook)?.command;
-            return !(typeof hookCommand === "string" && hookCommand.includes(shimPath));
+            return !(
+                typeof hookCommand === "string"
+                && (
+                    hookCommand.includes(shimPath)
+                    || hookCommand.includes(escapedShim)
+                    || hookCommand.includes(jsonShim)
+                )
+            );
         });
         if (kept.length === hooks.length) result.push(entry);
         else if (kept.length > 0) result.push({ ...(entry as Record<string, unknown>), hooks: kept });
@@ -773,6 +872,7 @@ function withoutSatoriSessionHooks(entries: readonly unknown[], shimPath: string
 }
 
 function assertShimOwned(shimPath: string, current: string | null): void {
+    assertNotSymlinkAndRegularIfPresent(shimPath, MANAGED_SESSION_HOOK_FILE);
     if (current !== null && !current.includes(MANAGED_SESSION_HOOK_MARKER)) {
         throw new CliError(
             "E_USAGE",
@@ -784,6 +884,8 @@ function assertShimOwned(shimPath: string, current: string | null): void {
 
 export function prepareSessionHookInstall(settingsPath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const shimPath = resolveSessionHookShimPath(runtimeCommand);
+    const hookCommand = formatSessionHookCommand(runtimeCommand.command, shimPath);
+    assertNotSymlinkAndRegularIfPresent(shimPath, MANAGED_SESSION_HOOK_FILE);
     const currentShim = readTextIfExists(shimPath);
     assertShimOwned(shimPath, currentShim);
     const shim = buildSessionHookShimScript();
@@ -793,15 +895,16 @@ export function prepareSessionHookInstall(settingsPath: string, runtimeCommand: 
     // No matcher: the hook runs for startup, resume, clear, and compact sessions.
     const next = [
         ...withoutSatoriSessionHooks(entries, shimPath),
-        { hooks: [{ type: "command", command: `${JSON.stringify(runtimeCommand.command)} ${JSON.stringify(shimPath)}`, timeout: 5 }] },
+        { hooks: [{ type: "command", command: hookCommand, timeout: 5 }] },
     ];
     const settingsMutation = mutateJsonc(settingsPath, current ?? "{}\n", ["hooks", "SessionStart"], next);
     const shimChanged = currentShim !== shim;
     return guardFileMutation(settingsPath, current, {
         changed: shimChanged || settingsMutation.changed || current === null,
         apply: () => {
+            assertNotSymlinkAndRegularIfPresent(shimPath, MANAGED_SESSION_HOOK_FILE);
             assertFileContentUnchanged(shimPath, currentShim);
-            if (shimChanged) writeTextFileAtomic(shimPath, shim, 0o755);
+            if (shimChanged) writeTextFileAtomicNoFollow(shimPath, shim, MANAGED_SESSION_HOOK_FILE, 0o755);
             settingsMutation.apply();
         },
     });

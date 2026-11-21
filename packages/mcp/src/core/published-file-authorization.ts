@@ -85,6 +85,24 @@ export async function openAuthorizedPublishedFile(input: {
         );
     }
 
+    // Reject final symlinks (even to inside targets) before publication lookup
+    // so an in-root symlink to an unpublished file never discloses its resolved
+    // relativePath in a FILE_NOT_PUBLISHED message. Non-symlink missing paths,
+    // directories, and FIFOs stay behind the publication check so unpublished
+    // paths return uniform FILE_NOT_PUBLISHED with no existence/type oracle.
+    let preStat: fs.Stats | undefined;
+    try {
+        preStat = fs.lstatSync(path.resolve(requestedPath));
+    } catch {
+        preStat = undefined;
+    }
+    if (preStat?.isSymbolicLink()) {
+        throw new PublishedFileAuthorizationError(
+            "FINAL_SYMLINK_REJECTED",
+            `Final path component is a symlink: ${requestedPath}`,
+        );
+    }
+
     // Publication membership is decided on the canonical relative path, so a
     // manifest cannot be bypassed by spelling the same file differently.
     if (!publishedRelativePaths.has(relativePath)) {
@@ -94,21 +112,12 @@ export async function openAuthorizedPublishedFile(input: {
         );
     }
 
-    // Reject final symlinks (even to inside targets), directories, FIFOs,
-    // sockets, devices, and missing paths before opening anything.
-    let preStat: fs.Stats;
-    try {
-        preStat = fs.lstatSync(path.resolve(requestedPath));
-    } catch {
+    // Reject directories, FIFOs, sockets, devices, and missing paths before
+    // opening anything.
+    if (!preStat) {
         throw new PublishedFileAuthorizationError(
             "NOT_A_REGULAR_FILE",
             `Requested file does not exist: ${requestedPath}`,
-        );
-    }
-    if (preStat.isSymbolicLink()) {
-        throw new PublishedFileAuthorizationError(
-            "FINAL_SYMLINK_REJECTED",
-            `Final path component is a symlink: ${requestedPath}`,
         );
     }
     if (!preStat.isFile()) {

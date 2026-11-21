@@ -4,6 +4,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { resolveSatoriStateRoot } from '../config/runtime-state-root';
+import {
+    claimAndUnlinkStaleFileLock,
+    removeOwnedFileLockIfUnchanged,
+} from '../utils/file-lock';
 
 export type MutationLeaseAction = 'create' | 'reindex' | 'sync' | 'clear' | 'gc';
 /** Who started a mutation: an explicit manage_index request or Satori's own background maintenance. */
@@ -821,10 +825,10 @@ export class MutationLeaseCoordinator {
                 }
                 if (!isRecord(error) || error.code !== 'EEXIST') throw error;
                 try {
-                    const existingStat = fs.lstatSync(lockPath);
-                    if (this.shouldBreakLock(lockPath, existingStat)) {
-                        removeLockIfUnchanged(lockPath, existingStat);
-                    }
+                    claimAndUnlinkStaleFileLock(
+                        lockPath,
+                        (claimPath, claimStat) => this.shouldBreakLock(claimPath, claimStat),
+                    );
                 } catch {
                     // Another contender resolved the stale mutex first.
                 }
@@ -876,12 +880,5 @@ export class MutationLeaseCoordinator {
 
 /** A lock pathname may already belong to another contender by cleanup time. */
 function removeLockIfUnchanged(lockPath: string, expected: fs.Stats): void {
-    try {
-        const current = fs.lstatSync(lockPath);
-        if (current.dev === expected.dev && current.ino === expected.ino) {
-            fs.unlinkSync(lockPath);
-        }
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+    removeOwnedFileLockIfUnchanged(lockPath, expected);
 }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { filterWorkerExecArgv } from '../utils/worker-threads';
 import { cbmExtractorHost, CbmExtractorUnavailableError } from './cbm-extractor-host';
+import { extractWithBaselineChild } from './cbm-extractor-child';
 
 function parentRequest(assetRoot: string, method: 'extract' | 'extractInProcess' = 'extract'): Promise<{ code: number | null; output: string }> {
     const hostPath = path.join(__dirname, `cbm-extractor-host${path.extname(__filename)}`);
@@ -133,4 +134,75 @@ test('Swift isolated and baseline in-process extractors produce identical record
         assert.ok(expected.some((record) => record.label !== 'Module'));
         assert.deepEqual(await host.extract('swift', 'src/Registry.swift', source), expected);
     }
+});
+
+test('CBM extractor verifies extended module SHA-256 and rejects tampered or symlinked modules (P4-5)', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-extractor-integrity-'));
+    const extendedDir = path.join(root, 'extended');
+    const outsideFile = path.join(root, 'outside.wasm');
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(extendedDir, { recursive: true });
+
+    const validContent = Buffer.from('expected-wasm-bytes');
+    const validSha = (await import('node:crypto')).createHash('sha256').update(validContent).digest('hex');
+    fs.writeFileSync(path.join(root, 'extractor.cjs'), 'module.exports = async () => { throw new Error("should not execute tampered module"); };');
+    fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({
+        schemaVersion: 1,
+        glue: { file: 'extractor.cjs' },
+        modules: [
+            {
+                cbmLanguage: 'ZIG',
+                satoriLanguageId: 'zig',
+                file: 'zig.wasm',
+                sizeBytes: validContent.length,
+                sha256: validSha,
+                pack: 'extended',
+            },
+            {
+                cbmLanguage: 'LUA',
+                satoriLanguageId: 'lua',
+                file: 'lua.wasm',
+                sizeBytes: validContent.length,
+                sha256: validSha,
+                pack: 'extended',
+            },
+        ],
+    }));
+
+    // Tampered bytes (same length, different hash).
+    fs.writeFileSync(path.join(extendedDir, 'zig.wasm'), 'TAMPERED-wasm-bytes');
+    await assert.rejects(
+        cbmExtractorHost(root).extractInProcess('zig', 'a.zig', 'pub fn main() void {}'),
+        /integrity|checksum|digest/i,
+    );
+
+    // Symlink pointing outside extendedDir even with matching content/hash.
+    fs.writeFileSync(outsideFile, validContent);
+    fs.symlinkSync(outsideFile, path.join(extendedDir, 'lua.wasm'));
+    await assert.rejects(
+        cbmExtractorHost(root).extractInProcess('lua', 'a.lua', 'function f() end'),
+        /symlink|regular file|integrity/i,
+    );
+});
+
+test('Swift baseline child enforces timeout and stdout byte cap (P4-5)', async (t) => {
+    const hangRoot = assets('module.exports = async () => new Promise(() => { setInterval(() => {}, 1000); });');
+    t.after(() => fs.rmSync(hangRoot, { recursive: true, force: true }));
+    await assert.rejects(
+        extractWithBaselineChild(hangRoot, 'swift', 'hang.swift', 'func hang() {}', { timeoutMs: 150 }),
+        /timed out/i,
+    );
+
+    const floodRoot = assets(`module.exports = async () => {
+        process.stdout.write("x".repeat(4096));
+        return new Promise(() => { setInterval(() => {}, 1000); });
+    };`);
+    t.after(() => fs.rmSync(floodRoot, { recursive: true, force: true }));
+    await assert.rejects(
+        extractWithBaselineChild(floodRoot, 'swift', 'flood.swift', 'func flood() {}', {
+            timeoutMs: 2_000,
+            maxOutputBytes: 512,
+        }),
+        /output.*limit|exceeded/i,
+    );
 });

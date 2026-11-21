@@ -827,3 +827,59 @@ test("detect_changes trims changedFiles before seeds so a huge diff still fits t
         fs.rmSync(repo, { recursive: true, force: true });
     }
 });
+
+test("detect_changes does not execute repo-local core.fsmonitor or rewrite .git/index", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-readonly-"));
+    const markerPath = path.join(repo, "fsmonitor-ran.marker");
+    try {
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo });
+        const trackedPath = path.join(repo, "a.ts");
+        const base = "export function seed() {\n  return 1;\n}\n";
+        fs.writeFileSync(trackedPath, base);
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+
+        const indexPath = path.join(repo, ".git", "index");
+        const indexBefore = fs.statSync(indexPath);
+
+        // Shift tracked file mtime and configure repo-local core.fsmonitor.
+        fs.writeFileSync(trackedPath, base.replace("return 1", "return 2"));
+        execFileSync("git", ["config", "core.fsmonitor", `touch "${markerPath}"`], { cwd: repo });
+
+        const result = await detectChangeImpact(
+            { path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 },
+            {
+                outline: async (file) => ({
+                    status: "ok",
+                    path: repo,
+                    file,
+                    outline: { symbols: [{ ...node("seed", file), kind: "function" }] },
+                    hasMore: false,
+                } as FileOutlineResponseEnvelope),
+                callers: async (_root, seed) => ({
+                    status: "ok",
+                    path: repo,
+                    symbolRef: { file: seed.file, symbolId: seed.symbolId },
+                    supported: true,
+                    nodes: [seed],
+                    edges: [],
+                    notes: [],
+                    exactReferences: [],
+                } as unknown as CallGraphResponseEnvelope),
+            },
+        );
+        assert.deepEqual(result.changedFiles, ["a.ts"]);
+        assert.equal(
+            fs.existsSync(markerPath),
+            false,
+            "detect_changes must not execute repo-local core.fsmonitor.",
+        );
+        const indexAfter = fs.statSync(indexPath);
+        assert.equal(indexAfter.ino, indexBefore.ino);
+        assert.equal(indexAfter.mtimeMs, indexBefore.mtimeMs);
+    } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+    }
+});

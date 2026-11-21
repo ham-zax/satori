@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import {
     evaluateReindexPreflight,
     getChangedFilesForCodebase,
+    getWorkingTreeChangedPathsForPreflight,
     parseGitStatusChangedPathsZ,
     type ChangedFilesCacheEntry,
 } from "./working-tree-state.js";
@@ -325,6 +326,60 @@ test("getChangedFilesForCodebase returns no changes after the untracked file is 
         runGit(repoPath, ["add", "src/later.ts"]);
         runGit(repoPath, ["commit", "-m", "fixture later"]);
         assert.deepEqual([...changedFiles(repoPath, true)], []);
+    } finally {
+        fs.rmSync(repoPath, { recursive: true, force: true });
+    }
+});
+
+test("working-tree git probes do not execute repo-local core.fsmonitor or rewrite .git/index", () => {
+    const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "satori-wts-readonly-"));
+    const markerPath = path.join(repoPath, "fsmonitor-ran.marker");
+    try {
+        initRepo(repoPath);
+        commitFile(repoPath, "src/tracked.ts", "export const tracked = 1;\n");
+        const indexPath = path.join(repoPath, ".git", "index");
+        const indexBefore = fs.statSync(indexPath);
+
+        // Shift tracked file mtime without changing content so ordinary `git status`
+        // would refresh `.git/index` (creating `.git/index.lock` and rewriting index).
+        const trackedPath = path.join(repoPath, "src", "tracked.ts");
+        const futureTime = new Date(Date.now() + 60_000);
+        fs.utimesSync(trackedPath, futureTime, futureTime);
+
+        // Configure an untrusted repo-local core.fsmonitor command.
+        runGit(repoPath, ["config", "core.fsmonitor", `touch "${markerPath}"`]);
+
+        const changed = getChangedFilesForCodebase({
+            codebasePath: repoPath,
+            nowMs: 1_000,
+            changedFilesCache: new Map(),
+            ttlMs: 1_000,
+            forceRefresh: true,
+        });
+        assert.equal(changed.available, true);
+        assert.deepEqual([...changed.files], []);
+
+        const preflight = getWorkingTreeChangedPathsForPreflight(repoPath);
+        assert.equal(preflight.available, true);
+        assert.equal(preflight.probeFailed, false);
+        assert.deepEqual([...preflight.files], []);
+
+        assert.equal(
+            fs.existsSync(markerPath),
+            false,
+            "Read-only git probes must not execute repo-local core.fsmonitor.",
+        );
+        const indexAfter = fs.statSync(indexPath);
+        assert.equal(
+            indexAfter.ino,
+            indexBefore.ino,
+            "Read-only git probes must not replace .git/index.",
+        );
+        assert.equal(
+            indexAfter.mtimeMs,
+            indexBefore.mtimeMs,
+            "Read-only git probes must not rewrite .git/index.",
+        );
     } finally {
         fs.rmSync(repoPath, { recursive: true, force: true });
     }

@@ -11,6 +11,7 @@ import {
     formatRuntimeOwnerConflictMessage,
     formatRuntimeOwnerConflictNextStep,
     formatRuntimeOwnersStatusLine,
+    withRuntimeOwnerMaintenanceLock,
     type ProcessInspector,
     type ProcessSnapshot,
     type RuntimeOwnerRecord,
@@ -1124,5 +1125,41 @@ test('conflict result and message report the actual registry and lock paths', as
         assert.equal(registry.getLockPath(), expectedLockPath);
         assert.ok((result.message || '').includes(expectedRegistryPath));
         assert.ok((result.message || '').includes(expectedLockPath));
+    });
+});
+
+test('runtime owner lock release preserves a replacement lock (P3-1)', async () => {
+    await withTempState((stateDir) => {
+        const lockPath = path.join(stateDir, 'owners.lock');
+        const replacement = JSON.stringify({ pid: process.pid, owner: 'replacement', acquiredAt: new Date().toISOString() });
+        withRuntimeOwnerMaintenanceLock(stateDir, () => {
+            fs.renameSync(lockPath, `${lockPath}.displaced`);
+            fs.writeFileSync(lockPath, replacement);
+        });
+        assert.equal(fs.existsSync(lockPath), true, 'release must retain a replacement lock');
+        assert.equal(fs.readFileSync(lockPath, 'utf8'), replacement);
+    });
+});
+
+test('runtime owner stale lock recovery reclaims a lock whose PID was reused with a different start time (P3-1)', async () => {
+    await withTempState((stateDir) => {
+        fs.mkdirSync(stateDir, { recursive: true });
+        const lockPath = path.join(stateDir, 'owners.lock');
+        // Use the live current PID with a deliberately mismatched processStartTime
+        // and stale mtime to simulate PID reuse after a crash.
+        fs.writeFileSync(lockPath, JSON.stringify({
+            pid: process.pid,
+            processStartTime: '0-reused-pid-mismatch',
+            acquiredAt: new Date(Date.now() - 60_000).toISOString(),
+        }));
+        const staleDate = new Date(Date.now() - 60_000);
+        fs.utimesSync(lockPath, staleDate, staleDate);
+
+        let ran = false;
+        withRuntimeOwnerMaintenanceLock(stateDir, () => {
+            ran = true;
+        });
+        assert.equal(ran, true);
+        assert.equal(fs.existsSync(lockPath), false);
     });
 });

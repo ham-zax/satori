@@ -2,16 +2,24 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+    claimAndUnlinkStaleFileLock,
+    isLinuxProcessIdentityLive,
+    publishAtomicFileLock,
+    readLinuxProcessIdentity,
+    removeOwnedFileLockIfUnchanged,
+    type LinuxProcessIdentity,
+} from "@satori-code/core/integration";
+import {
     SHARED_RUNTIME_PROTOCOL_VERSION,
     type SharedRuntimeIdentity,
     type SharedRuntimePaths,
 } from "./shared-runtime-identity.js";
 
-export type LinuxProcessIdentity = Readonly<{
-    pid: number;
-    bootId: string;
-    startTime: string;
-}>;
+export {
+    isLinuxProcessIdentityLive,
+    readLinuxProcessIdentity,
+    type LinuxProcessIdentity,
+};
 
 export type SharedRuntimeHostMetadata = Readonly<{
     formatVersion: 1;
@@ -43,37 +51,6 @@ export type LifecycleLock = Readonly<{
     ownershipToken: string;
     release(): void;
 }>;
-
-function readBootId(): string {
-    return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-}
-
-export function readLinuxProcessIdentity(pid = process.pid): LinuxProcessIdentity | null {
-    try {
-        const raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-        const commandEnd = raw.lastIndexOf(")");
-        if (commandEnd < 0) return null;
-        const fieldsAfterCommand = raw.slice(commandEnd + 2).trim().split(/\s+/);
-        const startTime = fieldsAfterCommand[19];
-        if (!startTime) return null;
-        return Object.freeze({
-            pid,
-            bootId: readBootId(),
-            startTime,
-        });
-    } catch {
-        return null;
-    }
-}
-
-export function isLinuxProcessIdentityLive(
-    identity: Pick<LinuxProcessIdentity, "pid" | "bootId" | "startTime">,
-): boolean {
-    const current = readLinuxProcessIdentity(identity.pid);
-    return current !== null
-        && current.bootId === identity.bootId
-        && current.startTime === identity.startTime;
-}
 
 function parseRecord(value: string): Record<string, unknown> | null {
     try {
@@ -145,62 +122,18 @@ function readLockRecord(lockPath: string): LifecycleLockRecord | null {
     }
 }
 
-function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-    return left.dev === right.dev && left.ino === right.ino;
-}
-
 function removeStaleLockWithoutReplacingNewOwner(lockPath: string): boolean {
-    const claimPath = `${lockPath}.${process.pid}.${crypto.randomUUID()}.stale-claim`;
-    try {
-        fs.linkSync(lockPath, claimPath);
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return true;
-        }
-        throw error;
-    }
-
-    try {
+    return claimAndUnlinkStaleFileLock(lockPath, (claimPath) => {
         const claimedOwner = readLockRecord(claimPath);
-        if (
+        return !(
             claimedOwner
             && isLinuxProcessIdentityLive({
                 pid: claimedOwner.pid,
                 bootId: claimedOwner.bootId,
                 startTime: claimedOwner.processStartTime,
             })
-        ) {
-            return false;
-        }
-
-        let lockStat: fs.Stats;
-        let claimStat: fs.Stats;
-        try {
-            lockStat = fs.lstatSync(lockPath);
-            claimStat = fs.lstatSync(claimPath);
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-                return true;
-            }
-            throw error;
-        }
-        if (!sameFileIdentity(lockStat, claimStat) || claimStat.nlink !== 2) {
-            return false;
-        }
-
-        // Keep our hard-link claim until after unlinking the canonical name.
-        // Any concurrent stale cleaner then observes either a different inode,
-        // no canonical lock, or more than two links and cannot delete a
-        // replacement owner's lock.
-        fs.unlinkSync(lockPath);
-        return true;
-    } finally {
-        try {
-            fs.unlinkSync(claimPath);
-        } catch {
-            // The unique claim is non-authoritative after this attempt.
-        }
-    }
+        );
+    });
 }
 
 function wait(delayMs: number): Promise<void> {
@@ -227,37 +160,22 @@ export async function acquireLifecycleLock(
     const deadline = Date.now() + timeoutMs;
 
     for (;;) {
-        const candidatePath = `${lockPath}.${current.pid}.${ownershipToken}.candidate`;
         try {
-            fs.writeFileSync(candidatePath, `${JSON.stringify(record)}\n`, {
-                encoding: "utf8",
-                mode: 0o600,
-                flag: "wx",
-            });
-            // A same-filesystem hard link publishes the complete owner record
-            // atomically without the empty-file window of open(O_EXCL)+write.
-            fs.linkSync(candidatePath, lockPath);
-            fs.unlinkSync(candidatePath);
+            const lockIdentity = publishAtomicFileLock(
+                lockPath,
+                `${JSON.stringify(record)}\n`,
+                0o600,
+            );
             let released = false;
             return Object.freeze({
                 ownershipToken,
                 release(): void {
                     if (released) return;
                     released = true;
-                    const active = readLockRecord(lockPath);
-                    if (active?.ownershipToken === ownershipToken) {
-                        fs.unlinkSync(lockPath);
-                    }
+                    removeOwnedFileLockIfUnchanged(lockPath, lockIdentity);
                 },
             });
         } catch (error) {
-            try {
-                fs.unlinkSync(candidatePath);
-            } catch (cleanupError) {
-                if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
-                    throw cleanupError;
-                }
-            }
             const code = (error as NodeJS.ErrnoException).code;
             if (code !== "EEXIST") throw error;
         }

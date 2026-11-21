@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as ts from '../semantic/typescript-api';
+import { TypeScriptFsBoundary } from '../semantic/typescript-fs-boundary';
 import { TypeScriptProgramSession } from '../semantic/typescript-program-session';
 import { TypeScriptReferenceDeclarationCache, REFERENCE_DECLARATION_FORMAT, DEFAULT_REFERENCE_CACHE_ENTRIES, DEFAULT_REFERENCE_CACHE_BYTES, type TypeScriptReferenceDeclarationState } from '../semantic/typescript-reference-cache';
 import { TypeScriptFsObservationRecorder, verifyTypeScriptFsObservation } from '../semantic/typescript-fs-observation';
@@ -85,6 +86,7 @@ interface ProjectPlan {
     readonly referencedProjectKeys: readonly string[];
     readonly referenceConfigPaths?: readonly string[];
     readonly referenceStates?: ReadonlyMap<string, TypeScriptReferenceDeclarationState>;
+    readonly boundary: TypeScriptFsBoundary;
 }
 
 interface ProjectSnapshot {
@@ -219,9 +221,13 @@ function parseRootState(text: string, rootPath: string): RootResolutionState | u
     }
 }
 
-function fileContentHash(filePath: string, limit = TYPESCRIPT_METADATA_FILE_BYTES): string {
+function fileContentHash(
+    filePath: string,
+    limit = TYPESCRIPT_METADATA_FILE_BYTES,
+    boundary?: TypeScriptFsBoundary,
+): string {
     try {
-        return createHash('sha256').update(readTypeScriptFileBytes(filePath, limit)).digest('hex');
+        return createHash('sha256').update(readTypeScriptFileBytes(filePath, limit, boundary)).digest('hex');
     } catch (error) {
         if (error instanceof TypeScriptReadLimitError) throw error;
         return 'missing';
@@ -289,23 +295,26 @@ function candidateConfigPaths(rootPath: string, absoluteFile: string): string[] 
     return potentialConfigPaths(rootPath, absoluteFile).filter((candidate) => fs.existsSync(candidate));
 }
 
-function resolveConfigLike(candidate: string): string | undefined {
+function resolveConfigLike(candidate: string, boundary?: TypeScriptFsBoundary): string | undefined {
     const absolute = normalizeAbsolute(candidate);
     const candidates = [
         absolute,
         absolute.endsWith('.json') ? absolute : `${absolute}.json`,
         path.join(absolute, 'tsconfig.json'),
     ];
-    return candidates.find((item) => fs.existsSync(item) && fs.statSync(item).isFile());
+    return candidates.find((item) => {
+        if (boundary) return boundary.isInsideRepoRoot(item) && boundary.fileExists(item);
+        return fs.existsSync(item) && fs.statSync(item).isFile();
+    });
 }
 
-function resolveProjectReferenceConfig(referencePath: string): string | undefined {
-    return resolveConfigLike(referencePath);
+function resolveProjectReferenceConfig(referencePath: string, boundary?: TypeScriptFsBoundary): string | undefined {
+    return resolveConfigLike(referencePath, boundary);
 }
 
-function referenceConfigs(project: TypeScriptConfiguredProject): string[] {
+function referenceConfigs(project: TypeScriptConfiguredProject, boundary?: TypeScriptFsBoundary): string[] {
     return (project.projectReferences ?? [])
-        .map(reference => resolveProjectReferenceConfig(reference.path))
+        .map(reference => resolveProjectReferenceConfig(reference.path, boundary))
         .filter((value): value is string => value !== undefined);
 }
 
@@ -313,8 +322,9 @@ function referenceDeclarationState(
     project: TypeScriptConfiguredProject,
     cache: TypeScriptReferenceDeclarationCache | undefined,
     resourceBudget: TypeScriptSourceBudget,
+    boundary?: TypeScriptFsBoundary,
 ): TypeScriptReferenceDeclarationState {
-    const references = referenceConfigs(project);
+    const references = referenceConfigs(project, boundary);
     // A saved proof is reusable only while every input that decided it still
     // holds: the compiler and provider that produced it, the config chain, the
     // ordered project membership and the admission budget. Source contents are
@@ -325,11 +335,11 @@ function referenceDeclarationState(
         providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
         compilerVersion: ts.version,
         configPath: normalizeAbsolute(project.configPath),
-        chain: project.configFiles.map(file => [file, fileContentHash(file)]),
+        chain: project.configFiles.map(file => [file, fileContentHash(file, TYPESCRIPT_METADATA_FILE_BYTES, boundary)]),
         files: project.fileNames,
         resourceBudget,
     });
-    const cached = cache?.get(project.configPath, fingerprint);
+    const cached = cache?.get(project.configPath, fingerprint, boundary);
     // Reference paths resolve on the filesystem and are not part of the
     // fingerprint: a referenced config can appear or disappear without
     // changing this project's config text. Always publish the current graph.
@@ -344,7 +354,7 @@ function referenceDeclarationState(
     const observation = new TypeScriptFsObservationRecorder();
     const session = new TypeScriptProgramSession(path.dirname(project.configPath), project.fileNames,
         { ...project.options, noEmit: false }, new TypeScriptSourceBudgetTracker(resourceBudget), project.projectReferences,
-        observation);
+        observation, boundary);
     try {
         const program = session.getProgram();
         let resourceFailure = session.getResourceLimitFailure();
@@ -357,7 +367,7 @@ function referenceDeclarationState(
         const captured = observation.capture();
         // Inputs may change while the compiler runs. Never retain a successful
         // computation unless its recorded answers still match the filesystem.
-        if (captured && verifyTypeScriptFsObservation(captured, resourceBudget)) {
+        if (captured && verifyTypeScriptFsObservation(captured, resourceBudget, boundary)) {
             cache?.set(project.configPath, fingerprint, state, captured);
         }
         return state;
@@ -431,9 +441,10 @@ function projectControlFiles(
     sourceFiles: readonly string[],
     load: (config: string) => TypeScriptConfiguredProject | undefined,
     stateFor: (project: TypeScriptConfiguredProject) => TypeScriptReferenceDeclarationState,
+    boundary?: TypeScriptFsBoundary,
 ): { controls: string[]; referencedProjectKeys: string[] } {
     const controls = new Set([...packageControlFiles(rootPath, sourceFiles), ...project.configFiles]);
-    const references = referenceConfigs(project);
+    const references = referenceConfigs(project, boundary);
     const pending = [...references];
     const visited = new Set<string>();
     while (pending.length > 0) {
@@ -454,10 +465,14 @@ function projectControlFiles(
     };
 }
 
-function controlIdentity(rootPath: string, controlFiles: readonly string[]): readonly [string, string][] {
+function controlIdentity(
+    rootPath: string,
+    controlFiles: readonly string[],
+    boundary?: TypeScriptFsBoundary,
+): readonly [string, string][] {
     return controlFiles.map((absolutePath) => [
         relativeInsideRoot(rootPath, absolutePath) ?? normalizeAbsolute(absolutePath),
-        fileContentHash(absolutePath),
+        fileContentHash(absolutePath, TYPESCRIPT_METADATA_FILE_BYTES, boundary),
     ] as const);
 }
 
@@ -505,8 +520,14 @@ function compilerRootResourceFailure(
 }
 
 class InferredLanguageServiceSession extends TypeScriptProgramSession implements ProgramSession {
-    constructor(rootPath: string, fileNames: readonly string[], options: ts.CompilerOptions, resourceBudget: TypeScriptSourceBudget) {
-        super(rootPath, fileNames, options, new TypeScriptSourceBudgetTracker(resourceBudget));
+    constructor(
+        rootPath: string,
+        fileNames: readonly string[],
+        options: ts.CompilerOptions,
+        resourceBudget: TypeScriptSourceBudget,
+        boundary?: TypeScriptFsBoundary,
+    ) {
+        super(rootPath, fileNames, options, new TypeScriptSourceBudgetTracker(resourceBudget), undefined, undefined, boundary);
     }
 }
 
@@ -1343,6 +1364,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
 
     private discoverPlans(rootPath: string, relativeFiles: readonly string[]): ProjectPlan[] {
         const normalizedRoot = normalizeAbsolute(rootPath);
+        const boundary = new TypeScriptFsBoundary(normalizedRoot);
         // Saved reference proofs belong to one discovery root, so they are read
         // once here instead of once per project lookup.
         this.referenceDeclarations.load(normalizedRoot, {
@@ -1359,11 +1381,12 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const unreadableConfigs = new Set<string>();
         const load = (configPath: string): TypeScriptConfiguredProject | undefined => {
             const normalized = normalizeAbsolute(configPath);
+            if (!boundary.isInsideRepoRoot(normalized)) return undefined;
             const cached = configCache.get(normalized);
             if (cached) return cached;
             if (unreadableConfigs.has(normalized)) return undefined;
             try {
-                const project = loadTypeScriptConfiguredProject(normalized);
+                const project = loadTypeScriptConfiguredProject(normalized, { boundary });
                 configCache.set(normalized, project);
                 return project;
             } catch (error) {
@@ -1397,7 +1420,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const stateFor = (project: TypeScriptConfiguredProject): TypeScriptReferenceDeclarationState => {
             let state = referenceStates.get(project.configPath);
             if (!state) {
-                state = referenceDeclarationState(project, this.referenceDeclarations, this.resourceBudget);
+                state = referenceDeclarationState(project, this.referenceDeclarations, this.resourceBudget, boundary);
                 referenceStates.set(project.configPath, state);
             }
             return state;
@@ -1408,7 +1431,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (!project) continue;
             const sortedFiles = [...files].sort();
             const absoluteFiles = sortedFiles.map((file) => normalizeAbsolute(path.join(normalizedRoot, file)));
-            const control = projectControlFiles(normalizedRoot, project, absoluteFiles, load, stateFor);
+            const control = projectControlFiles(normalizedRoot, project, absoluteFiles, load, stateFor, boundary);
             const environmentConfigId = `typescript:${ts.version}:configured:${stableHash({
                 providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
                 compilerVersion: ts.version,
@@ -1417,7 +1440,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 compilerOptions: normalizedCompilerOptions(project.options),
                 registryFiles: sortedFiles,
                 configErrors: diagnosticIdentity(project.errors),
-                controls: controlIdentity(normalizedRoot, control.controls),
+                controls: controlIdentity(normalizedRoot, control.controls, boundary),
                 semanticResourceBudget: this.resourceBudget,
             })}`;
             plans.push({
@@ -1436,8 +1459,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     .filter((file): file is string => Boolean(file)),
                 environmentConfigId,
                 referencedProjectKeys: control.referencedProjectKeys,
-                referenceConfigPaths: referenceConfigs(project),
+                referenceConfigPaths: referenceConfigs(project, boundary),
                 referenceStates,
+                boundary,
             });
         }
 
@@ -1452,7 +1476,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 rootPath: normalizedRoot,
                 compilerOptions: normalizedCompilerOptions(options),
                 registryFiles: sortedFiles,
-                controls: controlIdentity(normalizedRoot, controls),
+                controls: controlIdentity(normalizedRoot, controls, boundary),
                 semanticResourceBudget: this.resourceBudget,
             })}`;
             plans.push({
@@ -1469,6 +1493,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     .filter((file): file is string => Boolean(file)),
                 environmentConfigId,
                 referencedProjectKeys: [],
+                boundary,
             });
         }
 
@@ -1489,12 +1514,13 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         const session: ProgramSession = plan.mode === 'configured'
-            ? new TypeScriptLanguageServiceSession(plan.configPath!, this.resourceBudget, plan.configuredProject)
+            ? new TypeScriptLanguageServiceSession(plan.configPath!, this.resourceBudget, plan.configuredProject, plan.boundary)
             : new InferredLanguageServiceSession(
                 plan.rootPath,
                 plan.absoluteFiles,
                 plan.options,
                 this.resourceBudget,
+                plan.boundary,
             );
         this.sessions.set(plan.key, {
             key: plan.key,

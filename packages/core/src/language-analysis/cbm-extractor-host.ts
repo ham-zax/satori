@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -86,8 +87,58 @@ class CbmExtractorHost {
         return manifest;
     }
 
+    private moduleBaseRoot(entry: CbmExtractorManifestModule): string {
+        return entry.pack === 'core' ? this.assetRoot : this.extendedRoot;
+    }
+
     private modulePath(entry: CbmExtractorManifestModule): string {
-        return path.join(entry.pack === 'core' ? this.assetRoot : this.extendedRoot, entry.file);
+        return path.join(this.moduleBaseRoot(entry), entry.file);
+    }
+
+    private verifyModuleIntegrity(entry: CbmExtractorManifestModule, wasmPath: string): void {
+        const baseRoot = this.moduleBaseRoot(entry);
+        const requireDigest = entry.pack === 'extended'
+            || (typeof entry.sha256 === 'string' && Number.isSafeInteger(entry.sizeBytes));
+        if (entry.pack === 'extended') {
+            if (
+                typeof entry.sha256 !== 'string'
+                || !/^[a-f0-9]{64}$/.test(entry.sha256)
+                || !Number.isSafeInteger(entry.sizeBytes)
+                || entry.sizeBytes < 0
+            ) {
+                throw new Error(`CBM extended module manifest entry for '${entry.satoriLanguageId}' is missing pinned integrity metadata.`);
+            }
+        }
+        const stat = fs.lstatSync(wasmPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+            throw new Error(`CBM extractor module '${wasmPath}' must be a regular non-symlink file.`);
+        }
+        const realBase = fs.realpathSync(baseRoot);
+        const realWasm = fs.realpathSync(wasmPath);
+        const rel = path.relative(realBase, realWasm);
+        if (rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+            throw new Error(`CBM extractor module '${wasmPath}' resolves outside its package directory.`);
+        }
+        if (!requireDigest) return;
+        const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+        const fd = fs.openSync(realWasm, flags);
+        try {
+            const fdStat = fs.fstatSync(fd);
+            if (!fdStat.isFile() || fdStat.size !== entry.sizeBytes) {
+                throw new Error(
+                    `CBM extractor module '${entry.file}' failed size integrity check (expected ${entry.sizeBytes} bytes, got ${fdStat.size}).`,
+                );
+            }
+            const bytes = fs.readFileSync(fd);
+            const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
+            if (actualSha !== entry.sha256) {
+                throw new Error(
+                    `CBM extractor module '${entry.file}' failed SHA-256 checksum verification.`,
+                );
+            }
+        } finally {
+            fs.closeSync(fd);
+        }
     }
 
     /** True when the manifest lists a module; a missing file surfaces at load as CbmExtractorUnavailableError. */
@@ -105,8 +156,13 @@ class CbmExtractorHost {
             return Promise.reject(new CbmExtractorUnavailableError(`No CBM extractor module for ${language}`));
         }
         const wasmPath = this.modulePath(entry);
-        if (!fs.existsSync(wasmPath)) {
+        if (!fs.lstatSync(wasmPath, { throwIfNoEntry: false })) {
             return Promise.reject(new CbmExtractorUnavailableError(`CBM extractor module missing: ${wasmPath}`));
+        }
+        try {
+            this.verifyModuleIntegrity(entry, wasmPath);
+        } catch (error) {
+            return Promise.reject(error);
         }
         const gluePath = path.join(this.assetRoot, manifest.glue.file);
         if (!fs.existsSync(gluePath)) {

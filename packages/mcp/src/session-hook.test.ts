@@ -93,3 +93,22 @@ test("malformed stdin fails open with no output", async () => {
     await done;
     assert.equal(written, "");
 });
+
+test("session hook sanitizes control/invisible Unicode chars and JSON-quotes paths (P1-5)", (t) => {
+    const directory = tempDir(t);
+    const stateRoot = path.join(directory, "state");
+    // Directory name containing quotes, a newline, a bidi override (U+202E), and a Unicode Tag char (U+E0041).
+    const hiddenTag = String.fromCodePoint(0xe0041, 0xe0042);
+    const repo = path.join(directory, `repo" \n\u202e${hiddenTag}evil`);
+    fs.mkdirSync(repo, { recursive: true });
+    writeCurrentPublication(stateRoot, repo, 2);
+
+    const output = buildSessionStartHookOutput({ cwd: repo }, { stateRoot });
+    assert.ok(output);
+    const text = output.hookSpecificOutput.additionalContext;
+    assert.equal(text.includes("\n"), false, "additionalContext must not contain raw newlines from repo path");
+    assert.equal(text.includes("\u202e"), false, "additionalContext must strip bidi override characters");
+    assert.equal(text.includes(hiddenTag), false, "additionalContext must strip Unicode Tag smuggling characters");
+    // Embedded double quote must be JSON-escaped inside path="...".
+    assert.match(text, /search_codebase with path="[^"]*\\"[^"]*"/);
+});

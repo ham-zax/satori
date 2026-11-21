@@ -40,3 +40,15 @@ export type {
 
 export type { IndexingMemoryStatus } from './indexing/resources';
 export { isIndexingMemoryStatus } from './indexing/resources';
+export {
+    claimAndUnlinkStaleFileLock,
+    isLinuxProcessIdentityLive,
+    publishAtomicFileLock,
+    readLinuxBootId,
+    readLinuxProcessIdentity,
+    readLinuxProcessStartTime,
+    removeOwnedFileLockIfUnchanged,
+    sameFileLockIdentity,
+    type FileLockIdentity,
+    type LinuxProcessIdentity,
+} from './utils/file-lock';

@@ -6,6 +6,7 @@ import * as ts from './typescript-api';
 import { serverFS } from './typescript-api';
 import { TypeScriptProgramSession } from './typescript-program-session';
 import { readTypeScriptFileBytes, TypeScriptReadLimitError, TYPESCRIPT_METADATA_FILE_BYTES } from './typescript-bounded-reader';
+import type { TypeScriptFsBoundary } from './typescript-fs-boundary';
 
 export interface TypeScriptConfiguredProjectIdentity {
     readonly compilerVersion: string;
@@ -143,8 +144,15 @@ export class TypeScriptConfigReadError extends Error {
 const MAX_TYPESCRIPT_CONFIG_BYTES = TYPESCRIPT_METADATA_FILE_BYTES;
 const MAX_TYPESCRIPT_CONFIG_READS = 64;
 
-export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptConfiguredProject {
+export function loadTypeScriptConfiguredProject(
+    configPath: string,
+    options?: { readonly boundary?: TypeScriptFsBoundary },
+): TypeScriptConfiguredProject {
+    const boundary = options?.boundary;
     const absoluteConfigPath = normalizedPath(configPath);
+    if (boundary && !boundary.isInsideRepoRoot(absoluteConfigPath)) {
+        throw new TypeScriptConfigReadError(`TypeScript config '${absoluteConfigPath}' resolves outside the repository boundary.`);
+    }
     let reads = 0;
     let readFailure: string | undefined;
     const configReads = new Map<string, string | undefined>();
@@ -152,13 +160,14 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
     // read budget also bounds extends depth without copying compiler resolution rules.
     const readFile = (fileName: string): string | undefined => {
         if (readFailure) return undefined;
+        if (boundary && !boundary.isAllowedPath(fileName)) return undefined;
         if (configReads.has(fileName)) return configReads.get(fileName);
         if (++reads > MAX_TYPESCRIPT_CONFIG_READS) {
             readFailure = `TypeScript config read budget exceeded ${MAX_TYPESCRIPT_CONFIG_READS} files.`;
             return undefined;
         }
         try {
-            const content = readTypeScriptFileBytes(fileName, MAX_TYPESCRIPT_CONFIG_BYTES);
+            const content = readTypeScriptFileBytes(fileName, MAX_TYPESCRIPT_CONFIG_BYTES, boundary);
             // Match the compiler's UTF-8 and UTF-16 BOM support.
             const encoding = content[0] === 0xff && content[1] === 0xfe ? 'utf-16le'
                 : content[0] === 0xfe && content[1] === 0xff ? 'utf-16be' : 'utf-8';
@@ -177,12 +186,14 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
     if (readFailure) throw new TypeScriptConfigReadError(readFailure);
     const api = new ts.API({
         runExternalCode: false,
-        fs: {
-            directoryExists: serverFS.useOS, fileExists: serverFS.useOS,
-            getAccessibleEntries: serverFS.useOS, realpath: serverFS.useOS,
-            stat: serverFS.useOS, writeFile: serverFS.noop, removeFile: serverFS.noop,
-            readFile,
-        },
+        fs: boundary
+            ? boundary.createConfigFileSystemCallbacks(readFile)
+            : {
+                directoryExists: serverFS.useOS, fileExists: serverFS.useOS,
+                getAccessibleEntries: serverFS.useOS, realpath: serverFS.useOS,
+                stat: serverFS.useOS, writeFile: serverFS.noop, removeFile: serverFS.noop,
+                readFile,
+            },
     });
     try {
         const configRead = api.readConfigFile(absoluteConfigPath);
@@ -196,13 +207,20 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
         const cycle = parsed.errors.find(error => error.code === 18000);
         if (cycle) throw new TypeScriptConfigReadError(diagnosticText(cycle));
 
-        const fileNames = parsed.fileNames.map(normalizedPath).sort();
-        const options = {
+        const rawFileNames = parsed.fileNames.map(normalizedPath);
+        const fileNames = (boundary
+            ? rawFileNames.filter((file) => boundary.isAllowedPath(file))
+            : rawFileNames
+        ).sort();
+        const projectReferences = boundary && parsed.projectReferences
+            ? parsed.projectReferences.filter((reference) => boundary.isInsideRepoRoot(reference.path))
+            : parsed.projectReferences;
+        const compilerOptions = {
             ...parsed.options,
             noEmit: true,
         };
-        const optionsIdentity = normalizedCompilerOptions(options);
-        const referenceIdentity = normalizedReferences(parsed.projectReferences);
+        const optionsIdentity = normalizedCompilerOptions(compilerOptions);
+        const referenceIdentity = normalizedReferences(projectReferences);
         const identityInput = {
             compilerVersion: ts.version,
             configPath: absoluteConfigPath,
@@ -215,8 +233,8 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
             configPath: absoluteConfigPath,
             configFiles: [...configReads.keys()].map(normalizedPath).sort(),
             fileNames,
-            options,
-            ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),
+            options: compilerOptions,
+            ...(projectReferences ? { projectReferences } : {}),
             errors: parsed.errors,
             identity: {
                 compilerVersion: ts.version,
@@ -234,14 +252,17 @@ export class TypeScriptLanguageServiceSession {
     private project: TypeScriptConfiguredProject;
     private session: TypeScriptProgramSession;
     private readonly sourceBudget?: TypeScriptSourceBudgetTracker;
+    private readonly boundary?: TypeScriptFsBoundary;
 
     constructor(
         configPath: string,
         resourceBudget?: TypeScriptSourceBudget,
         /** A parsed project whose witness the caller already verified. */
         project?: TypeScriptConfiguredProject,
+        boundary?: TypeScriptFsBoundary,
     ) {
-        this.project = project ?? loadTypeScriptConfiguredProject(configPath);
+        this.boundary = boundary;
+        this.project = project ?? loadTypeScriptConfiguredProject(configPath, { boundary });
         this.sourceBudget = resourceBudget ? new TypeScriptSourceBudgetTracker(resourceBudget) : undefined;
         this.session = this.createSession();
     }
@@ -291,7 +312,7 @@ export class TypeScriptLanguageServiceSession {
     clearFileOverride(fileName: string): void { this.session.clearFileOverride(fileName); }
 
     refreshConfiguration(): boolean {
-        const next = loadTypeScriptConfiguredProject(this.project.configPath);
+        const next = loadTypeScriptConfiguredProject(this.project.configPath, { boundary: this.boundary });
         if (next.identity.projectHash === this.project.identity.projectHash) return false;
         this.session.dispose();
         this.project = next;
@@ -324,6 +345,6 @@ export class TypeScriptLanguageServiceSession {
 
     private createSession(): TypeScriptProgramSession {
         return new TypeScriptProgramSession(path.dirname(this.project.configPath), this.project.fileNames,
-            this.project.options, this.sourceBudget, this.project.projectReferences);
+            this.project.options, this.sourceBudget, this.project.projectReferences, undefined, this.boundary);
     }
 }

@@ -7,6 +7,7 @@ import {
     readTypeScriptFileBytes, TypeScriptReadLimitError,
     TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
 } from './typescript-bounded-reader';
+import type { TypeScriptFsBoundary } from './typescript-fs-boundary';
 import type { TypeScriptFsObservationRecorder } from './typescript-fs-observation';
 
 export interface TypeScriptSourceReader {
@@ -45,53 +46,85 @@ export class TypeScriptProgramSession {
          * computation ineligible for caching.
          */
         private readonly observation?: TypeScriptFsObservationRecorder,
+        private readonly boundary?: TypeScriptFsBoundary,
     ) {
-        // The sentinel lets the native layer answer from the OS directly. A
-        // recording session must route each call through JS, so only that
-        // session pays the callback; every other session keeps the sentinel.
+        // The sentinel lets the native layer answer from the OS directly when
+        // neither an observation recorder nor a filesystem boundary is active.
+        // Whenever a boundary is supplied, every callback stays inside JS so
+        // paths escaping the repository root + TypeScript lib never reach the OS.
         const recorder = this.observation;
+        const fsBoundary = this.boundary;
         this.api = new API({
             cwd: rootPath,
             runExternalCode: false,
             fs: {
-                directoryExists: recorder
+                directoryExists: fsBoundary || recorder
                     ? (directoryName) => {
-                        const kind = recorder.recordPath(directoryName);
-                        if (kind === 'other') { recorder.invalidate(); return serverFS.useOS; }
-                        return kind === 'directory';
+                        if (fsBoundary && !fsBoundary.isAllowedPath(directoryName)) return false;
+                        if (recorder) {
+                            const kind = recorder.recordPath(directoryName);
+                            if (kind === 'other') {
+                                recorder.invalidate();
+                                return fsBoundary ? fsBoundary.directoryExists(directoryName) : serverFS.useOS;
+                            }
+                            return kind === 'directory';
+                        }
+                        return fsBoundary!.directoryExists(directoryName);
                     }
                     : serverFS.useOS,
-                fileExists: recorder
+                fileExists: fsBoundary || recorder
                     ? (fileName) => {
-                        const kind = recorder.recordPath(fileName);
-                        if (kind === 'other') { recorder.invalidate(); return serverFS.useOS; }
-                        return kind === 'file';
+                        if (fsBoundary && !fsBoundary.isAllowedPath(fileName)) return false;
+                        if (recorder) {
+                            const kind = recorder.recordPath(fileName);
+                            if (kind === 'other') {
+                                recorder.invalidate();
+                                return fsBoundary ? fsBoundary.fileExists(fileName) : serverFS.useOS;
+                            }
+                            return kind === 'file';
+                        }
+                        return fsBoundary!.fileExists(fileName);
                     }
                     : serverFS.useOS,
-                getAccessibleEntries: recorder
-                    ? () => {
-                        // The native listing distinguishes files, directories
-                        // and symlinks. Names alone cannot witness its answer.
-                        recorder.invalidate();
-                        return serverFS.useOS;
+                getAccessibleEntries: fsBoundary || recorder
+                    ? (directoryName) => {
+                        if (fsBoundary && !fsBoundary.isAllowedPath(directoryName)) {
+                            return { files: [], directories: [], symlinks: undefined };
+                        }
+                        if (recorder) {
+                            // The native listing distinguishes files, directories
+                            // and symlinks. Names alone cannot witness its answer.
+                            recorder.invalidate();
+                        }
+                        return fsBoundary ? fsBoundary.getAccessibleEntries(directoryName) : serverFS.useOS;
                     }
                     : serverFS.useOS,
-                realpath: recorder
+                realpath: fsBoundary || recorder
                     ? (pathName) => {
-                        return recorder.recordRealpath(pathName) || serverFS.useOS;
+                        if (fsBoundary && !fsBoundary.isAllowedPath(pathName)) return pathName;
+                        if (recorder) {
+                            const resolved = recorder.recordRealpath(pathName);
+                            if (resolved) return resolved;
+                            return fsBoundary ? fsBoundary.realpath(pathName) : serverFS.useOS;
+                        }
+                        return fsBoundary!.realpath(pathName);
                     }
                     : serverFS.useOS,
-                stat: recorder
-                    ? () => {
-                        // Path kind alone cannot witness native stat metadata.
-                        recorder.invalidate();
-                        return serverFS.useOS;
+                stat: fsBoundary || recorder
+                    ? (targetPath) => {
+                        if (fsBoundary && !fsBoundary.isAllowedPath(targetPath)) return undefined;
+                        if (recorder) {
+                            // Path kind alone cannot witness native stat metadata.
+                            recorder.invalidate();
+                        }
+                        return fsBoundary ? fsBoundary.stat(targetPath) : serverFS.useOS;
                     }
                     : serverFS.useOS,
                 writeFile: serverFS.noop,
                 removeFile: serverFS.noop,
                 readFile: (fileName) => {
                     if (this.getResourceLimitFailure()) return undefined;
+                    if (fsBoundary && !fsBoundary.isAllowedPath(fileName)) return undefined;
                     const override = this.overrides.get(path.resolve(fileName));
                     if (override !== undefined) {
                         if (!this.admitRead(fileName, Buffer.byteLength(override, 'utf8'))) return undefined;
@@ -100,17 +133,19 @@ export class TypeScriptProgramSession {
                     }
                     try {
                         if (path.extname(fileName).toLowerCase() === '.json') {
-                            const content = readTypeScriptFileBytes(fileName, this.jsonReadLimit(fileName));
+                            const content = readTypeScriptFileBytes(fileName, this.jsonReadLimit(fileName), fsBoundary);
                             if (!this.admitRead(fileName, content.length)) return undefined;
                             this.observation?.recordRead(fileName, content);
                             return content.toString('utf8');
                         }
-                        const stat = fs.statSync(fileName);
+                        const targetPath = fsBoundary ? fsBoundary.resolveAllowedPath(fileName) : fileName;
+                        if (!targetPath) return undefined;
+                        const stat = fs.statSync(targetPath);
                         if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
                         const content = readTypeScriptFileBytes(fileName, Math.min(
                             this.sourceBudget?.maxFileBytes ?? Number.MAX_SAFE_INTEGER,
                             this.sourceBudget?.maxProjectBytes ?? Number.MAX_SAFE_INTEGER,
-                        ));
+                        ), fsBoundary);
                         if (!this.admitRead(fileName, content.length)) return undefined;
                         this.observation?.recordRead(fileName, content);
                         return content.toString('utf8');

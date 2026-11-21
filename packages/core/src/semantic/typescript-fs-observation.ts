@@ -6,6 +6,7 @@ import {
     TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
 } from './typescript-bounded-reader';
 import { TypeScriptSourceBudgetTracker, type TypeScriptSourceBudget } from './typescript-configured-project';
+import type { TypeScriptFsBoundary } from './typescript-fs-boundary';
 
 /** What the compiler learned about a path it asked about. */
 export type TypeScriptFsObservationKind = 'missing' | 'file' | 'directory' | 'other';
@@ -163,14 +164,18 @@ export class TypeScriptFsObservationRecorder {
 export function verifyTypeScriptFsObservation(
     observation: TypeScriptFsObservation,
     budget: TypeScriptSourceBudget,
+    boundary?: TypeScriptFsBoundary,
 ): boolean {
     for (const [fileName, kind] of observation.probes) {
+        if (boundary && !boundary.isAllowedPath(fileName)) return false;
         if (pathKind(fileName) !== kind) return false;
     }
     for (const [fileName, target] of observation.realpaths) {
+        if (boundary && (!boundary.isAllowedPath(fileName) || !boundary.isAllowedPath(target))) return false;
         if (realpathTarget(fileName) !== target) return false;
     }
     for (const [directoryName, names] of observation.listings) {
+        if (boundary && !boundary.isAllowedPath(directoryName)) return false;
         const current = directoryNames(directoryName);
         if (current.length !== names.length) return false;
         for (let index = 0; index < names.length; index += 1) {
@@ -184,9 +189,12 @@ export function verifyTypeScriptFsObservation(
     });
     const digest = createHash('sha256');
     for (const [fileName, role] of observation.reads) {
+        if (boundary && !boundary.isAllowedPath(fileName)) return false;
         let bytes: number;
         try {
-            const stat = fs.statSync(fileName, { throwIfNoEntry: false });
+            const targetPath = boundary ? boundary.resolveAllowedPath(fileName) : fileName;
+            if (!targetPath) return false;
+            const stat = fs.statSync(targetPath, { throwIfNoEntry: false });
             if (!stat?.isFile()) return false;
             bytes = stat.size;
         } catch {
@@ -202,7 +210,7 @@ export function verifyTypeScriptFsObservation(
         try {
             // The bound is the size just admitted, so a file that grows between
             // the stat and the read is refused instead of allocated unbounded.
-            content = readTypeScriptFileBytes(fileName, bytes);
+            content = readTypeScriptFileBytes(fileName, bytes, boundary);
         } catch {
             return false;
         }

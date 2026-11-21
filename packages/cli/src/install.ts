@@ -116,6 +116,11 @@ function managedRuntimePreflightDependencies(
     return exactRuntimePreflightDependencies(runtimeCommand);
 }
 
+function isRealDirectory(directoryPath: string): boolean {
+    const stat = fs.lstatSync(directoryPath, { throwIfNoEntry: false });
+    return stat !== undefined && stat.isDirectory() && !stat.isSymbolicLink();
+}
+
 export async function executeInstallCommand(
     command: InstallCommandInput,
     options: InstallCommandOptions = {}
@@ -137,6 +142,17 @@ export async function executeInstallCommand(
     let releaseRuntimeMutationLock: (() => void) | undefined;
     let plan: InstallPlan;
     try {
+        if (command.kind === "uninstall" && !command.dryRun) {
+            const satoriDir = path.join(homeDir, ".satori");
+            const runtimeStorageDir = path.join(satoriDir, "mcp-runtime");
+            // Acquire the runtime mutation lock whenever the managed runtime store
+            // already exists as a real directory so uninstall/purge cannot race with
+            // concurrent install, upgrade, or reranker mutations, without creating
+            // ~/.satori when purging a custom SATORI_STATE_ROOT only.
+            if (isRealDirectory(satoriDir) && isRealDirectory(runtimeStorageDir)) {
+                releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
+            }
+        }
         if (command.kind === "install") {
             if (command.runtime === "offline" && command.vectorStore !== undefined && command.vectorStore !== "LanceDB") {
                 throw new CliError("E_USAGE", "Offline install requires --vector-store lancedb.", 2);
@@ -425,6 +441,40 @@ export async function executeInstallCommand(
     }
 }
 
+const PURGE_OWNED_STATE_ENTRIES = new Set([
+    "publications", "runtime", "runtime-owner", "typescript-resolution", "runtime-host",
+]);
+
+function verifyPurgeTargetOwnership(
+    target: string,
+    realHome: string,
+    canonicalRoot: string,
+): fs.Stats {
+    try {
+        const stat = fs.lstatSync(target);
+        const realTarget = fs.realpathSync(target);
+        const relativeHome = path.relative(realTarget, realHome);
+        if (
+            stat.isDirectory()
+            && !stat.isSymbolicLink()
+            && realTarget !== path.parse(realTarget).root
+            && (relativeHome === ".." || relativeHome.startsWith(`..${path.sep}`) || path.isAbsolute(relativeHome))
+        ) {
+            if (realTarget === canonicalRoot) {
+                // The installer owns its canonical directory, even without a launcher.
+                return stat;
+            }
+            const entries = fs.readdirSync(target);
+            if (entries.length > 0 && entries.every((entry) => PURGE_OWNED_STATE_ENTRIES.has(entry))) {
+                return stat;
+            }
+        }
+    } catch {
+        // Missing or malformed ownership evidence must never authorize deletion.
+    }
+    throw new CliError("E_USAGE", `Refusing to purge '${target}': Satori ownership of this directory cannot be verified.`, 2);
+}
+
 /**
  * Removes every Satori-owned local directory: the managed runtime, launcher,
  * model cache, indexes, and state. Running servers are stopped first so no
@@ -442,40 +492,11 @@ async function purgeSatoriData(
     ])].filter((target) => fs.lstatSync(target, { throwIfNoEntry: false }) !== undefined);
     const realHome = fs.realpathSync(homeDir);
     const canonicalRoot = path.join(realHome, ".satori");
-    // Custom roots have no ownership marker. These top-level entries are written
-    // by PublicationStore, MutationLeaseCoordinator, the runtime-owner registry,
-    // Context's TypeScript resolution cache, and the shared runtime host.
-    const stateEntries = new Set([
-        "publications", "runtime", "runtime-owner", "typescript-resolution", "runtime-host",
-    ]);
-    for (const target of targets) {
-        let owned = false;
-        try {
-            const realTarget = fs.realpathSync(target);
-            const stat = fs.lstatSync(target);
-            const relativeHome = path.relative(realTarget, realHome);
-            if (
-                stat.isDirectory()
-                && !stat.isSymbolicLink()
-                && realTarget !== path.parse(realTarget).root
-                && (relativeHome === ".." || relativeHome.startsWith(`..${path.sep}`) || path.isAbsolute(relativeHome))
-            ) {
-                if (realTarget === canonicalRoot) {
-                    // The installer owns its canonical directory, even without a launcher.
-                    owned = true;
-                } else {
-                    const entries = fs.readdirSync(target);
-                    owned = entries.length > 0 && entries.every((entry) => stateEntries.has(entry));
-                }
-            }
-        } catch {
-            // Missing or malformed ownership evidence must never authorize deletion.
-        }
-        if (!owned) {
-            throw new CliError("E_USAGE", `Refusing to purge '${target}': Satori ownership of this directory cannot be verified.`, 2);
-        }
-    }
-    if (dryRun || targets.length === 0) return targets;
+    const verifiedTargets = targets.map((target) => ({
+        target,
+        stat: verifyPurgeTargetOwnership(target, realHome, canonicalRoot),
+    }));
+    if (dryRun || verifiedTargets.length === 0) return targets;
     const termination = await (terminateRunner ?? terminateSatoriServers)({ homeDir, env });
     if (termination.status === "partial") {
         throw new CliError(
@@ -484,8 +505,25 @@ async function purgeSatoriData(
             1,
         );
     }
-    for (const target of targets) {
+    // Re-verify ownership and inode identity after the async server-termination
+    // boundary before deleting any directory (closes async TOCTOU swap window).
+    const toDelete: string[] = [];
+    for (const { target, stat: initialStat } of verifiedTargets) {
+        if (fs.lstatSync(target, { throwIfNoEntry: false }) === undefined) {
+            continue;
+        }
+        const currentStat = verifyPurgeTargetOwnership(target, realHome, canonicalRoot);
+        if (currentStat.dev !== initialStat.dev || currentStat.ino !== initialStat.ino) {
+            throw new CliError(
+                "E_USAGE",
+                `Refusing to purge '${target}': directory identity changed while stopping servers.`,
+                2,
+            );
+        }
+        toDelete.push(target);
+    }
+    for (const target of toDelete) {
         fs.rmSync(target, { recursive: true, force: true });
     }
-    return targets;
+    return toDelete;
 }

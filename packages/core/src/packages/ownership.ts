@@ -82,8 +82,43 @@ function normalizeRelativePath(candidate: string, allowRoot = false): string {
     return validateRepositoryRelativePath(normalized);
 }
 
+const MAXIMUM_PACKAGE_CONTROL_FILE_BYTES = 1_048_576;
+const MAX_WORKSPACE_MANIFEST_MATCHES = 2_000;
+const NODE_DISCOVERY_EXCLUDED_DIRS = new Set(['node_modules', '.git']);
+
 function hashBytes(bytes: Buffer): string {
     return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function readBoundedRegularFileNoFollow(filePath: string, label: string, maxBytes: number): Buffer {
+    const flags = fs.constants.O_RDONLY
+        | (fs.constants.O_NOFOLLOW ?? 0)
+        | (fs.constants.O_NONBLOCK ?? 0);
+    const fd = fs.openSync(filePath, flags);
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
+            throw new Error(`Package control file '${label}' is not a regular file.`);
+        }
+        if (stat.size > maxBytes) {
+            throw new Error(`Package control file '${label}' exceeds the ${maxBytes}-byte limit.`);
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        while (total <= maxBytes) {
+            const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
+            const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+            if (count === 0) break;
+            total += count;
+            if (total > maxBytes) {
+                throw new Error(`Package control file '${label}' exceeds the ${maxBytes}-byte limit.`);
+            }
+            chunks.push(chunk.subarray(0, count));
+        }
+        return Buffer.concat(chunks, total);
+    } finally {
+        fs.closeSync(fd);
+    }
 }
 
 function readControlFile(
@@ -104,7 +139,7 @@ function readControlFile(
     const realPath = fs.realpathSync.native(absolutePath);
     if (realPath !== absolutePath) return null;
 
-    const bytes = fs.readFileSync(realPath);
+    const bytes = readBoundedRegularFileNoFollow(realPath, normalized, MAXIMUM_PACKAGE_CONTROL_FILE_BYTES);
     return { bytes, hash: hashBytes(bytes) };
 }
 
@@ -305,6 +340,19 @@ function nativeGlobSync(): NativeGlobSync {
     return candidate;
 }
 
+function createGlobExclude(cwd: string, excludedDirs: ReadonlySet<string>): (candidate: string) => boolean {
+    return (candidate: string): boolean => {
+        if (excludedDirs.has(path.basename(candidate))) return true;
+        try {
+            const stat = fs.lstatSync(path.join(cwd, candidate), { throwIfNoEntry: false });
+            if (stat?.isSymbolicLink()) return true;
+        } catch {
+            return true;
+        }
+        return false;
+    };
+}
+
 function packageManifestMatchesForPattern(
     canonicalRoot: string,
     pattern: string,
@@ -317,13 +365,15 @@ function packageManifestMatchesForPattern(
     return nativeGlobSync()(manifestPattern, {
         cwd: canonicalRoot,
         withFileTypes: false,
+        exclude: createGlobExclude(canonicalRoot, NODE_DISCOVERY_EXCLUDED_DIRS),
     })
         .map((candidate) => normalizeRelativePath(candidate))
         .filter((candidate) => (
             !candidate.split('/').includes('node_modules')
             && !candidate.split('/').includes('.git')
         ))
-        .sort(compareContractStrings);
+        .sort(compareContractStrings)
+        .slice(0, MAX_WORKSPACE_MANIFEST_MATCHES);
 }
 
 function discoverWorkspaceManifestPaths(
@@ -524,8 +574,8 @@ function discoverCargoOwnership(canonicalRoot: string): {
     const manifestPaths = nativeGlobSync()('**/Cargo.toml', {
         cwd: canonicalRoot,
         withFileTypes: false,
-        exclude: (candidate) => CARGO_DISCOVERY_EXCLUDED_DIRS.has(path.basename(candidate)),
-    }).map((candidate) => normalizeRelativePath(candidate)).sort(compareContractStrings);
+        exclude: createGlobExclude(canonicalRoot, CARGO_DISCOVERY_EXCLUDED_DIRS),
+    }).map((candidate) => normalizeRelativePath(candidate)).sort(compareContractStrings).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES);
     const manifests = new Map<string, { source: string; hash: string }>();
     for (const manifestPath of manifestPaths) {
         const read = readControlFile(canonicalRoot, manifestPath);
@@ -541,20 +591,24 @@ function discoverCargoOwnership(canonicalRoot: string): {
         const excluded = parseCargoStringList(tomlField(manifest.source, 'workspace', 'exclude'), manifestPath);
         cargoWorkspaces.push({ kind: 'cargo', root, manifestPath, patterns });
         controls.set(manifestPath, manifest.hash);
+        const workspaceCwd = path.join(canonicalRoot, root);
+        const cargoExclude = createGlobExclude(workspaceCwd, CARGO_DISCOVERY_EXCLUDED_DIRS);
         const members = new Set<string>();
         for (const pattern of patterns) {
             for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
-                cwd: path.join(canonicalRoot, root),
+                cwd: workspaceCwd,
                 withFileTypes: false,
-            })) {
+                exclude: cargoExclude,
+            }).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES)) {
                 members.add(normalizeRelativePath(path.posix.join(root, found)));
             }
         }
         for (const pattern of excluded) {
             for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
-                cwd: path.join(canonicalRoot, root),
+                cwd: workspaceCwd,
                 withFileTypes: false,
-            })) {
+                exclude: cargoExclude,
+            }).slice(0, MAX_WORKSPACE_MANIFEST_MATCHES)) {
                 members.delete(normalizeRelativePath(path.posix.join(root, found)));
             }
         }

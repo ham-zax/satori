@@ -24,9 +24,42 @@ export function promptHiddenApiKey(input: NodeJS.ReadableStream = process.stdin)
     });
 }
 
-function readEnvFile(envPath: string): string {
+function assertNotSymlinkRegularEnvFile(envPath: string): fs.Stats | null {
+    let stat: fs.Stats;
     try {
-        return fs.readFileSync(envPath, "utf8");
+        stat = fs.lstatSync(envPath);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw new CliError("E_USAGE", `Cannot read ${envPath}; check its permissions before switching to Voyage.`, 2);
+    }
+    if (stat.isSymbolicLink()) {
+        throw new CliError("E_USAGE", `Refusing to read ${envPath}: environment file must not be a symbolic link.`, 2);
+    }
+    if (!stat.isFile()) {
+        throw new CliError("E_USAGE", `Refusing to read ${envPath}: environment file must be a regular file.`, 2);
+    }
+    return stat;
+}
+
+function readEnvFile(
+    envPath: string,
+    writeWarning?: (message: string) => void,
+): string {
+    const stat = assertNotSymlinkRegularEnvFile(envPath);
+    if (!stat) return "";
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0 && writeWarning) {
+        writeWarning(
+            `Warning: ${envPath} has overly broad permissions (${(stat.mode & 0o777).toString(8)}); run \`chmod 600 ${envPath}\` to protect stored API keys.\n`,
+        );
+    }
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    try {
+        const fd = fs.openSync(envPath, flags);
+        try {
+            return fs.readFileSync(fd, "utf8");
+        } finally {
+            fs.closeSync(fd);
+        }
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
         throw new CliError("E_USAGE", `Cannot read ${envPath}; check its permissions before switching to Voyage.`, 2);
@@ -37,12 +70,13 @@ function readEnvFile(envPath: string): string {
 export function readVoyageApiKey(
     homeDir: string,
     env: NodeJS.ProcessEnv,
+    writeWarning?: (message: string) => void,
 ): string | undefined {
     const keyEnv = RERANKER_PROVIDERS.voyage.keyEnv;
     const processKey = env[keyEnv]?.trim();
     if (processKey) return processKey;
     const envPath = path.join(homeDir, ".satori", ".env");
-    const entry = readEnvFile(envPath).split("\n").find((line) => line.trim().startsWith(`${keyEnv}=`));
+    const entry = readEnvFile(envPath, writeWarning).split(/\r?\n/).find((line) => line.trim().startsWith(`${keyEnv}=`));
     const fileKey = entry?.trim().slice(keyEnv.length + 1).trim();
     return fileKey || undefined;
 }
@@ -69,7 +103,8 @@ export async function resolveVoyageApiKey(
     interaction: VoyageKeyInteraction,
 ): Promise<string | null> {
     const keyEnv = RERANKER_PROVIDERS.voyage.keyEnv;
-    const existingKey = readVoyageApiKey(homeDir, env);
+    const writeMessage = interaction.writeMessage ?? ((message: string) => { process.stderr.write(message); });
+    const existingKey = readVoyageApiKey(homeDir, env, writeMessage);
     if (existingKey) return existingKey;
     const envPath = path.join(homeDir, ".satori", ".env");
     if (!(interaction.isInteractive ?? (process.stdin.isTTY && process.stdout.isTTY))) {
@@ -80,7 +115,6 @@ export async function resolveVoyageApiKey(
         );
     }
 
-    const writeMessage = interaction.writeMessage ?? ((message: string) => { process.stderr.write(message); });
     writeMessage("Voyage API key (hidden; Enter to cancel): ");
     const apiKey = (await (interaction.promptApiKey ?? promptHiddenApiKey)()).trim();
     writeMessage("\n");
@@ -89,7 +123,7 @@ export async function resolveVoyageApiKey(
         throw new CliError("E_USAGE", "The Voyage API key must be a single line without null characters.", 2);
     }
 
-    // Re-read after prompting to preserve any other settings saved while waiting for input.
+    // Re-read after prompting to preserve any other settings and existing line endings.
     let content = readEnvFile(envPath);
     let found = false;
     content = content.split("\n").map((line) => {
@@ -103,6 +137,7 @@ export async function resolveVoyageApiKey(
     try {
         fs.writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
         fs.chmodSync(temporaryPath, 0o600);
+        assertNotSymlinkRegularEnvFile(envPath);
         fs.renameSync(temporaryPath, envPath);
     } finally {
         fs.rmSync(temporaryPath, { force: true });

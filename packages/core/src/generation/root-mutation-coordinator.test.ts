@@ -392,3 +392,27 @@ test('lease files without a trigger still load and an unknown trigger is rejecte
     fs.writeFileSync(statePath, JSON.stringify({ ...state, lease: { ...state.lease, trigger: 'cron' } }));
     assert.throws(() => new MutationLeaseCoordinator({ stateDir }).getActiveLease(root));
 });
+
+test('root mutex stale recovery backs off when another hard-link claim exists (P3-5)', (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const lockPath = statePath.replace(/\.json$/, '.lock');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999_999 }));
+    // Simulate a concurrent stale cleaner holding an extra hard link (nlink === 2 before our claim -> 3 after).
+    const peerClaim = `${lockPath}.peer-claim`;
+    fs.linkSync(lockPath, peerClaim);
+
+    const coordinator = new MutationLeaseCoordinator({
+        stateDir,
+        lockWaitMs: 0,
+        lockRetryMs: 0,
+        currentProcess: { pid: process.pid },
+        processInspector: { inspect: () => null },
+    });
+    const internals = coordinator as unknown as { withRootLock<T>(root: string, fn: () => T): T };
+    const now = Date.now();
+    let calls = 0;
+    t.mock.method(Date, 'now', () => now + (calls++ < 2 ? 0 : 1));
+    assert.throws(() => internals.withRootLock(root, () => assert.fail('must back off when nlink > 2')), /Timed out/);
+    assert.equal(fs.existsSync(lockPath), true, 'contender must not unlink stale lock while peer claim holds an extra link');
+});

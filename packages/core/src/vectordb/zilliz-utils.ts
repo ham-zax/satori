@@ -189,6 +189,7 @@ export class ClusterManager {
         const init: RequestInit = {
             method,
             headers,
+            redirect: 'error',
         };
 
         if (data && method === 'POST') {

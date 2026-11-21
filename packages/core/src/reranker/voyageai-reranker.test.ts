@@ -789,3 +789,32 @@ test('VoyageAIReranker preserves fetch UTF-8 BOM decoding with bounded body read
         assert.deepEqual(await reranker.rerank('query', ['document']), [{ index: 0, relevanceScore: 0.5 }]);
     });
 });
+
+test('VoyageAIReranker sets redirect=error and truncates huge HTTP error bodies in thrown errors (P2-4)', async () => {
+    let observedRedirect: string | undefined;
+    const hugeErrorBody = `ERR:${'A'.repeat(4096)}:TAIL_MARKER`;
+    await withMutedConsoleError(async () => {
+        await withMockedFetch(async (_url, init) => {
+            observedRedirect = init?.redirect;
+            return {
+                ok: false,
+                status: 400,
+                json: async () => ({}),
+                text: async () => hugeErrorBody,
+            };
+        }, async () => {
+            const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key', retryDelayMs: 0 });
+            await assert.rejects(
+                () => reranker.rerank('find auth', ['alpha document']),
+                (error: unknown) => {
+                    assert.ok(error instanceof RerankerRequestError);
+                    assert.equal(error.status, 400);
+                    assert.ok(error.message.length <= 640, `error message must be truncated, got length ${error.message.length}`);
+                    assert.equal(error.message.includes('TAIL_MARKER'), false, 'tail of oversized error body must be truncated');
+                    return true;
+                },
+            );
+        });
+    });
+    assert.equal(observedRedirect, 'error', 'VoyageAIReranker must refuse redirects so Bearer API key is never forwarded');
+});

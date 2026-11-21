@@ -133,3 +133,49 @@ test('Milvus rejects an oversized JSON response', async (t) => {
         },
     );
 });
+
+test('Milvus REST defaults non-loopback schemeless addresses to https and keeps loopback on http (P2-2)', async () => {
+    const remoteDb = new HttpTestMilvusRest({
+        address: 'milvus.example.com:19530',
+        token: 'secret-token',
+    });
+    const localDb = new HttpTestMilvusRest({
+        address: '127.0.0.1:19530',
+        token: 'secret-token',
+    });
+    await remoteDb['ensureInitialized']();
+    await localDb['ensureInitialized']();
+    assert.equal(remoteDb['baseUrl'], 'https://milvus.example.com:19530/v2/vectordb');
+    assert.equal(localDb['baseUrl'], 'http://127.0.0.1:19530/v2/vectordb');
+});
+
+test('Milvus REST refuses HTTP redirects so Bearer tokens are never forwarded (P2-2)', async (t) => {
+    let redirectHits = 0;
+    const redirectTarget = await startServer((_req, res) => {
+        redirectHits += 1;
+        okJson(res, { code: 0, data: [] });
+    });
+    const server = await startServer((_req, res) => {
+        res.writeHead(307, { location: `${redirectTarget.url}/v2/vectordb/entities/search` });
+        res.end();
+    });
+    t.after(async () => {
+        await server.close();
+        await redirectTarget.close();
+    });
+
+    const db = new HttpTestMilvusRest({
+        address: server.url,
+        token: 'bearer-secret-token',
+        database: 'default',
+        retryDelayMs: 5,
+    });
+    await assert.rejects(
+        db.retrieveDense('collection-v1', { vector: [0.1, 0.2, 0.3, 0.4], limit: 3 }),
+        (error: unknown) => {
+            assert.ok(error instanceof BoundedHttpError);
+            return true;
+        },
+    );
+    assert.equal(redirectHits, 0, 'redirect target must never receive redirected request or Bearer token');
+});

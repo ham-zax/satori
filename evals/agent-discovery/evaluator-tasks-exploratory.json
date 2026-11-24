@@ -1,0 +1,52 @@
+{
+  "version": 4,
+  "protocolVersion": "satori-agent-discovery-v4",
+  "name": "Satori exploratory small-target discovery",
+  "modelVisible": false,
+  "sourceScope": [
+    "packages/core/src",
+    "packages/mcp/src"
+  ],
+  "tasks": [
+    {
+      "id": "known-exact-small-target",
+      "kind": "known_target",
+      "prompt": "Locate the production definition of `projectCallGraphEvidence`. Report its repository-relative file, exact symbol name, and complete 1-based inclusive source span. Identify one production caller that invokes it and one cross-file callee used to serialize the canonical scope identity. Briefly explain how it handles non-ok payloads, page-size bounds, continuation prerequisites, and cursor parsing. Verify every claim from source or relationship evidence.",
+      "satoriQuery": "projectCallGraphEvidence",
+      "taskFactsTemplate": {
+        "returnsUnchangedWhenNotOk": "boolean",
+        "maxPageSize": "integer",
+        "requiresSymbolIdForPaging": "boolean",
+        "bindsScopeToCanonicalJson": "boolean",
+        "cursorParserSymbol": "exact bare symbol identifier"
+      },
+      "expected": {
+        "ownerFile": "packages/mcp/src/core/call-graph-evidence-projection.ts",
+        "ownerSymbol": "projectCallGraphEvidence",
+        "ownerSpan": {
+          "startLine": 288,
+          "endLine": 342
+        },
+        "requiredRelations": [
+          {
+            "relation": "caller",
+            "symbol": "executeCallGraph",
+            "file": "packages/mcp/src/core/navigation-handlers.ts"
+          },
+          {
+            "relation": "callee",
+            "symbol": "serializeCanonicalJson",
+            "file": "packages/mcp/src/core/canonical-json.ts"
+          }
+        ],
+        "taskFacts": {
+          "returnsUnchangedWhenNotOk": true,
+          "maxPageSize": 50,
+          "requiresSymbolIdForPaging": true,
+          "bindsScopeToCanonicalJson": true,
+          "cursorParserSymbol": "parseCursor"
+        }
+      }
+    }
+  ]
+}

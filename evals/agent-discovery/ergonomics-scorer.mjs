@@ -86,17 +86,21 @@ function canonicalReportedSymbol(value) {
     return segments.at(-1);
 }
 
-function loadDefaultTasksManifest() {
+function loadTasksManifest(file) {
     try {
-        return JSON.parse(fs.readFileSync(DEFAULT_TASKS_FILE, "utf8"));
+        return JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
         return { tasks: [] };
     }
 }
 
-const DEFAULT_MANIFEST = loadDefaultTasksManifest();
+
+const EXPLORATORY_TASKS_FILE = path.join(SCRIPT_DIR, "evaluator-tasks-exploratory.json");
+const FROZEN_TASK_IDS = new Set((loadTasksManifest(DEFAULT_TASKS_FILE).tasks ?? []).map((task) => task.id));
 const DEFAULT_TASKS_BY_ID = new Map(
-    (DEFAULT_MANIFEST.tasks ?? []).map((task) => [task.id, task]),
+    [DEFAULT_TASKS_FILE, EXPLORATORY_TASKS_FILE]
+        .flatMap((file) => loadTasksManifest(file).tasks ?? [])
+        .map((task) => [task.id, task]),
 );
 
 const BUILTIN_STATEMENT_PROFILES = Object.freeze({
@@ -130,6 +134,43 @@ const BUILTIN_STATEMENT_PROFILES = Object.freeze({
                 patterns: Object.freeze([
                     "semanticPassesUsed: []",
                     "rerankApplied: false",
+                ]),
+            }),
+        ]),
+    }),
+    "known-exact-small-target": Object.freeze({
+        ownerFile: "packages/mcp/src/core/call-graph-evidence-projection.ts",
+        ownerSymbol: "projectCallGraphEvidence",
+        requiredStatements: Object.freeze([
+            Object.freeze({
+                id: "owner_definition",
+                description: "Owning symbol definition projectCallGraphEvidence",
+                patterns: Object.freeze(["projectCallGraphEvidence"]),
+            }),
+            Object.freeze({
+                id: "returns_unchanged_when_not_ok",
+                description: "Returns non-ok payloads unchanged",
+                patterns: Object.freeze(['if (payload.status !== "ok") return payload;']),
+            }),
+            Object.freeze({
+                id: "clamps_page_size_to_50",
+                description: "Clamps evidence page size to 50",
+                patterns: Object.freeze(["Math.min(50, Math.floor(request.limit))"]),
+            }),
+            Object.freeze({
+                id: "requires_symbol_id_for_paging",
+                description: "Requires symbolId and publicationId for paged continuations",
+                patterns: Object.freeze([
+                    "!payload.symbolRef.symbolId",
+                    "InvalidCallGraphEvidenceContinuationError",
+                ]),
+            }),
+            Object.freeze({
+                id: "binds_scope_and_parses_cursor",
+                description: "Binds scope with serializeCanonicalJson and parses cursor with parseCursor",
+                patterns: Object.freeze([
+                    "serializeCanonicalJson(",
+                    "parseCursor(",
                 ]),
             }),
         ]),
@@ -692,6 +733,7 @@ function updateBraceDepth(line, state) {
     let depth = state.depth;
     let inBlockComment = state.inBlockComment;
     let quote = null;
+    let code = "";
     for (let i = 0; i < line.length; i += 1) {
         const ch = line[i];
         const next = line[i + 1];
@@ -720,6 +762,7 @@ function updateBraceDepth(line, state) {
             quote = ch;
             continue;
         }
+        code += ch;
         if (ch === "{") {
             depth += 1;
             state.opened = true;
@@ -729,15 +772,22 @@ function updateBraceDepth(line, state) {
     }
     state.depth = depth;
     state.inBlockComment = inBlockComment;
+    return code;
+}
+
+function codeWithoutComments(text) {
+    const state = { depth: 0, opened: false, inBlockComment: false };
+    return text.split(/\r\n|\n|\r/).map((line) => updateBraceDepth(line, state)).join("\n");
 }
 
 function spanContainsCallerCall(lines, callerName, targetName, sawDefinition, callTo) {
     let tracking = false;
     let state = { depth: 0, opened: false, inBlockComment: false };
     let headerLookahead = 0;
+    const lexicalState = { depth: 0, opened: false, inBlockComment: false };
 
     for (const rawLine of lines) {
-        const line = typeof rawLine === "string" ? rawLine : "";
+        const line = updateBraceDepth(typeof rawLine === "string" ? rawLine : "", lexicalState);
         if (!tracking) {
             if (sawDefinition(line, callerName)) {
                 tracking = true;
@@ -831,11 +881,11 @@ function callSatisfiesRelation(ctx, relation, repoRoot, ownerFile, progress) {
         return false;
     }
     if (Array.isArray(relation.sitePatterns) && relation.sitePatterns.length > 0) {
-        progress.siteSeen ||= relation.sitePatterns.some((pattern) => matchesPattern(ownerText, pattern));
+        progress.siteSeen ||= relation.sitePatterns.some((pattern) => matchesPattern(codeWithoutComments(ownerText), pattern));
     } else {
-        progress.siteSeen ||= callTo(ownerText, relation.symbol);
+        progress.siteSeen ||= callTo(codeWithoutComments(ownerText), relation.symbol);
     }
-    progress.peerSeen ||= ownerFile === relation.file || sawDefinition(peerText, relation.symbol);
+    progress.peerSeen ||= ownerFile === relation.file || sawDefinition(codeWithoutComments(peerText), relation.symbol);
     return progress.siteSeen && progress.peerSeen;
 }
 
@@ -989,6 +1039,31 @@ function summarizePostEvidenceDetail(toolCall, repoRoot, sessionCwd = null) {
     return truncate(targetPath ?? String(toolCall?.tool ?? "other"));
 }
 
+function observeOwnerSpan(ctx, spec, repoRoot, endpoints) {
+    if (!ctx.eligible || !ctx.rooted) return;
+    const { startLine, endLine } = spec.ownerSpan;
+    const payload = ctx.parsedJson;
+    const hydrated = payload?.hydratedExactSource;
+    const candidates = [
+        ...(Array.isArray(payload?.outline?.symbols) ? payload.outline.symbols : []),
+        payload?.symbol,
+        ...(hydrated?.completeSymbolReturned && hydrated.sourceAuthority === "publication_hash_matched"
+            ? (Array.isArray(payload.results) ? payload.results : []).flatMap((result) => result?.target?.symbolId === hydrated.symbolId
+                ? [{ ...result.target, file: hydrated.file, span: hydrated.returnedSpan }] : []) : []),
+    ];
+    if (candidates.some((symbol) => symbol
+        && resolveInputPath(symbol.file ?? payload.file, repoRoot, ctx.effectiveCwd)?.relativePath === spec.ownerFile
+        && extractSymbolIdentifierFromLabel(symbol.name ?? symbol.symbolLabel) === spec.ownerSymbol
+        && symbol.span?.startLine === startLine && symbol.span.endLine === endLine)) {
+        endpoints.add(startLine);
+        endpoints.add(endLine);
+    }
+    if (ctx.outlineOnly) return;
+    for (const { line, text } of extractFileAttributedNumberedLines(ctx, spec.ownerFile, repoRoot)) {
+        if ((line === startLine || line === endLine) && text.trim()) endpoints.add(line);
+    }
+}
+
 export function scoreEvidenceTrajectory({
     tools,
     task,
@@ -1024,6 +1099,11 @@ export function scoreEvidenceTrajectory({
         })),
     ];
 
+    // Preserve the archived v4 sufficiency measure for the frozen tasks.
+    if (spec.ownerSpan && (evidenceSpec || task?.evidenceSpec || !FROZEN_TASK_IDS.has(spec.taskId))) {
+        requirements.push({ key: "owner_span", id: "owner_span", kind: "span", detail: "Complete owner span" });
+    }
+    const ownerEndpoints = new Set();
     const satisfiedByKey = new Map();
     const statementProgressByKey = new Map();
     const relationProgressByKey = new Map();
@@ -1060,7 +1140,10 @@ export function scoreEvidenceTrajectory({
         for (const requirement of requirements) {
             if (satisfiedByKey.has(requirement.key)) continue;
             let ok = false;
-            if (requirement.kind === "statement") {
+            if (requirement.kind === "span") {
+                observeOwnerSpan(ctx, spec, canonicalRepo, ownerEndpoints);
+                ok = ownerEndpoints.has(spec.ownerSpan.startLine) && ownerEndpoints.has(spec.ownerSpan.endLine);
+            } else if (requirement.kind === "statement") {
                 let progressState = statementProgressByKey.get(requirement.key);
                 if (!progressState) {
                     progressState = {
@@ -1880,6 +1963,8 @@ export function replayResultRecord({
         if (visibleBytesMatches === false) {
             mismatches.push(`visible_bytes_mismatch:extracted=${piExtracted.extractedVisibleBytes},recorded=${recordedVisibleBytes}`);
         }
+        if (recordedToolCallCount === null) mismatches.push("tool_call_count_unverified");
+        if (recordedVisibleBytes === null) mismatches.push("visible_bytes_unverified");
         fidelity = {
             source: "pi_events",
             extractedToolCallCount: piExtracted.toolCallCount,

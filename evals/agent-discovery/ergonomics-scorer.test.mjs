@@ -1633,3 +1633,40 @@ test("Parallel arrival-order timing, compact read_file source, OpenCode timestam
     assert.equal(opencodeReplayed.firstSufficientEvidenceCall, 2);
     assert.equal(opencodeReplayed.firstSufficientEvidenceMs, 850);
 });
+
+test("explicit owner spans require both endpoints and comments do not prove calls", () => {
+    const ownerFile = "packages/mcp/src/core/owner.ts";
+    const callerFile = "packages/mcp/src/core/caller.ts";
+    const evidenceSpec = {
+        ownerFile,
+        ownerSymbol: "target",
+        ownerSpan: { startLine: 4, endLine: 7 },
+        requiredStatements: [{ id: "body", patterns: ["return 1"] }],
+        requiredRelations: [{ relation: "caller", symbol: "caller", file: callerFile }],
+    };
+    const read = (file, output) => ({
+        tool: "read",
+        input: { filePath: `/repo/${file}` },
+        output,
+    });
+    const partial = read(ownerFile, "4: function target() {\n5: return 1;");
+    const ending = read(ownerFile, "7: }");
+    const comment = read(callerFile, "1: function caller() {\n2: /* target() */\n3: }");
+    const call = read(callerFile, "1: function caller() {\n2: target();\n3: }");
+    const score = (tools) => scoreEvidenceTrajectory({ repoRoot: "/repo", evidenceSpec, tools });
+    assert.equal(score([partial, call]).sufficient, false);
+    assert.equal(score([partial, ending, comment]).sufficient, false);
+    assert.equal(score([partial, ending, call]).firstSufficientEvidenceCall, 3);
+});
+
+test("Pi replay treats missing recorded totals as unverified", () => {
+    const replay = replayResultRecord({
+        result: { taskId: KNOWN_TASK.id, passed: true },
+        repoRoot: "/repo",
+        piEvents: [{ type: "session", cwd: "/repo", timestamp: 100 }],
+    });
+    assert.equal(replay.fidelity.matched, false);
+    assert.equal(replay.fidelity.toolCallCountMatches, null);
+    assert.equal(replay.fidelity.visibleBytesMatches, null);
+    assert.equal(replay.strictPassed, false);
+});

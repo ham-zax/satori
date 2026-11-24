@@ -35,6 +35,7 @@
  */
 
 #include "kotlin_lsp.h"
+#include "lsp_work.h"
 #include "../helpers.h"
 /* CBMHashTable — cross-registry field bucketing. Relative path: the LSP
  * amalgamation compiles with -Iinternal/cbm only, not -Isrc. */
@@ -1016,6 +1017,17 @@ void kotlin_lsp_add_import(KotlinLSPContext *ctx, const char *local_name, const 
     ctx->import_count++;
 }
 
+/* The imports with this local name, in table order (lsp_name_rows.h): a scan per
+ * use made a file of thousands of imports quadratic. */
+static int kt_import_first(KotlinLSPContext *ctx, const char *name) {
+    return cbm_name_rows_first(&ctx->import_rows, ctx->arena, ctx->import_locals, ctx->import_count,
+                               name);
+}
+
+static int kt_import_next(const KotlinLSPContext *ctx, const char *name, int row) {
+    return cbm_name_rows_next(&ctx->import_rows, ctx->import_locals, ctx->import_count, name, row);
+}
+
 const char *kotlin_resolve_class_name(KotlinLSPContext *ctx, const char *name) {
     if (!ctx || !name || !*name) {
         return NULL;
@@ -1046,7 +1058,7 @@ const char *kotlin_resolve_class_name(KotlinLSPContext *ctx, const char *name) {
     }
 
     /* Explicit imports */
-    for (int i = 0; i < ctx->import_count; i++) {
+    for (int i = kt_import_first(ctx, name); i >= 0; i = kt_import_next(ctx, name, i)) {
         const char *local = ctx->import_locals[i];
         if (local && strcmp(local, name) == 0 &&
             (ctx->import_kinds[i] == CBM_KT_USE_TYPE ||
@@ -1108,7 +1120,7 @@ const char *kotlin_resolve_function_name(KotlinLSPContext *ctx, const char *name
      * symbol itself. Prove that the candidate is a registered top-level
      * function before accepting it; otherwise `import values.handler` where
      * handler is a property would fabricate a callable target. */
-    for (int i = 0; i < ctx->import_count; i++) {
+    for (int i = kt_import_first(ctx, name); i >= 0; i = kt_import_next(ctx, name, i)) {
         const char *local = ctx->import_locals[i];
         if (local && strcmp(local, name) == 0 &&
             (ctx->import_kinds[i] == CBM_KT_USE_FUNCTION ||

@@ -116,23 +116,23 @@ async function build() {
             wasmSha256,
             languages: {
                 go: {
-                    semanticRevision: 'go-v4',
+                    semanticRevision: 'go-v5',
                     grammar: 'tree-sitter-go',
                 },
                 java: {
-                    semanticRevision: 'java-v2',
+                    semanticRevision: 'java-v3',
                     grammar: 'tree-sitter-java',
                 },
                 csharp: {
-                    semanticRevision: 'csharp-v2',
+                    semanticRevision: 'csharp-v3',
                     grammar: 'tree-sitter-c-sharp',
                 },
                 cpp: {
-                    semanticRevision: 'cpp-v3',
+                    semanticRevision: 'cpp-v4',
                     grammar: 'tree-sitter-cpp',
                 },
                 rust: {
-                    semanticRevision: 'rust-v4',
+                    semanticRevision: 'rust-v5',
                     grammar: 'tree-sitter-rust',
                 },
                 kotlin: {
@@ -140,7 +140,7 @@ async function build() {
                     grammar: 'tree-sitter-kotlin',
                 },
                 php: {
-                    semanticRevision: 'php-v2',
+                    semanticRevision: 'php-v3',
                     grammar: 'tree-sitter-php',
                 },
             },

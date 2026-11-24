@@ -352,3 +352,110 @@ test('C++ excluded regions emit one whole-file PARTIAL_SOURCE diagnostic', async
         session.destroy();
     }
 });
+
+test('wide-import indexing (CBMNameRows) preserves Go duplicate-import ambiguity abstention and resolves across Go, Java, Kotlin, and PHP', async () => {
+    const analyzer = new WasmSemanticProjectAnalyzer();
+    const src = (path: string, source: string) => ({ path, source, sourceHash: `hash:${path}` });
+    const aux = (role: string, path: string, source: string) => ({ role, path, source, sourceHash: `hash:${path}` });
+
+    // Go: >16 imports activates CBMNameRows; duplicate local alias `dup` pointing to
+    // two different packages must still abstain (Satori local patch), while unique
+    // imports resolve normally.
+    const goFiles = [
+        src('a/dup/dup.go', 'package dup\nfunc Ping() int { return 1 }\n'),
+        src('b/dup/dup.go', 'package dup\nfunc Ping() int { return 2 }\n'),
+        ...Array.from({ length: 20 }, (_, i) => src(
+            `p${i}/p${i}.go`,
+            `package p${i}\nfunc Run${i}() int { return ${i} }\n`,
+        )),
+        src(
+            'cmd/main.go',
+            [
+                'package main',
+                'import (',
+                '\t"example.com/app/a/dup"',
+                '\t"example.com/app/b/dup"',
+                ...Array.from({ length: 20 }, (_, i) => `\t"example.com/app/p${i}"`),
+                ')',
+                'func main() {',
+                '\t_ = dup.Ping()',
+                '\t_ = p19.Run19()',
+                '}',
+            ].join('\n') + '\n',
+        ),
+    ];
+    const goRes = await analyzer.analyze({
+        language: 'go',
+        sourceFiles: goFiles,
+        auxiliaryFiles: [aux('go_mod', 'go.mod', 'module example.com/app\n\ngo 1.22\n')],
+    });
+    const goMain = goRes.occurrencesByFile.get('cmd/main.go') ?? [];
+    assert.equal(
+        goMain.some((o) => o.decision === 'resolved' && o.targetProvenance?.name === 'Ping'),
+        false,
+        'ambiguous duplicate Go import alias must still abstain when CBMNameRows is active',
+    );
+    assert.equal(
+        goMain.some((o) => o.decision === 'resolved' && o.targetProvenance?.file === 'p19/p19.go' && o.targetProvenance?.name === 'Run19'),
+        true,
+        'unambiguous Go import past CBM_NAME_ROWS_MIN must resolve',
+    );
+
+    // Kotlin: >16 imports activates CBMNameRows + overlay.tail_arena.
+    const ktFiles = [
+        ...Array.from({ length: 20 }, (_, i) => src(
+            `src/p${i}/S${i}.kt`,
+            `package p${i}\nclass S${i} {\n  fun go(): Int = ${i}\n}\nfun mk${i}(): S${i} = S${i}()\n`,
+        )),
+        src(
+            'src/app/Main.kt',
+            [
+                'package app',
+                ...Array.from({ length: 20 }, (_, i) => `import p${i}.S${i}\nimport p${i}.mk${i}`),
+                'fun main() {',
+                '  val s: S19 = mk19()',
+                '  s.go()',
+                '}',
+            ].join('\n') + '\n',
+        ),
+    ];
+    const ktRes = await analyzer.analyze({
+        language: 'kotlin',
+        sourceFiles: ktFiles,
+        auxiliaryFiles: [aux('manifest', 'build.gradle.kts', '')],
+    });
+    const ktMain = ktRes.occurrencesByFile.get('src/app/Main.kt') ?? [];
+    assert.ok(
+        ktMain.some((o) => o.decision === 'resolved' && o.targetProvenance?.file === 'src/p19/S19.kt' && o.targetProvenance?.name === 'go'),
+        'Kotlin wide-import method call must resolve through CBMNameRows',
+    );
+
+    // PHP: >16 use declarations activates CBMNameRows.
+    const phpFiles = [
+        ...Array.from({ length: 20 }, (_, i) => src(
+            `src/P${i}/S${i}.php`,
+            `<?php\nnamespace App\\P${i};\nclass S${i} { public static function ping(): int { return ${i}; } }\n`,
+        )),
+        src(
+            'src/Main.php',
+            [
+                '<?php',
+                'namespace App;',
+                ...Array.from({ length: 20 }, (_, i) => `use App\\P${i}\\S${i};`),
+                'function main(): void {',
+                '  S19::ping();',
+                '}',
+            ].join('\n') + '\n',
+        ),
+    ];
+    const phpRes = await analyzer.analyze({
+        language: 'php',
+        sourceFiles: phpFiles,
+        auxiliaryFiles: [aux('manifest', 'composer.json', '{}')],
+    });
+    const phpMain = phpRes.occurrencesByFile.get('src/Main.php') ?? [];
+    assert.ok(
+        phpMain.some((o) => o.decision === 'resolved' && o.targetProvenance?.file === 'src/P19/S19.php' && o.targetProvenance?.name === 'ping'),
+        'PHP wide-use static call must resolve through CBMNameRows',
+    );
+});

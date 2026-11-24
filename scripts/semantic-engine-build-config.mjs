@@ -15,11 +15,12 @@ export const SCHEMA_PATH = path.join(ASSETS_DIR, 'semantic-languages.schema.json
 export const JS_PATH = path.join(ASSETS_DIR, 'satori-semantic-engine.js');
 export const WASM_PATH = path.join(ASSETS_DIR, 'satori-semantic-engine.wasm');
 
-export const PINNED_UPSTREAM_COMMIT = '11b662f9f7fba92012b872dd4fcaef7ee0c1300d';
+export const PINNED_UPSTREAM_COMMIT = '9a4da7a314833d8d965b74612e1f25fef5371861';
 export const PINNED_EMSCRIPTEN_VERSION = '3.1.64';
 
 export const COMPILE_UNITS = [
     'common/arena.c',
+    'common/php_inline_html.c',
     'common/scope.c',
     'common/type_rep.c',
     'common/type_registry.c',

@@ -963,3 +963,106 @@ const CBMType *cbm_type_substitute(CBMArena *a, const CBMType *t, const char **t
         return t;
     }
 }
+
+/* ── Declared-type identities of one definition (9a4da7a3) ─────────── */
+
+typedef struct {
+    uint32_t name;
+    uint32_t len;
+    uint32_t qn;
+} cbm_type_scope_entry_t;
+
+enum { TYPE_SCOPE_LIST_MAX = 4 };
+
+struct cbm_type_scope_index {
+    const char *text;
+    cbm_type_scope_entry_t *slots;
+    uint32_t mask;
+    uint32_t count;
+};
+
+static uint32_t type_scope_hash(const char *s, size_t len) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) {
+        h = (h ^ (unsigned char)s[i]) * 16777619u;
+    }
+    return h;
+}
+
+const cbm_type_scope_index_t *cbm_type_scope_index(CBMArena *a, const char *scope) {
+    if (!a || !scope || !scope[0]) {
+        return NULL;
+    }
+    size_t n = strlen(scope);
+    if (n >= UINT32_MAX) {
+        return NULL;
+    }
+    uint32_t entries = 1;
+    for (size_t i = 0; i < n; i++) {
+        entries += scope[i] == '|';
+    }
+    bool list = entries <= TYPE_SCOPE_LIST_MAX;
+    uint32_t size = list ? entries : 4;
+    while (!list && size < entries * 2) {
+        size *= 2;
+    }
+    char *copy = cbm_arena_strndup(a, scope, n);
+    cbm_type_scope_index_t *ix = (cbm_type_scope_index_t *)cbm_arena_alloc(a, sizeof(*ix));
+    cbm_type_scope_entry_t *slots =
+        (cbm_type_scope_entry_t *)cbm_arena_alloc(a, (size_t)size * sizeof(*slots));
+    if (!copy || !ix || !slots) {
+        return NULL;
+    }
+    memset(slots, 0, (size_t)size * sizeof(*slots));
+    *ix = (cbm_type_scope_index_t){.text = copy, .slots = slots, .mask = list ? 0 : size - 1};
+    for (char *p = copy; p && *p;) {
+        char *bar = strchr(p, '|');
+        if (bar) {
+            *bar = '\0';
+        }
+        char *eq = strchr(p, '=');
+        if (eq && eq > p && eq[1]) {
+            *eq = '\0';
+            uint32_t len = (uint32_t)(eq - p);
+            cbm_type_scope_entry_t e = {
+                .name = (uint32_t)(p - copy), .len = len, .qn = (uint32_t)(eq + 1 - copy)};
+            uint32_t at = list ? 0 : type_scope_hash(p, len) & ix->mask;
+            uint32_t end = list ? ix->count : UINT32_MAX;
+            while (at < end && slots[at].len &&
+                   !(slots[at].len == len && memcmp(copy + slots[at].name, p, len) == 0)) {
+                at = list ? at + 1 : (at + 1) & ix->mask;
+            }
+            if (list && at == ix->count) {
+                slots[ix->count++] = e;
+            } else if (!list && !slots[at].len) {
+                slots[at] = e;
+            }
+        }
+        p = bar ? bar + 1 : NULL;
+    }
+    return ix;
+}
+
+const char *cbm_type_scope_find(const cbm_type_scope_index_t *ix, const char *name,
+                                size_t name_len) {
+    if (!ix || !name || name_len == 0) {
+        return NULL;
+    }
+    const cbm_type_scope_entry_t *slots = ix->slots;
+    if (ix->mask == 0) {
+        for (uint32_t i = 0; i < ix->count; i++) {
+            if (slots[i].len == name_len && memcmp(ix->text + slots[i].name, name, name_len) == 0) {
+                return ix->text + slots[i].qn;
+            }
+        }
+        return NULL;
+    }
+    uint32_t at = type_scope_hash(name, name_len) & ix->mask;
+    while (slots[at].len) {
+        if (slots[at].len == name_len && memcmp(ix->text + slots[at].name, name, name_len) == 0) {
+            return ix->text + slots[at].qn;
+        }
+        at = (at + 1) & ix->mask;
+    }
+    return NULL;
+}

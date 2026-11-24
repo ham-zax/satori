@@ -154,6 +154,7 @@ typedef struct {
     const char *receiver;               /* Go method receiver (NULL if none) */
     const char *docstring;              /* leading doc comment (NULL if none) */
     const char *parent_class;           /* enclosing class QN for methods (NULL if none) */
+    const char *decl_namespace;         /* C# type declared namespace (NULL if unknown/nested) */
     const char **decorators;            /* NULL-terminated array (NULL if none) */
     const char **base_classes;          /* NULL-terminated array (NULL if none) */
     const char **param_names;           /* NULL-terminated array (NULL if none) */
@@ -246,7 +247,25 @@ typedef struct CBMFileResult {
     const char **global_vars;
     bool has_error;
     const char *error_msg;
+    bool cpp_test_macro_names;
 } CBMFileResult;
+
+typedef struct CBMTestSpanMap CBMTestSpanMap;
+
+static inline const char *cbm_test_span_owner_qn(const CBMTestSpanMap *map, TSNode func_node) {
+    (void)map;
+    (void)func_node;
+    return NULL;
+}
+
+const char *cbm_php_mask_inline_html(CBMArena *arena, const char *source, int source_len);
+const char *cbm_c_mask_crlf_splices(CBMArena *arena, const char *source, int source_len);
+
+static inline TSTree *cbm_parse_source(TSParser *parser, const char *source, uint32_t source_len,
+                                       TSParseOptions opts) {
+    (void)opts;
+    return ts_parser_parse_string(parser, NULL, source, source_len);
+}
 
 static inline bool cbm_label_is_type_like(const char* label) {
     return label && (strcmp(label, "Type") == 0 || strcmp(label, "Interface") == 0 ||

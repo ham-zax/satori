@@ -35,7 +35,7 @@ const TSLanguage *tree_sitter_c(void) {
     return tree_sitter_cpp();
 }
 
-#define SATORI_ENGINE_VERSION_STR "cbm-11b662f9+satori-multilang-semantic-v2"
+#define SATORI_ENGINE_VERSION_STR "cbm-9a4da7a3+satori-multilang-semantic-v3"
 
 typedef struct {
     char *path;
@@ -195,6 +195,30 @@ static TSPoint satori_source_end_point(const char *source, uint32_t len) {
     return end;
 }
 
+const char *cbm_c_mask_crlf_splices(CBMArena *a, const char *source, int source_len) {
+    if (!a || !source) {
+        return source;
+    }
+    char *out = NULL;
+    for (int i = 0; i + 2 < source_len; i++) {
+        if (source[i] != '\\' || source[i + 1] != '\r' || source[i + 2] != '\n') {
+            continue;
+        }
+        if (!out) {
+            out = (char *)cbm_arena_alloc(a, (size_t)source_len + 1);
+            if (!out) {
+                return source;
+            }
+            memcpy(out, source, (size_t)source_len);
+            out[source_len] = '\0';
+        }
+        out[i] = ' ';
+        out[i + 1] = '\\';
+        i += 2;
+    }
+    return out ? out : source;
+}
+
 static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf) {
     const TSLanguage *language = ts_parser_language(parser);
     if (language != s_tree_cache_language) {
@@ -208,11 +232,19 @@ static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf)
         return ts_tree_copy(entry->tree);
     }
 
+    CBMArena mask_arena;
+    cbm_arena_init(&mask_arena);
     const char *source = sf->source;
     uint32_t source_len = sf->source_len;
+    if (language == tree_sitter_cpp()) {
+        source = cbm_c_mask_crlf_splices(&mask_arena, source, (int)source_len);
+    } else if (language == tree_sitter_php_only()) {
+        source = cbm_php_mask_inline_html(&mask_arena, source, (int)source_len);
+    }
     SatoriStringInput input = {source, source_len, source_len > 0 && source[source_len - 1] != '\n'};
     TSInput ts_input = {&input, satori_string_read, TSInputEncodingUTF8};
     TSTree *tree = ts_parser_parse(parser, NULL, ts_input);
+    cbm_arena_destroy(&mask_arena);
     if (tree && input.virtual_newline) {
         TSPoint end = satori_source_end_point(source, source_len);
         TSInputEdit drop_virtual_newline = {
@@ -1337,6 +1369,173 @@ static int extract_ast_imports(GoLSPContext *ctx, TSNode root, const char *sourc
     return SATORI_SEMANTIC_OK;
 }
 
+static CBMRegisteredType *go_find_mutable_type(CBMTypeRegistry *reg, const char *qn) {
+    if (!reg || !qn) return NULL;
+    for (int i = reg->type_count - 1; i >= 0; i--) {
+        if (reg->types[i].qualified_name && strcmp(reg->types[i].qualified_name, qn) == 0) {
+            return &reg->types[i];
+        }
+    }
+    return NULL;
+}
+
+static int go_populate_file_types_and_values(CBMArena *arena, CBMTypeRegistry *reg,
+                                             const SatoriGoPackageTable *packages,
+                                             const char *package_qn, const char *source,
+                                             uint32_t source_len, TSNode root) {
+    if (ts_node_is_null(root) || !source || !package_qn) return SATORI_SEMANTIC_OK;
+    GoLSPContext tmp_ctx;
+    go_lsp_init(&tmp_ctx, arena, source, (int)source_len, reg, package_qn, NULL);
+    int status = extract_ast_imports(&tmp_ctx, root, source, packages);
+    if (status != SATORI_SEMANTIC_OK) return status;
+
+    uint32_t kn = 0;
+    TSNode *kids = cbm_lsp_collect_children(arena, root, &kn);
+    if (kn > 0 && !kids) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode top = kids[i];
+        if (ts_node_is_null(top) || !ts_node_is_named(top)) continue;
+        const char *tk = ts_node_type(top);
+
+        if (strcmp(tk, "type_declaration") == 0) {
+            uint32_t td_nc = ts_node_child_count(top);
+            for (uint32_t j = 0; j < td_nc; j++) {
+                TSNode spec = ts_node_child(top, j);
+                if (ts_node_is_null(spec) || !ts_node_is_named(spec)) continue;
+                const char *sk = ts_node_type(spec);
+                if (strcmp(sk, "type_alias") == 0) {
+                    TSNode aname = ts_node_child_by_field_name(spec, "name", 4);
+                    TSNode atype = ts_node_child_by_field_name(spec, "type", 4);
+                    if (ts_node_is_null(aname) || ts_node_is_null(atype)) continue;
+                    char *alias_name = cbm_node_text(arena, aname, source);
+                    if (!alias_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                    const char *alias_qn = cbm_arena_sprintf(arena, "%s.%s", package_qn, alias_name);
+                    if (!alias_qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                    CBMRegisteredType *rt = go_find_mutable_type(reg, alias_qn);
+                    if (rt && !rt->alias_of) {
+                        const CBMType *parsed = go_parse_type_node(&tmp_ctx, atype);
+                        if (parsed && parsed->kind == CBM_TYPE_NAMED && parsed->data.named.qualified_name) {
+                            rt->alias_of = parsed->data.named.qualified_name;
+                        }
+                    }
+                    continue;
+                }
+                if (strcmp(sk, "type_spec") != 0) continue;
+                TSNode tname = ts_node_child_by_field_name(spec, "name", 4);
+                TSNode tnode = ts_node_child_by_field_name(spec, "type", 4);
+                if (ts_node_is_null(tname) || ts_node_is_null(tnode)) continue;
+                if (strcmp(ts_node_type(tnode), "struct_type") != 0) continue;
+                char *type_name = cbm_node_text(arena, tname, source);
+                if (!type_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                const char *type_qn = cbm_arena_sprintf(arena, "%s.%s", package_qn, type_name);
+                if (!type_qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                CBMRegisteredType *rt = go_find_mutable_type(reg, type_qn);
+                if (!rt) continue;
+
+                TSNode field_list = ts_node_child_by_field_name(tnode, "body", 4);
+                if (ts_node_is_null(field_list) && ts_node_named_child_count(tnode) > 0) {
+                    field_list = ts_node_named_child(tnode, 0);
+                }
+                if (ts_node_is_null(field_list)) continue;
+                uint32_t fl_nc = ts_node_named_child_count(field_list);
+                if (fl_nc == 0) continue;
+                const char **embeds = (const char **)cbm_arena_alloc(arena, (fl_nc + 1) * sizeof(const char *));
+                const char **fnames = (const char **)cbm_arena_alloc(arena, (fl_nc * 2 + 1) * sizeof(const char *));
+                const CBMType **ftypes = (const CBMType **)cbm_arena_alloc(arena, (fl_nc * 2 + 1) * sizeof(const CBMType *));
+                if (!embeds || !fnames || !ftypes) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                int ecount = 0, fcount = 0;
+
+                for (uint32_t f = 0; f < fl_nc; f++) {
+                    TSNode fdecl = ts_node_named_child(field_list, f);
+                    if (ts_node_is_null(fdecl) || strcmp(ts_node_type(fdecl), "field_declaration") != 0) continue;
+                    TSNode ftype_node = ts_node_child_by_field_name(fdecl, "type", 4);
+                    if (ts_node_is_null(ftype_node)) continue;
+                    const CBMType *ft = go_parse_type_node(&tmp_ctx, ftype_node);
+                    TSNode fname_node = ts_node_child_by_field_name(fdecl, "name", 4);
+                    if (ts_node_is_null(fname_node)) {
+                        const CBMType *base = ft;
+                        while (base && base->kind == CBM_TYPE_POINTER) base = base->data.pointer.elem;
+                        if (base && base->kind == CBM_TYPE_NAMED && base->data.named.qualified_name) {
+                            const char *eq = base->data.named.qualified_name;
+                            embeds[ecount++] = eq;
+                            const char *dot = strrchr(eq, '.');
+                            fnames[fcount] = dot ? dot + 1 : eq;
+                            ftypes[fcount] = ft;
+                            fcount++;
+                        }
+                    } else {
+                        uint32_t dnc = ts_node_child_count(fdecl);
+                        for (uint32_t fc = 0; fc < dnc; fc++) {
+                            const char *fn = ts_node_field_name_for_child(fdecl, fc);
+                            if (fn && strcmp(fn, "name") == 0) {
+                                char *field_id = cbm_node_text(arena, ts_node_child(fdecl, fc), source);
+                                if (field_id && field_id[0]) {
+                                    fnames[fcount] = field_id;
+                                    ftypes[fcount] = ft;
+                                    fcount++;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (ecount > 0) {
+                    embeds[ecount] = NULL;
+                    rt->embedded_types = embeds;
+                }
+                if (fcount > 0) {
+                    fnames[fcount] = NULL;
+                    ftypes[fcount] = NULL;
+                    rt->field_names = fnames;
+                    rt->field_types = ftypes;
+                }
+            }
+            continue;
+        }
+
+        if (strcmp(tk, "var_declaration") == 0 || strcmp(tk, "const_declaration") == 0) {
+            uint32_t vc = ts_node_named_child_count(top);
+            for (uint32_t j = 0; j < vc; j++) {
+                TSNode spec = ts_node_named_child(top, j);
+                if (ts_node_is_null(spec)) continue;
+                const char *sk = ts_node_type(spec);
+                if (strcmp(sk, "var_spec") != 0 && strcmp(sk, "const_spec") != 0) continue;
+                TSNode vname = ts_node_child_by_field_name(spec, "name", 4);
+                if (ts_node_is_null(vname)) continue;
+                char *var_name = cbm_node_text(arena, vname, source);
+                if (!var_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                if (!var_name[0]) continue;
+                TSNode vtype_node = ts_node_child_by_field_name(spec, "type", 4);
+                TSNode vval_node = ts_node_child_by_field_name(spec, "value", 5);
+                const CBMType *val_type = cbm_type_unknown();
+                if (!ts_node_is_null(vtype_node)) {
+                    val_type = go_parse_type_node(&tmp_ctx, vtype_node);
+                } else if (!ts_node_is_null(vval_node)) {
+                    TSNode expr = vval_node;
+                    if (strcmp(ts_node_type(expr), "expression_list") == 0 &&
+                        ts_node_named_child_count(expr) == 1) {
+                        expr = ts_node_named_child(expr, 0);
+                    }
+                    val_type = go_eval_expr_type(&tmp_ctx, expr);
+                }
+                const CBMType **rets = (const CBMType **)cbm_arena_alloc(arena, 2 * sizeof(const CBMType *));
+                if (!rets) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                rets[0] = val_type ? val_type : cbm_type_unknown();
+                rets[1] = NULL;
+                CBMRegisteredFunc rf;
+                memset(&rf, 0, sizeof(rf));
+                rf.qualified_name = cbm_arena_sprintf(arena, "%s.%s", package_qn, var_name);
+                if (!rf.qualified_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                rf.short_name = var_name;
+                rf.flags = CBM_FUNC_FLAG_VALUE;
+                rf.signature = cbm_type_func(arena, NULL, NULL, rets);
+                cbm_registry_add_func(reg, rf);
+            }
+        }
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
 static int extract_ast_definitions(CBMArena *arena, CBMTypeRegistry *reg, SatoriDefLocArray *def_locs,
                                    TSNode root, const char *source, const char *pkg_name,
                                    const char *import_path, const char *file_path, uint32_t file_path_len) {
@@ -1409,7 +1608,8 @@ static int extract_ast_definitions(CBMArena *arena, CBMTypeRegistry *reg, Satori
             for (uint32_t t = 0; t < td_nc; t++) {
                 TSNode spec = ts_node_child(child, t);
                 if (ts_node_is_null(spec) || !ts_node_is_named(spec)) continue;
-                if (strcmp(ts_node_type(spec), "type_spec") != 0) continue;
+                const char *spec_kind = ts_node_type(spec);
+                if (strcmp(spec_kind, "type_spec") != 0 && strcmp(spec_kind, "type_alias") != 0) continue;
                 TSNode tname = ts_node_child_by_field_name(spec, "name", 4);
                 if (ts_node_is_null(tname)) continue;
                 char *type_name = cbm_node_text(arena, tname, source);
@@ -1421,6 +1621,17 @@ static int extract_ast_definitions(CBMArena *arena, CBMTypeRegistry *reg, Satori
                 rt.qualified_name = cbm_arena_sprintf(arena, "%s.%s", pkg_name, type_name);
                 if (!rt.qualified_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
                 rt.short_name = type_name;
+                if (strcmp(spec_kind, "type_alias") == 0) {
+                    TSNode ttype = ts_node_child_by_field_name(spec, "type", 4);
+                    if (!ts_node_is_null(ttype) && strcmp(ts_node_type(ttype), "type_identifier") == 0) {
+                        char *target_name = cbm_node_text(arena, ttype, source);
+                        if (!target_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                        if (target_name[0]) {
+                            rt.alias_of = cbm_arena_sprintf(arena, "%s.%s", pkg_name, target_name);
+                            if (!rt.alias_of) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                        }
+                    }
+                }
                 cbm_registry_add_type(reg, rt);
                 int add_status = def_locs_add(def_locs, rt.qualified_name, file_path, file_path_len,
                                               ts_node_start_byte(child), ts_node_end_byte(child),
@@ -1972,6 +2183,7 @@ static int resolve_java_project(SatoriSession *s) {
         cbm_java_stdlib_register(&registry, &s->arena);
         cbm_java_register_lsp_defs(&s->arena, &registry, defs.items, (int)defs.count);
         cbm_registry_finalize(&registry);
+        registry.read_only = true;
 
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
@@ -2341,11 +2553,14 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             set_session_error(s, "Out of memory deriving source identity");
             goto cleanup;
         }
+        const char *file_source = kotlin
+            ? sf->source
+            : cbm_php_mask_inline_html(&s->arena, sf->source, (int)sf->source_len);
         TSNode root = ts_tree_root_node(trees[i]);
         meta[i].eligible = !ts_node_has_error(root);
         if (kotlin) {
-            meta[i].scope_qn = kotlin_package_name(&s->arena, root, sf->source);
-        } else if (!php_namespace_name(&s->arena, root, sf->source, &meta[i].scope_qn)) {
+            meta[i].scope_qn = kotlin_package_name(&s->arena, root, file_source);
+        } else if (!php_namespace_name(&s->arena, root, file_source, &meta[i].scope_qn)) {
             meta[i].eligible = false;
         }
         if (!meta[i].scope_qn) {
@@ -2359,7 +2574,7 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             continue;
         }
         SatoriScopedDefSink sink = {
-            .arena = &s->arena, .defs = &defs, .def_locs = &def_locs, .source = sf->source,
+            .arena = &s->arena, .defs = &defs, .def_locs = &def_locs, .source = file_source,
             .file = sf, .meta = &meta[i], .lang = kotlin ? CBM_LANG_KOTLIN : CBM_LANG_PHP,
         };
         status = kotlin ? kotlin_collect_definitions(&sink, root, NULL) : php_collect_definitions(&sink, root);
@@ -2401,6 +2616,7 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             CBMTypeRegistry overlay;
             cbm_registry_init(&overlay, &file_arena);
             overlay.fallback = &registry;
+            overlay.tail_arena = &file_arena;
             KotlinLSPContext ctx;
             kotlin_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
                             &overlay, meta[i].scope_qn, meta[i].scope_qn, "", NULL, &resolved);
@@ -2411,8 +2627,10 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             cbm_php_stdlib_register(&registry, &file_arena);
             cbm_php_register_lsp_defs(&file_arena, &file_arena, &registry, defs.items, (int)defs.count);
             cbm_registry_finalize(&registry);
+            const char *php_source = cbm_php_mask_inline_html(&file_arena, s->sources[i].source,
+                                                              (int)s->sources[i].source_len);
             PHPLSPContext ctx;
-            php_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
+            php_lsp_init(&ctx, &file_arena, php_source, (int)s->sources[i].source_len,
                          &registry, meta[i].scope_qn, &resolved);
             php_lsp_process_file(&ctx, root);
         }
@@ -2483,6 +2701,60 @@ static const char *join_dotted_scope(CBMArena *arena, const char *prefix, const 
     return cbm_arena_sprintf(arena, "%s.%s", prefix, name);
 }
 
+static const char *cpp_normalize_scope_text(CBMArena *arena, const char *text);
+
+static const char *csharp_extract_base_types(CBMArena *arena, TSNode type_decl, const char *source,
+                                             const char *scope_prefix) {
+    uint32_t nc = ts_node_named_child_count(type_decl);
+    TSNode base_list = {0};
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_named_child(type_decl, i);
+        if (strcmp(ts_node_type(c), "base_list") == 0) {
+            base_list = c;
+            break;
+        }
+    }
+    if (ts_node_is_null(base_list)) return NULL;
+    uint32_t bnc = ts_node_named_child_count(base_list);
+    if (bnc == 0) return NULL;
+    size_t total_len = 0;
+    const char *items[32];
+    int count = 0;
+    for (uint32_t i = 0; i < bnc && count < 32; i++) {
+        TSNode entry = ts_node_named_child(base_list, i);
+        if (strcmp(ts_node_type(entry), "simple_base_type") == 0 && ts_node_named_child_count(entry) > 0) {
+            entry = ts_node_named_child(entry, 0);
+        }
+        if (strcmp(ts_node_type(entry), "generic_name") == 0 && ts_node_named_child_count(entry) > 0) {
+            entry = ts_node_named_child(entry, 0);
+        }
+        char *raw = cbm_node_text(arena, entry, source);
+        if (!raw || !raw[0]) continue;
+        char *angle = strchr(raw, '<');
+        if (angle) *angle = '\0';
+        const char *norm = cpp_normalize_scope_text(arena, raw);
+        if (!norm || !norm[0]) continue;
+        const char *qn = (!strchr(norm, '.') && scope_prefix && scope_prefix[0])
+            ? join_dotted_scope(arena, scope_prefix, norm)
+            : norm;
+        if (!qn) continue;
+        items[count++] = qn;
+        total_len += strlen(qn) + 1;
+    }
+    if (count == 0) return NULL;
+    char *joined = (char *)cbm_arena_alloc(arena, total_len + 1);
+    if (!joined) return NULL;
+    size_t pos = 0;
+    for (int i = 0; i < count; i++) {
+        size_t len = strlen(items[i]);
+        if (i > 0) joined[pos++] = '|';
+        memcpy(joined + pos, items[i], len);
+        pos += len;
+    }
+    joined[pos] = '\0';
+    return joined;
+}
+
 static int csharp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
                                       SatoriDefLocArray *def_locs, TSNode node,
                                       const char *source, const char *namespace_qn,
@@ -2496,8 +2768,7 @@ static int csharp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
     if (satori_node_within_exclusion(exclusions, node)) return SATORI_SEMANTIC_OK;
     bool excluded = satori_range_excluded(exclusions, ts_node_start_byte(node), ts_node_end_byte(node));
     const char *kind = ts_node_type(node);
-    if (strcmp(kind, "namespace_declaration") == 0 ||
-        strcmp(kind, "file_scoped_namespace_declaration") == 0) {
+    if (strcmp(kind, "namespace_declaration") == 0) {
         TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
         char *name = ts_node_is_null(name_node) ? NULL : cbm_node_text(arena, name_node, source);
         if (!ts_node_is_null(name_node) && !name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
@@ -2536,6 +2807,10 @@ static int csharp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
         def.label = csharp_type_label(kind);
         def.def_module_qn = module_qn;
         def.namespace_name = namespace_qn;
+        const char *base_scope = owner_qn && owner_qn[0]
+            ? owner_qn
+            : (namespace_qn && namespace_qn[0] ? namespace_qn : module_qn);
+        def.embedded_types = csharp_extract_base_types(arena, node, source, base_scope);
         def.is_interface = strcmp(def.label, "Interface") == 0;
         def.lang = CBM_LANG_CSHARP;
         TSNode body = ts_node_child_by_field_name(node, "body", 4);
@@ -2605,11 +2880,32 @@ static int csharp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
         return SATORI_SEMANTIC_OK;
     }
 
+    const char *active_namespace = namespace_qn;
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (strcmp(ts_node_type(child), "file_scoped_namespace_declaration") == 0) {
+            TSNode name_node = ts_node_child_by_field_name(child, "name", 4);
+            char *name = ts_node_is_null(name_node) ? NULL : cbm_node_text(arena, name_node, source);
+            if (!ts_node_is_null(name_node) && !name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+            if (name && name[0]) {
+                active_namespace = join_dotted_scope(arena, active_namespace, name);
+                if (!active_namespace) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+            }
+            uint32_t fs_count = ts_node_named_child_count(child);
+            for (uint32_t j = 0; j < fs_count; j++) {
+                TSNode fs_child = ts_node_named_child(child, j);
+                if (!ts_node_is_null(name_node) && ts_node_eq(fs_child, name_node)) continue;
+                int status = csharp_collect_definitions(arena, defs, def_locs, fs_child, source,
+                                                        active_namespace, owner_qn, module_qn,
+                                                        authority_root, file_path, file_path_len, exclusions);
+                if (status != SATORI_SEMANTIC_OK) return status;
+            }
+            continue;
+        }
         int status = csharp_collect_definitions(arena, defs, def_locs,
-                                                ts_node_named_child(node, i), source,
-                                                namespace_qn, owner_qn, module_qn,
+                                                child, source,
+                                                active_namespace, owner_qn, module_qn,
                                                 authority_root, file_path, file_path_len, exclusions);
         if (status != SATORI_SEMANTIC_OK) return status;
     }
@@ -2656,9 +2952,22 @@ static int resolve_csharp_project(SatoriSession *s) {
             status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
             goto cleanup;
         }
-        meta[i].module_qn = meta[i].source_dir[0]
-            ? cbm_arena_sprintf(&s->arena, "@local/%s", meta[i].source_dir)
-            : "@local/.";
+        {
+            size_t plen = strlen(meta[i].normalized_path);
+            char *mod_buf = (char *)cbm_arena_alloc(&s->arena, plen + 8);
+            if (!mod_buf) {
+                set_session_error(s, "Out of memory deriving C# module identity");
+                status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                goto cleanup;
+            }
+            memcpy(mod_buf, "@local/", 7);
+            for (size_t k = 0; k < plen; k++) {
+                char ch = meta[i].normalized_path[k];
+                mod_buf[7 + k] = (ch == '.') ? '_' : ch;
+            }
+            mod_buf[7 + plen] = '\0';
+            meta[i].module_qn = mod_buf;
+        }
         meta[i].authority_root = find_nearest_manifest_root(&s->arena, s->auxiliaries,
                                                             s->aux_count, meta[i].normalized_path);
         if (!meta[i].authority_root) meta[i].authority_root = meta[i].source_dir;
@@ -3000,6 +3309,14 @@ static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
             int status = cpp_callable_identity(arena, declarator, source, namespace_qn, owner_qn,
                                                 &qualified_name, &receiver_type, &leaf);
             if (status != SATORI_SEMANTIC_OK || !qualified_name) return status;
+            if (!receiver_type) {
+                char *test_name = cbm_cpp_test_macro_name(arena, true, leaf, node, source);
+                if (test_name) {
+                    leaf = test_name;
+                    qualified_name = cpp_join_scope(arena, namespace_qn, test_name);
+                    if (!qualified_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                }
+            }
             status = cpp_add_declaration(meta, qualified_name);
             if (status != SATORI_SEMANTIC_OK) return status;
 
@@ -3297,9 +3614,10 @@ static int resolve_cpp_project(SatoriSession *s) {
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
             goto cleanup;
         }
+        const char *masked_source = cbm_c_mask_crlf_splices(&s->arena, sf->source, (int)sf->source_len);
         TSNode root = ts_tree_root_node(trees[i]);
         TSNode guard = {0};
-        if (cpp_is_canonical_include_guard(root, sf->source)) {
+        if (cpp_is_canonical_include_guard(root, masked_source)) {
             uint32_t count = ts_node_named_child_count(root);
             for (uint32_t j = 0; j < count; j++) {
                 TSNode child = ts_node_named_child(root, j);
@@ -3313,7 +3631,7 @@ static int resolve_cpp_project(SatoriSession *s) {
                 "excluded parse-error or conditional preprocessing regions");
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
-        status = cpp_collect_definitions(&s->arena, &defs, &def_locs, root, sf->source,
+        status = cpp_collect_definitions(&s->arena, &defs, &def_locs, root, masked_source,
                                          "", NULL, sf->path, sf->path_len, &meta[i], true);
         if (status != SATORI_SEMANTIC_OK) {
             set_session_error(s, status == SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED
@@ -4066,6 +4384,28 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
                 status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
                 goto cleanup;
             }
+        }
+    }
+
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        if (!source_meta[i].definitions_eligible) continue;
+        SatoriSourceFile *sf = &s->sources[i];
+        bool had_tree = trees[i] != NULL;
+        if (!satori_retained_or_parsed_tree(parser, &trees[i], sf)) {
+            set_session_error(s, "Tree-sitter parser failed to parse source file");
+            status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+            goto cleanup;
+        }
+        status = go_populate_file_types_and_values(&s->arena, &reg, &packages,
+                                                   source_meta[i].package_qn, sf->source,
+                                                   sf->source_len, ts_tree_root_node(trees[i]));
+        if (!had_tree && trees[i]) {
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
+        }
+        if (status != SATORI_SEMANTIC_OK) {
+            set_session_error(s, "Out of memory populating Go struct embeds and values");
+            goto cleanup;
         }
     }
 

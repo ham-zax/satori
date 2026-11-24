@@ -28,9 +28,11 @@ import {
 import { getSatoriRuntimeIdentity } from "../../scripts/satori-runtime-identity.mjs";
 export { getSatoriRuntimeIdentity } from "../../scripts/satori-runtime-identity.mjs";
 import {
+    HYBRID_TOOLS,
     MAX_AGENT_DISCOVERY_TOOL_CALLS,
     NATIVE_TOOLS,
     SATORI_TOOLS,
+    SCOPE_PROFILES,
 } from "./opencode-guard.mjs";
 import {
     readSourceLedgerSlice,
@@ -55,6 +57,11 @@ const MAX_TOOL_CALLS = MAX_AGENT_DISCOVERY_TOOL_CALLS;
 const MAX_MODEL_STEPS = MAX_TOOL_CALLS + 2;
 const MODES = new Set(["natural", "coverage"]);
 const PREPARE_MODES = new Set(["sync", "status"]);
+const FIRST_CALL_MODES = new Set(["scripted", "unscripted"]);
+const DEFAULT_FIRST_CALL = "scripted";
+const DEFAULT_SCOPE_PROFILE = "production";
+const VALID_ARMS = Object.freeze(["native", "satori", "hybrid"]);
+const DEFAULT_ARMS = Object.freeze(["native", "satori"]);
 const ARM_ORDER = Object.freeze([
     Object.freeze(["native", "satori"]),
     Object.freeze(["satori", "native"]),
@@ -79,6 +86,9 @@ function usage() {
         "  --task <id>                    Repeat to select tasks; default: all tasks",
         `  --repetitions <count>           Default: ${DEFAULT_REPETITIONS}; acceptance fixes ${PHASE0_ACCEPTANCE_REPETITIONS}`,
         "  --mode <natural|coverage>       Default: natural",
+        "  --first-call <scripted|unscripted> Default: scripted",
+        "  --arms <list>                   Comma-separated native,satori,hybrid; default: native,satori",
+        "  --scope-profile <profile>       production|production_and_tests; default: production",
         "  --prepare <sync|status>         Default: sync; setup is not measured",
         "  --output-dir <directory>        Default: .satori/benchmarks/agent-discovery",
         "  --variant <name>                Optional provider reasoning variant",
@@ -97,6 +107,22 @@ function positiveInteger(value, label) {
     return parsed;
 }
 
+function parseArmsList(value) {
+    const entries = value.split(",").map((entry) => entry.trim());
+    if (entries.length === 0 || entries.some((entry) => entry.length === 0)) {
+        throw new Error("--arms must be a non-empty comma-separated list of arms.");
+    }
+    for (const arm of entries) {
+        if (!VALID_ARMS.includes(arm)) {
+            throw new Error(`Unsupported arm '${arm}'.`);
+        }
+    }
+    if (new Set(entries).size !== entries.length) {
+        throw new Error("--arms must not contain duplicate arms.");
+    }
+    return entries;
+}
+
 export function parseArgs(argv, environment = process.env) {
     const acceptanceBaseline = argv.includes("--acceptance-baseline");
     const options = {
@@ -109,6 +135,9 @@ export function parseArgs(argv, environment = process.env) {
             ? PHASE0_ACCEPTANCE_REPETITIONS
             : DEFAULT_REPETITIONS,
         mode: "natural",
+        firstCall: DEFAULT_FIRST_CALL,
+        arms: [...DEFAULT_ARMS],
+        scopeProfile: DEFAULT_SCOPE_PROFILE,
         prepare: "sync",
         outputDir: null,
         variant: null,
@@ -141,6 +170,12 @@ export function parseArgs(argv, environment = process.env) {
             options.repetitions = positiveInteger(next(), argument);
         } else if (argument === "--mode") {
             options.mode = next();
+        } else if (argument === "--first-call") {
+            options.firstCall = next();
+        } else if (argument === "--arms") {
+            options.arms = parseArmsList(next());
+        } else if (argument === "--scope-profile") {
+            options.scopeProfile = next();
         } else if (argument === "--prepare") {
             options.prepare = next();
         } else if (argument === "--output-dir") {
@@ -163,6 +198,15 @@ export function parseArgs(argv, environment = process.env) {
     }
 
     if (!MODES.has(options.mode)) throw new Error(`Unsupported mode '${options.mode}'.`);
+    if (!FIRST_CALL_MODES.has(options.firstCall)) {
+        throw new Error(`Unsupported first-call mode '${options.firstCall}'.`);
+    }
+    if (!SCOPE_PROFILES.includes(options.scopeProfile)) {
+        throw new Error(`Unsupported scope profile '${options.scopeProfile}'.`);
+    }
+    if (options.arms.length === 0) {
+        throw new Error("--arms must specify at least one arm.");
+    }
     if (!PREPARE_MODES.has(options.prepare)) {
         throw new Error(`Unsupported preparation mode '${options.prepare}'.`);
     }
@@ -180,6 +224,15 @@ export function parseArgs(argv, environment = process.env) {
             violations.push(`exactly ${PHASE0_ACCEPTANCE_REPETITIONS} repetitions`);
         }
         if (options.mode !== "natural") violations.push("natural mode");
+        if (options.firstCall !== DEFAULT_FIRST_CALL) {
+            violations.push("scripted first-call mode");
+        }
+        if (JSON.stringify(options.arms) !== JSON.stringify(DEFAULT_ARMS)) {
+            violations.push("the frozen native,satori arms");
+        }
+        if (options.scopeProfile !== DEFAULT_SCOPE_PROFILE) {
+            violations.push("production scope profile");
+        }
         if (options.prepare !== "sync") violations.push("sync preparation");
         if (options.model !== DEFAULT_MODEL) violations.push(`the frozen model ${DEFAULT_MODEL}`);
         if (options.variant !== null) violations.push("the default model variant");
@@ -400,11 +453,17 @@ export function rejectReusedSessions(runs) {
     }
 }
 
-export function buildRunSchedule(tasks, repetitions = DEFAULT_REPETITIONS) {
+export function buildRunSchedule(tasks, repetitions = DEFAULT_REPETITIONS, arms = DEFAULT_ARMS) {
+    const isDefaultPair = arms.length === 2 && arms[0] === "native" && arms[1] === "satori";
     return tasks.flatMap((task) => Array.from({ length: repetitions }, (_, repetitionIndex) => {
         const repetition = repetitionIndex + 1;
-        const arms = ARM_ORDER[repetitionIndex % ARM_ORDER.length];
-        return arms.map((arm, orderIndex) => ({
+        const orderedArms = isDefaultPair
+            ? ARM_ORDER[repetitionIndex % ARM_ORDER.length]
+            : (() => {
+                const shift = repetitionIndex % arms.length;
+                return [...arms.slice(shift), ...arms.slice(0, shift)];
+            })();
+        return orderedArms.map((arm, orderIndex) => ({
             taskId: task.id,
             repetition,
             arm,
@@ -413,7 +472,16 @@ export function buildRunSchedule(tasks, repetitions = DEFAULT_REPETITIONS) {
     }).flat());
 }
 
-function commonPromptRules(repoRoot, task, arm, mode) {
+function commonPromptRules(repoRoot, task, arm, mode, scopeProfile = DEFAULT_SCOPE_PROFILE) {
+    const scopeRules = scopeProfile === "production_and_tests"
+        ? [
+            "- Inspect TypeScript (including *.test.ts) only under packages/core/src and packages/mcp/src.",
+            "- Never inspect docs, evaluator files, Git history, or prior results.",
+        ]
+        : [
+            "- Inspect production TypeScript only under packages/core/src and packages/mcp/src.",
+            "- Never inspect *.test.ts, docs, evaluator files, Git history, or prior results.",
+        ];
     return [
         "You are one measured arm of a deterministic code-discovery evaluation.",
         "All run values are complete. Do not ask the user or harness any questions.",
@@ -427,8 +495,7 @@ function commonPromptRules(repoRoot, task, arm, mode) {
         "",
         "Rules:",
         "- Treat the repository as read-only.",
-        "- Inspect production TypeScript only under packages/core/src and packages/mcp/src.",
-        "- Never inspect *.test.ts, docs, evaluator files, Git history, or prior results.",
+        ...scopeRules,
         `- Make at most ${MAX_TOOL_CALLS} tool calls; parallel calls are allowed and each call is measured.`,
         "- Follow visible evidence from one result to the next; do not use a remembered path.",
         "- Stop as soon as the owner source, complete span, required relationships, and facts are proven.",
@@ -438,34 +505,53 @@ function commonPromptRules(repoRoot, task, arm, mode) {
     ];
 }
 
-function nativePromptRules() {
+function nativePromptRules(scopeProfile = DEFAULT_SCOPE_PROFILE) {
+    const scopeLine = scopeProfile === "production_and_tests"
+        ? "- Every grep/glob path and read file must be inside packages/core/src or packages/mcp/src (including *.test.ts)."
+        : "- Every grep/glob path and read file must be inside an allowed production source root.";
     return [
         "Native-arm tools and constraints:",
         "- Use only grep, glob, and read.",
-        "- Every grep/glob path and read file must be inside an allowed production source root.",
+        scopeLine,
         "- Every read call must specify a positive limit no greater than 200 lines.",
         "- Discover a path with grep/glob before reading it.",
         "- Start with a term or identifier from the task, then refine only from visible results.",
     ];
 }
 
-function satoriPromptRules(repoRoot, task, mode) {
+function satoriPromptRules(
+    repoRoot,
+    task,
+    mode,
+    firstCall = DEFAULT_FIRST_CALL,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
+) {
+    const readRule = scopeProfile === "production_and_tests"
+        ? "- satori_read_file takes a TypeScript file path (including *.test.ts) under packages/core/src or packages/mcp/src."
+        : "- satori_read_file takes a production file path under packages/core/src or packages/mcp/src.";
+    const firstCallLines = firstCall === "scripted"
+        ? [
+            "- The first call must be satori_search_codebase with exactly these arguments:",
+            JSON.stringify({
+                path: repoRoot,
+                query: task.satoriQuery,
+                scope: "runtime",
+                resultMode: "grouped",
+                groupBy: "symbol",
+                rankingMode: "default",
+                limit: 5,
+            }),
+        ]
+        : [
+            "- Choose your own initial query and Satori tool sequence freely from the task.",
+        ];
     const natural = [
         "Satori-arm tools and constraints:",
         "- Use only satori_search_codebase, satori_read_file, satori_file_outline, and satori_call_graph.",
-        "- The first call must be satori_search_codebase with exactly these arguments:",
-        JSON.stringify({
-            path: repoRoot,
-            query: task.satoriQuery,
-            scope: "runtime",
-            resultMode: "grouped",
-            groupBy: "symbol",
-            rankingMode: "default",
-            limit: 5,
-        }),
+        ...firstCallLines,
         "- Use target.file and target.symbolId from visible search evidence; do not invent them.",
         `- Pass the canonical index root REPO_ROOT (${repoRoot}) as the path argument to satori_search_codebase, satori_file_outline, and satori_call_graph. Never pass a subdirectory path.`,
-        "- satori_read_file takes a production file path under packages/core/src or packages/mcp/src.",
+        readRule,
         "- Restrict a search to a subdirectory with a path: filter in the query, for example: path:packages/mcp/src/core.",
         "- Use the fewest Satori operations needed to prove the answer.",
     ];
@@ -477,7 +563,61 @@ function satoriPromptRules(repoRoot, task, mode) {
     ];
 }
 
-export function buildAgentPrompt({ repoRoot, task, arm, mode }) {
+function hybridPromptRules(
+    repoRoot,
+    task,
+    mode,
+    firstCall = DEFAULT_FIRST_CALL,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
+) {
+    const scopeLine = scopeProfile === "production_and_tests"
+        ? "- Every grep/glob/read/satori_read_file path must be inside packages/core/src or packages/mcp/src (including *.test.ts)."
+        : "- Every grep/glob/read/satori_read_file path must be inside an allowed production source root under packages/core/src or packages/mcp/src.";
+    const firstCallLines = firstCall === "scripted"
+        ? [
+            "- The first call must be satori_search_codebase with exactly these arguments:",
+            JSON.stringify({
+                path: repoRoot,
+                query: task.satoriQuery,
+                scope: "runtime",
+                resultMode: "grouped",
+                groupBy: "symbol",
+                rankingMode: "default",
+                limit: 5,
+            }),
+        ]
+        : [
+            "- Choose your own initial tool and query freely from the combined native and Satori toolset.",
+        ];
+    const lines = [
+        "Hybrid-arm tools and constraints:",
+        `- Use only ${HYBRID_TOOLS.join(", ")}.`,
+        ...firstCallLines,
+        scopeLine,
+        "- Every native read call must specify a positive limit no greater than 200 lines.",
+        "- Discover a file path via grep, glob, or Satori evidence before reading it with read.",
+        "- Use target.file and target.symbolId from visible search evidence; do not invent them.",
+        `- Pass the canonical index root REPO_ROOT (${repoRoot}) as the path argument to satori_search_codebase, satori_file_outline, and satori_call_graph. Never pass a subdirectory path.`,
+        "- Restrict a Satori search to a subdirectory with a path: filter in the query, for example: path:packages/mcp/src/core.",
+        "- Use the fewest tool calls needed to prove the answer.",
+    ];
+    if (mode === "coverage") {
+        lines.push(
+            "- Tool-coverage mode requires search, exact symbol open, exact outline, then call graph.",
+            "- Pass the complete target object from search to call graph unchanged.",
+        );
+    }
+    return lines;
+}
+
+export function buildAgentPrompt({
+    repoRoot,
+    task,
+    arm,
+    mode,
+    firstCall = DEFAULT_FIRST_CALL,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
+}) {
     const answerShape = {
         status: "success|not_found|tool_error|budget_exhausted|protocol_violation",
         answer: {
@@ -494,10 +634,12 @@ export function buildAgentPrompt({ repoRoot, task, arm, mode }) {
         },
     };
     const armRules = arm === "native"
-        ? nativePromptRules()
-        : satoriPromptRules(repoRoot, task, mode);
+        ? nativePromptRules(scopeProfile)
+        : arm === "satori"
+            ? satoriPromptRules(repoRoot, task, mode, firstCall, scopeProfile)
+            : hybridPromptRules(repoRoot, task, mode, firstCall, scopeProfile);
     return [
-        ...commonPromptRules(repoRoot, task, arm, mode),
+        ...commonPromptRules(repoRoot, task, arm, mode, scopeProfile),
         "",
         ...armRules,
         "",
@@ -530,7 +672,11 @@ export function buildOpenCodeRunArguments({
 }
 
 function agentConfiguration(arm) {
-    const allowedTools = arm === "native" ? NATIVE_TOOLS : SATORI_TOOLS;
+    const allowedTools = arm === "native"
+        ? NATIVE_TOOLS
+        : arm === "satori"
+            ? SATORI_TOOLS
+            : HYBRID_TOOLS;
     return {
         description: `Read-only ${arm} arm for the Satori agent-discovery evaluation`,
         mode: "primary",
@@ -566,6 +712,7 @@ export function buildIsolatedOpenCodeConfig(resolvedConfig, model, repoRoot) {
         agent: {
             "satori-eval-native": agentConfiguration("native"),
             "satori-eval-satori": agentConfiguration("satori"),
+            "satori-eval-hybrid": agentConfiguration("hybrid"),
         },
     };
     if (isRecord(resolvedConfig.provider)) config.provider = resolvedConfig.provider;
@@ -678,6 +825,7 @@ function isolatedEnvironment({
     configDir,
     databaseFile,
     repoRoot,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
     sourceLedgerFile,
     suiteId,
     toolLedgerFile,
@@ -699,6 +847,7 @@ function isolatedEnvironment({
         OPENCODE_ENABLE_QUESTION_TOOL: "false",
         SATORI_AGENT_DISCOVERY_RUN_ID: suiteId,
         SATORI_AGENT_DISCOVERY_REPO_ROOT: repoRoot,
+        SATORI_AGENT_DISCOVERY_SCOPE_PROFILE: scopeProfile,
         SATORI_AGENT_DISCOVERY_TOOL_LEDGER: toolLedgerFile,
         SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: toolDefinitionsFile,
         SATORI_SOURCE_MEASUREMENT_LEDGER: sourceLedgerFile,
@@ -1231,7 +1380,82 @@ function canonicalReportedSymbol(value) {
     return segments.at(-1);
 }
 
-function validateNativeToolSequence(tools, repoRoot) {
+function isPathInside(parent, candidate) {
+    const relative = path.relative(parent, candidate);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function hasTestEvidenceOutsideAllowedRoots(output, repoRoot, toolInputPath = null) {
+    if (typeof output !== "string" || !output.includes(".test.ts")) return false;
+    const allowedRoots = [
+        path.join(repoRoot, "packages/core/src"),
+        path.join(repoRoot, "packages/mcp/src"),
+    ];
+    const toolBase = typeof toolInputPath === "string" && toolInputPath.trim().length > 0
+        ? (path.isAbsolute(toolInputPath)
+            ? path.resolve(toolInputPath)
+            : path.resolve(repoRoot, toolInputPath))
+        : null;
+    const toolBaseInsideAllowed = toolBase !== null
+        && allowedRoots.some((root) => isPathInside(root, toolBase));
+    for (const match of output.matchAll(/([A-Za-z0-9_./-]+\.test\.ts)\b/g)) {
+        const candidate = match[1];
+        if (!candidate.includes("/")) continue;
+        const resolved = path.isAbsolute(candidate)
+            ? path.resolve(candidate)
+            : path.resolve(repoRoot, candidate);
+        const insideFromRepo = allowedRoots.some((root) => isPathInside(root, resolved));
+        // grep/glob output is relative to the searched directory, so a
+        // subdirectory-relative path is only valid when that base is allowed.
+        // A packages/... candidate is already repo-relative and must not be
+        // re-anchored under the search base.
+        const insideFromToolBase = !candidate.startsWith("packages/")
+            && !path.isAbsolute(candidate)
+            && toolBaseInsideAllowed
+            && allowedRoots.some((root) => isPathInside(root, path.resolve(toolBase, candidate)));
+        if (!insideFromRepo && !insideFromToolBase) return true;
+    }
+    return false;
+}
+
+function recordDiscoveredFiles(
+    discoveredFiles,
+    text,
+    scopeProfile,
+    repoRoot = null,
+    toolInputPath = null,
+) {
+    if (typeof text !== "string") return;
+    const includeTests = scopeProfile === "production_and_tests";
+    for (const match of text.matchAll(/packages\/(?:core|mcp)\/src\/[A-Za-z0-9_./-]+\.ts/g)) {
+        if (includeTests || !match[0].endsWith(".test.ts")) {
+            discoveredFiles.add(match[0]);
+        }
+    }
+    if (typeof repoRoot !== "string" || typeof toolInputPath !== "string") return;
+    const trimmedBase = toolInputPath.trim();
+    if (trimmedBase.length === 0) return;
+    const allowedRoots = [
+        path.join(repoRoot, "packages/core/src"),
+        path.join(repoRoot, "packages/mcp/src"),
+    ];
+    const toolBase = path.isAbsolute(trimmedBase)
+        ? path.resolve(trimmedBase)
+        : path.resolve(repoRoot, trimmedBase);
+    if (!allowedRoots.some((root) => isPathInside(root, toolBase))) return;
+    // Full repo-relative paths are already recorded above; only resolve paths
+    // that are relative to the searched directory (e.g. tools/read_file.ts).
+    for (const match of text.matchAll(/(?:^|[\s"'`[(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.ts)\b/gm)) {
+        const candidate = match[1];
+        if (candidate.startsWith("packages/") || candidate.split("/").includes("..")) continue;
+        const resolved = path.resolve(toolBase, candidate);
+        if (!allowedRoots.some((root) => isPathInside(root, resolved))) continue;
+        if (!includeTests && resolved.endsWith(".test.ts")) continue;
+        discoveredFiles.add(path.relative(repoRoot, resolved).replaceAll(path.sep, "/"));
+    }
+}
+
+function validateNativeToolSequence(tools, repoRoot, scopeProfile = DEFAULT_SCOPE_PROFILE) {
     const failures = [];
     const discoveredFiles = new Set();
     for (const tool of tools) {
@@ -1250,16 +1474,18 @@ function validateNativeToolSequence(tools, repoRoot) {
                 failures.push(`native_read_before_discovery:${relative}`);
             }
         } else {
-            for (const match of tool.output.matchAll(/packages\/(?:core|mcp)\/src\/[A-Za-z0-9_./-]+\.ts/g)) {
-                if (!match[0].endsWith(".test.ts")) discoveredFiles.add(match[0]);
-            }
+            recordDiscoveredFiles(discoveredFiles, tool.output, scopeProfile, repoRoot, tool.input?.path);
         }
-        if (tool.output.includes(".test.ts")) failures.push("native_test_evidence_visible");
+        if (scopeProfile === "production") {
+            if (tool.output.includes(".test.ts")) failures.push("native_test_evidence_visible");
+        } else if (hasTestEvidenceOutsideAllowedRoots(tool.output, repoRoot, tool.input?.path)) {
+            failures.push("native_test_evidence_visible");
+        }
     }
     return failures;
 }
 
-function validateSatoriToolSequence(tools, repoRoot, task, mode) {
+function validateSatoriToolSequence(tools, repoRoot, task, mode, firstCall = DEFAULT_FIRST_CALL) {
     const failures = [];
     for (const tool of tools) {
         if (!SATORI_TOOLS.includes(tool.tool)) {
@@ -1275,8 +1501,9 @@ function validateSatoriToolSequence(tools, repoRoot, task, mode) {
         rankingMode: "default",
         limit: 5,
     };
-    if (tools[0]?.tool !== "satori_search_codebase"
-        || !deepEqual(tools[0]?.input, expectedFirstInput)) {
+    if (firstCall === "scripted"
+        && (tools[0]?.tool !== "satori_search_codebase"
+            || !deepEqual(tools[0]?.input, expectedFirstInput))) {
         failures.push("invalid_satori_first_search");
     }
     if (mode === "coverage") {
@@ -1293,7 +1520,85 @@ function validateSatoriToolSequence(tools, repoRoot, task, mode) {
     return failures;
 }
 
-export function gradeRun({ agentResult, task, arm, mode, repoRoot, tools }) {
+function validateHybridToolSequence(
+    tools,
+    repoRoot,
+    task,
+    mode,
+    firstCall = DEFAULT_FIRST_CALL,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
+) {
+    const failures = [];
+    const discoveredFiles = new Set();
+    for (const tool of tools) {
+        if (!HYBRID_TOOLS.includes(tool.tool)) {
+            failures.push(`forbidden_hybrid_tool:${tool.tool}`);
+            continue;
+        }
+        if (NATIVE_TOOLS.includes(tool.tool)) {
+            if (tool.tool === "read") {
+                const relative = typeof tool.input?.filePath === "string"
+                    ? path.relative(repoRoot, path.resolve(tool.input.filePath)).replaceAll(path.sep, "/")
+                    : null;
+                if (!Number.isSafeInteger(tool.input?.limit) || tool.input.limit > 200) {
+                    failures.push("native_read_limit_violation");
+                }
+                if (relative && !discoveredFiles.has(relative)) {
+                    failures.push(`native_read_before_discovery:${relative}`);
+                }
+            } else {
+                recordDiscoveredFiles(discoveredFiles, tool.output, scopeProfile, repoRoot, tool.input?.path);
+            }
+            if (scopeProfile === "production") {
+                if (tool.output.includes(".test.ts")) failures.push("native_test_evidence_visible");
+            } else if (hasTestEvidenceOutsideAllowedRoots(tool.output, repoRoot, tool.input?.path)) {
+                failures.push("native_test_evidence_visible");
+            }
+        } else {
+            recordDiscoveredFiles(discoveredFiles, tool.output, scopeProfile);
+            recordDiscoveredFiles(discoveredFiles, tool.input?.file, scopeProfile);
+            recordDiscoveredFiles(discoveredFiles, tool.input?.symbolRef?.file, scopeProfile);
+            recordDiscoveredFiles(discoveredFiles, tool.input?.path, scopeProfile);
+        }
+    }
+    const expectedFirstInput = {
+        path: repoRoot,
+        query: task.satoriQuery,
+        scope: "runtime",
+        resultMode: "grouped",
+        groupBy: "symbol",
+        rankingMode: "default",
+        limit: 5,
+    };
+    if (firstCall === "scripted"
+        && (tools[0]?.tool !== "satori_search_codebase"
+            || !deepEqual(tools[0]?.input, expectedFirstInput))) {
+        failures.push("invalid_satori_first_search");
+    }
+    if (mode === "coverage") {
+        const expectedOrder = [
+            "satori_search_codebase",
+            "satori_read_file",
+            "satori_file_outline",
+            "satori_call_graph",
+        ];
+        if (!deepEqual(tools.slice(0, 4).map((tool) => tool.tool), expectedOrder)) {
+            failures.push("coverage_tool_order_violation");
+        }
+    }
+    return failures;
+}
+
+export function gradeRun({
+    agentResult,
+    task,
+    arm,
+    mode,
+    firstCall = DEFAULT_FIRST_CALL,
+    scopeProfile = DEFAULT_SCOPE_PROFILE,
+    repoRoot,
+    tools,
+}) {
     const failures = [];
     if (!isRecord(agentResult)) return { passed: false, failureReasons: ["invalid_result"] };
     if (agentResult.status !== "success") failures.push(`agent_status:${agentResult.status}`);
@@ -1322,13 +1627,19 @@ export function gradeRun({ agentResult, task, arm, mode, repoRoot, tools }) {
         failures.push("model_visible_tool_result_exceeded_32768_bytes");
     }
     failures.push(...(arm === "native"
-        ? validateNativeToolSequence(tools, repoRoot)
-        : validateSatoriToolSequence(tools, repoRoot, task, mode)));
+        ? validateNativeToolSequence(tools, repoRoot, scopeProfile)
+        : arm === "satori"
+            ? validateSatoriToolSequence(tools, repoRoot, task, mode, firstCall)
+            : validateHybridToolSequence(tools, repoRoot, task, mode, firstCall, scopeProfile)));
     return { passed: failures.length === 0, failureReasons: [...new Set(failures)] };
 }
 
 function definitionProfile(definitionRecords, arm) {
-    const allowed = arm === "native" ? NATIVE_TOOLS : SATORI_TOOLS;
+    const allowed = arm === "native"
+        ? NATIVE_TOOLS
+        : arm === "satori"
+            ? SATORI_TOOLS
+            : HYBRID_TOOLS;
     const latest = new Map();
     for (const record of definitionRecords) {
         if (record.kind === "tool_definition" && allowed.includes(record.tool)) {
@@ -1398,6 +1709,8 @@ async function runOpenCodeArm({
         task,
         arm,
         mode: options.mode,
+        firstCall: options.firstCall,
+        scopeProfile: options.scopeProfile,
     });
     const args = buildOpenCodeRunArguments({
         model: options.model,
@@ -1442,10 +1755,13 @@ async function runOpenCodeArm({
         throw new Error("Native arm unexpectedly emitted Satori source-measurement records.");
     }
     const sourceMeasurement = arm === "satori"
+        || (arm === "hybrid" && sourceLedgerSlice.records.length > 0)
         ? summarizeSourceLedger(sourceLedgerSlice.records)
         : {
             status: "unavailable",
-            reason: "native_tool_source_acquisition_boundary_not_exposed",
+            reason: arm === "hybrid"
+                ? "hybrid_arm_no_satori_source_calls"
+                : "native_tool_source_acquisition_boundary_not_exposed",
             io: null,
             workload: null,
             processing: null,
@@ -1463,6 +1779,8 @@ async function runOpenCodeArm({
         task,
         arm,
         mode: options.mode,
+        firstCall: options.firstCall,
+        scopeProfile: options.scopeProfile,
         repoRoot: options.repoRoot,
         tools: aggregated.tools,
     });
@@ -1488,6 +1806,9 @@ async function runOpenCodeArm({
         arm,
         runClass: options.runClass,
         mode: options.mode,
+        firstCall: options.firstCall,
+        scopeProfile: options.scopeProfile,
+        arms: options.arms,
         environment: {
             ...immutableEnvironment,
             repoRoot: options.repoRoot,
@@ -1496,7 +1817,9 @@ async function runOpenCodeArm({
             agentPromptSha256: sha256(prompt),
             agentPromptBytes: byteLength(prompt),
             toolProfile,
-            satoriServerPriorToolCalls: arm === "satori" ? satoriPriorToolCalls : null,
+            satoriServerPriorToolCalls: arm === "satori" || arm === "hybrid"
+                ? satoriPriorToolCalls
+                : null,
         },
         model: aggregated.model,
         agentResult,
@@ -1584,9 +1907,13 @@ const REPORT_METRICS = Object.freeze([
 
 export function summarizeRuns(runs) {
     const taskIds = [...new Set(runs.map((run) => run.taskId))];
+    const presentArms = new Set(runs.map((run) => run.arm));
+    const arms = runs.length > 0
+        ? VALID_ARMS.filter((arm) => presentArms.has(arm))
+        : ["native", "satori"];
     return Object.fromEntries(taskIds.map((taskId) => [
         taskId,
-        Object.fromEntries(["native", "satori"].map((arm) => {
+        Object.fromEntries(arms.map((arm) => {
             const armRuns = runs.filter((run) => run.taskId === taskId && run.arm === arm);
             const passedRuns = armRuns.filter((run) => run.grade.passed);
             return [arm, {
@@ -1620,8 +1947,13 @@ export function assessMeasurementValidity(runs, expectedRunCount) {
         if (typeof run.harness?.sessionId !== "string" || run.harness.sessionId.length === 0) {
             failureReasons.push(`missing_session:${runLabel}`);
         }
-        const expectedSourceStatus = run.arm === "satori" ? "measured" : "unavailable";
-        if (run.harness?.sourceMeasurement?.status !== expectedSourceStatus) {
+        const sourceStatus = run.harness?.sourceMeasurement?.status;
+        const validSourceStatus = run.arm === "satori"
+            ? sourceStatus === "measured"
+            : run.arm === "native"
+                ? sourceStatus === "unavailable"
+                : sourceStatus === "measured" || sourceStatus === "unavailable";
+        if (!validSourceStatus) {
             failureReasons.push(`source_measurement:${runLabel}`);
         }
         for (const reason of run.grade?.failureReasons ?? []) {
@@ -1665,8 +1997,52 @@ function signedDelta(satori, native) {
         : `${sign}${delta.toFixed(0)} (${sign}${percent.toFixed(1)}%)`;
 }
 
+const CORRECT_RUN_DELTA_FIELDS = Object.freeze([
+    ["Total wall ms", "taskWallTimeMs"],
+    ["Input tokens", "apiInputTokens"],
+    ["Tool calls", "toolCalls"],
+    ["Visible tool bytes", "visibleToolResultBytes"],
+]);
+
+const RAW_DELTA_FIELDS = Object.freeze([
+    ["Total wall ms", "taskWallTimeMs"],
+    ["Input tokens", "apiInputTokens"],
+    ["Output tokens", "apiOutputTokens"],
+    ["Cached input tokens", "cachedInputTokens"],
+    ["Tool calls", "toolCalls"],
+    ["Model turns", "modelTurns"],
+    ["Visible tool bytes", "visibleToolResultBytes"],
+]);
+
+function appendDeltaTable(lines, summary, { title, level, arm, scope, fields, baseline = "native" }) {
+    const comparable = Object.values(summary).filter((task) => task[arm] && task[baseline]);
+    if (comparable.length === 0) return;
+    lines.push(
+        "",
+        `${level} ${title}`,
+        "",
+        `| Task | ${fields.map(([label]) => label).join(" | ")} |`,
+        `|---|${fields.map(() => "---:").join("|")}|`,
+    );
+    for (const [taskId, task] of Object.entries(summary)) {
+        const measured = task[arm];
+        const reference = task[baseline];
+        if (!measured || !reference) continue;
+        const cells = fields.map(([, field]) => signedDelta(
+            measured[scope][field],
+            reference[scope][field],
+        ));
+        lines.push(`| ${taskId} | ${cells.join(" | ")} |`);
+    }
+}
+
 export function formatMarkdownReport(summary, metadata) {
     const validity = metadata.measurementValidity;
+    const tasks = Object.values(summary);
+    const hasArm = (arm) => tasks.some((task) => task[arm]);
+    const hasNative = hasArm("native");
+    const hasSatori = hasArm("satori");
+    const hasHybrid = hasArm("hybrid");
     const lines = [
         "# OpenCode native vs Satori agent discovery",
         "",
@@ -1677,6 +2053,9 @@ export function formatMarkdownReport(summary, metadata) {
         `- Model: \`${metadata.model}\``,
         `- Run class: \`${metadata.runClass}\``,
         `- Mode: \`${metadata.mode}\``,
+        ...(metadata.firstCall ? [`- First call: \`${metadata.firstCall}\``] : []),
+        ...(Array.isArray(metadata.arms) ? [`- Arms: \`${metadata.arms.join(",")}\``] : []),
+        ...(metadata.scopeProfile ? [`- Scope profile: \`${metadata.scopeProfile}\``] : []),
         `- Repetitions: ${metadata.repetitions} per task and arm`,
         `- Measurement validity: ${displayMeasurementValidity(validity)}`,
         ...(validity && !validity.valid
@@ -1693,8 +2072,7 @@ export function formatMarkdownReport(summary, metadata) {
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ];
     for (const [taskId, task] of Object.entries(summary)) {
-        for (const arm of ["native", "satori"]) {
-            const entry = task[arm];
+        for (const [arm, entry] of Object.entries(task)) {
             lines.push([
                 `| ${taskId}`,
                 arm,
@@ -1724,8 +2102,7 @@ export function formatMarkdownReport(summary, metadata) {
         "|---|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
-        for (const arm of ["native", "satori"]) {
-            const entry = task[arm];
+        for (const [arm, entry] of Object.entries(task)) {
             lines.push([
                 `| ${taskId}`,
                 arm,
@@ -1746,8 +2123,7 @@ export function formatMarkdownReport(summary, metadata) {
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
-        for (const arm of ["native", "satori"]) {
-            const entry = task[arm];
+        for (const [arm, entry] of Object.entries(task)) {
             lines.push([
                 `| ${taskId}`,
                 arm,
@@ -1764,16 +2140,23 @@ export function formatMarkdownReport(summary, metadata) {
             ].join(" | "));
         }
     }
-    lines.push("", "### Correct-run Satori minus native median", "");
-    lines.push("| Task | Total wall ms | Input tokens | Tool calls | Visible tool bytes |", "|---|---:|---:|---:|---:|");
-    for (const [taskId, task] of Object.entries(summary)) {
-        lines.push([
-            `| ${taskId}`,
-            signedDelta(task.satori.metrics.taskWallTimeMs, task.native.metrics.taskWallTimeMs),
-            signedDelta(task.satori.metrics.apiInputTokens, task.native.metrics.apiInputTokens),
-            signedDelta(task.satori.metrics.toolCalls, task.native.metrics.toolCalls),
-            `${signedDelta(task.satori.metrics.visibleToolResultBytes, task.native.metrics.visibleToolResultBytes)} |`,
-        ].join(" | "));
+    if (hasSatori && hasNative) {
+        appendDeltaTable(lines, summary, {
+            title: "Correct-run Satori minus native median",
+            level: "###",
+            arm: "satori",
+            scope: "metrics",
+            fields: CORRECT_RUN_DELTA_FIELDS,
+        });
+    }
+    if (hasHybrid && hasNative) {
+        appendDeltaTable(lines, summary, {
+            title: "Correct-run Hybrid minus native median",
+            level: "###",
+            arm: "hybrid",
+            scope: "metrics",
+            fields: CORRECT_RUN_DELTA_FIELDS,
+        });
     }
     lines.push(
         "",
@@ -1785,8 +2168,7 @@ export function formatMarkdownReport(summary, metadata) {
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     );
     for (const [taskId, task] of Object.entries(summary)) {
-        for (const arm of ["native", "satori"]) {
-            const entry = task[arm];
+        for (const [arm, entry] of Object.entries(task)) {
             lines.push([
                 `| ${taskId}`,
                 arm,
@@ -1802,24 +2184,23 @@ export function formatMarkdownReport(summary, metadata) {
             ].join(" | "));
         }
     }
-    lines.push(
-        "",
-        "## Raw Satori minus native median",
-        "",
-        "| Task | Total wall ms | Input tokens | Output tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
-    );
-    for (const [taskId, task] of Object.entries(summary)) {
-        lines.push([
-            `| ${taskId}`,
-            signedDelta(task.satori.allMetrics.taskWallTimeMs, task.native.allMetrics.taskWallTimeMs),
-            signedDelta(task.satori.allMetrics.apiInputTokens, task.native.allMetrics.apiInputTokens),
-            signedDelta(task.satori.allMetrics.apiOutputTokens, task.native.allMetrics.apiOutputTokens),
-            signedDelta(task.satori.allMetrics.cachedInputTokens, task.native.allMetrics.cachedInputTokens),
-            signedDelta(task.satori.allMetrics.toolCalls, task.native.allMetrics.toolCalls),
-            signedDelta(task.satori.allMetrics.modelTurns, task.native.allMetrics.modelTurns),
-            `${signedDelta(task.satori.allMetrics.visibleToolResultBytes, task.native.allMetrics.visibleToolResultBytes)} |`,
-        ].join(" | "));
+    if (hasSatori && hasNative) {
+        appendDeltaTable(lines, summary, {
+            title: "Raw Satori minus native median",
+            level: "##",
+            arm: "satori",
+            scope: "allMetrics",
+            fields: RAW_DELTA_FIELDS,
+        });
+    }
+    if (hasHybrid && hasNative) {
+        appendDeltaTable(lines, summary, {
+            title: "Raw Hybrid minus native median",
+            level: "##",
+            arm: "hybrid",
+            scope: "allMetrics",
+            fields: RAW_DELTA_FIELDS,
+        });
     }
     lines.push(
         "",
@@ -1873,7 +2254,7 @@ export async function main(argv = process.argv.slice(2)) {
     const tasks = selectTasks(manifest, options.taskIds);
     await requireCleanWorktree(options.repoRoot);
     const taskValidation = tasks.map((task) => validateTaskKey(options.repoRoot, task));
-    const schedule = buildRunSchedule(tasks, options.repetitions);
+    const schedule = buildRunSchedule(tasks, options.repetitions, options.arms);
     const repositoryIdentity = await getRepositoryIdentity(options.repoRoot);
     const { gitRevision } = repositoryIdentity;
     const dryRun = {
@@ -1884,6 +2265,9 @@ export async function main(argv = process.argv.slice(2)) {
         model: options.model,
         variant: options.variant,
         mode: options.mode,
+        firstCall: options.firstCall,
+        arms: options.arms,
+        scopeProfile: options.scopeProfile,
         prepare: options.prepare,
         outputDir: options.outputDir,
         tasks: taskValidation,
@@ -1915,6 +2299,7 @@ export async function main(argv = process.argv.slice(2)) {
         configDir,
         databaseFile,
         repoRoot: options.repoRoot,
+        scopeProfile: options.scopeProfile,
         sourceLedgerFile,
         suiteId,
         toolLedgerFile,
@@ -2003,6 +2388,9 @@ export async function main(argv = process.argv.slice(2)) {
                     arm: entry.arm,
                     runClass: options.runClass,
                     mode: options.mode,
+                    firstCall: options.firstCall,
+                    scopeProfile: options.scopeProfile,
+                    arms: options.arms,
                     environment: immutableEnvironment,
                     model: null,
                     agentResult: null,
@@ -2014,6 +2402,10 @@ export async function main(argv = process.argv.slice(2)) {
             runs.push(result);
             if (entry.arm === "satori") {
                 satoriPriorToolCalls += result.measurements.toolCalls ?? 0;
+            } else if (entry.arm === "hybrid") {
+                satoriPriorToolCalls += (result.harness?.toolCalls ?? []).filter(
+                    (tool) => SATORI_TOOLS.includes(tool.operation),
+                ).length;
             }
             process.stdout.write(`${formatArmCompletion({
                 taskId: task.id,
@@ -2060,6 +2452,9 @@ export async function main(argv = process.argv.slice(2)) {
         model: options.model,
         runClass: options.runClass,
         mode: options.mode,
+        firstCall: options.firstCall,
+        arms: options.arms,
+        scopeProfile: options.scopeProfile,
         repetitions: options.repetitions,
     };
     const report = formatMarkdownReport(summary, {

@@ -287,14 +287,50 @@ function tryParseJson(text) {
     }
 }
 
-function inspectInputScope(input, repoRoot) {
+function parseTimestampMs(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+        const parsed = Date.parse(value.trim());
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+}
+
+function isNativeFsTool(toolName) {
+    return typeof toolName === "string"
+        && !/(?:^|_)satori(?:_|$)|__satori__/.test(toolName)
+        && /(?:^|_)(?:read|read_file|grep|find|glob)$/.test(toolName);
+}
+
+function resolveInputPath(candidatePath, repoRoot, effectiveCwd = null) {
+    if (typeof candidatePath !== "string" || candidatePath.trim().length === 0) {
+        return null;
+    }
+    const raw = String(candidatePath).trim().replace(/\\/g, "/");
+    if (path.posix.isAbsolute(raw)) {
+        return resolveCandidateInsideRoot(raw, repoRoot);
+    }
+    if (effectiveCwd !== null) {
+        const cwdResolved = resolveCandidateInsideRoot(effectiveCwd, repoRoot);
+        if (!cwdResolved || !cwdResolved.inside) {
+            return { inside: false, isRoot: false, relativePath: null };
+        }
+        const combined = normalizePosixPath(`${canonicalRootPath(effectiveCwd)}/${raw}`);
+        return resolveCandidateInsideRoot(combined, repoRoot);
+    }
+    return resolveCandidateInsideRoot(raw, repoRoot);
+}
+
+function inspectInputScope(input, repoRoot, effectiveCwd = null) {
     if (!isRecord(input)) {
         return { outOfRoot: false, explicitSingleFile: null };
     }
     const rootKeys = ["codebaseRoot", "root", "repoRoot"];
     for (const key of rootKeys) {
         if (typeof input[key] === "string" && input[key].trim().length > 0) {
-            const resolved = resolveCandidateInsideRoot(input[key], repoRoot);
+            const resolved = resolveInputPath(input[key], repoRoot, effectiveCwd);
             if (!resolved || !resolved.inside) {
                 return { outOfRoot: true, explicitSingleFile: null };
             }
@@ -302,7 +338,7 @@ function inspectInputScope(input, repoRoot) {
     }
 
     if (typeof input.filePath === "string" && input.filePath.trim().length > 0) {
-        const resolved = resolveCandidateInsideRoot(input.filePath, repoRoot);
+        const resolved = resolveInputPath(input.filePath, repoRoot, effectiveCwd);
         if (!resolved || !resolved.inside) {
             return { outOfRoot: true, explicitSingleFile: null };
         }
@@ -313,7 +349,7 @@ function inspectInputScope(input, repoRoot) {
     }
 
     if (typeof input.path === "string" && input.path.trim().length > 0) {
-        const resolved = resolveCandidateInsideRoot(input.path, repoRoot);
+        const resolved = resolveInputPath(input.path, repoRoot, effectiveCwd);
         if (!resolved || !resolved.inside) {
             return { outOfRoot: true, explicitSingleFile: null };
         }
@@ -325,7 +361,7 @@ function inspectInputScope(input, repoRoot) {
     }
 
     if (typeof input.file === "string" && input.file.trim().length > 0) {
-        const resolved = resolveCandidateInsideRoot(input.file, repoRoot);
+        const resolved = resolveInputPath(input.file, repoRoot, effectiveCwd);
         if (!resolved || !resolved.inside) {
             return { outOfRoot: true, explicitSingleFile: null };
         }
@@ -336,7 +372,7 @@ function inspectInputScope(input, repoRoot) {
     }
 
     if (isRecord(input.symbolRef) && typeof input.symbolRef.file === "string") {
-        const resolved = resolveCandidateInsideRoot(input.symbolRef.file, repoRoot);
+        const resolved = resolveInputPath(input.symbolRef.file, repoRoot, effectiveCwd);
         if (!resolved || !resolved.inside) {
             return { outOfRoot: true, explicitSingleFile: null };
         }
@@ -372,9 +408,17 @@ function extractSymbolIdentifierFromLabel(value) {
     return canonicalReportedSymbol(stripped);
 }
 
+function normalizeAttributedHeaderFile(file, ctx) {
+    const singleFile = ctx.scope.explicitSingleFile;
+    if (singleFile && file === `${singleFile}/${path.posix.basename(singleFile)}`) {
+        return singleFile;
+    }
+    return file;
+}
+
 function extractFileAttributedText(ctx, relativeFile, repoRoot) {
     const { parsedJson, rawOutput, scope } = ctx;
-    const matchesFile = (file) => resolveCandidateInsideRoot(file, repoRoot)?.relativePath === relativeFile;
+    const matchesFile = (file) => resolveInputPath(file, repoRoot, ctx.effectiveCwd)?.relativePath === relativeFile;
     if (parsedJson !== null) {
         if (!isRecord(parsedJson) || !ctx.rooted) return "";
         const sections = [];
@@ -403,12 +447,14 @@ function extractFileAttributedText(ctx, relativeFile, repoRoot) {
     for (const line of rawOutput.split(/\r\n|\n|\r/)) {
         const pathTag = /^<path>(.+)<\/path>$/.exec(line);
         const satoriHeader = /^# (.+?):\d+-\d+(?:\s*\||$)/.exec(line);
-        const fileHeader = /^(?:===\s+|---\s+|\*\*\*\s+)?([^\s:]+\.[\w]+):(?:(\d+):(.*))?$/.exec(line);
+        const fileHeader = /^(?:===\s+|---\s+|\*\*\*\s+)?([^\s:]+\.[\w]+)(?::(?:(\d+):(.*))?|-(\d+)-(.*))$/.exec(line);
         if (pathTag || satoriHeader || fileHeader) {
-            const file = (pathTag ?? satoriHeader ?? fileHeader)[1];
+            const rawFile = (pathTag ?? satoriHeader ?? fileHeader)[1];
+            const file = normalizeAttributedHeaderFile(rawFile, ctx);
             active = (ctx.rooted || path.posix.isAbsolute(file)) && matchesFile(file);
             numbered = Boolean(satoriHeader);
-            if (active && fileHeader?.[3]) lines.push(fileHeader[3]);
+            const headerCode = fileHeader?.[3] ?? fileHeader?.[5];
+            if (active && headerCode) lines.push(headerCode);
         } else if (active && (!numbered || /^\d+\| /.test(line))) {
             lines.push(line.replace(/^\s*(?:Line \d+:|\d+(?:\||:))\s?/, ""));
         }
@@ -450,21 +496,32 @@ function matchesPattern(text, pattern) {
     return false;
 }
 
-function evaluateCallContext(toolCall, repoRoot, fixtureRevision) {
+function evaluateCallContext(toolCall, repoRoot, fixtureRevision, sessionCwd = null) {
     const rawOutput = typeof toolCall.output === "string" ? toolCall.output : "";
     const parsedJson = tryParseJson(rawOutput);
-    const scope = inspectInputScope(toolCall.input, repoRoot);
-    const responseScope = inspectInputScope(parsedJson, repoRoot);
+    const effectiveCwd = typeof toolCall.cwd === "string" && toolCall.cwd.trim().length > 0
+        ? toolCall.cwd
+        : sessionCwd;
+    const scope = inspectInputScope(toolCall.input, repoRoot, effectiveCwd);
+    const responseScope = inspectInputScope(parsedJson, repoRoot, effectiveCwd);
     const responseRevision = parsedJson?.fixtureRevision ?? parsedJson?.gitRevision;
     const declaredRoot = parsedJson?.codebaseRoot ?? parsedJson?.repoRoot ?? parsedJson?.root;
     const input = toolCall.input;
-    const rooted = [input?.codebaseRoot, input?.repoRoot, input?.root, input?.path, input?.filePath,
+    const rootedByAbsolute = [input?.codebaseRoot, input?.repoRoot, input?.root, input?.path, input?.filePath,
         input?.file, declaredRoot, parsedJson?.path].some((candidate) => typeof candidate === "string"
         && path.posix.isAbsolute(candidate) && resolveCandidateInsideRoot(candidate, repoRoot)?.inside);
+    const nativeTool = isNativeFsTool(toolCall.tool);
+    const rootedByNativeRelative = nativeTool && !scope.outOfRoot && (
+        [input?.path, input?.filePath, input?.file].some((candidate) => typeof candidate === "string"
+            && resolveInputPath(candidate, repoRoot, effectiveCwd)?.inside === true)
+        || (effectiveCwd !== null && resolveCandidateInsideRoot(effectiveCwd, repoRoot)?.inside === true)
+    );
+    const rooted = rootedByAbsolute || rootedByNativeRelative;
     return {
         rawOutput,
         parsedJson,
         scope,
+        effectiveCwd,
         input: toolCall.input,
         rooted,
         tool: toolCall.tool ?? "",
@@ -565,13 +622,20 @@ function callSatisfiesRelation(ctx, relation, repoRoot, ownerFile, progress) {
         ? peerText
         : extractFileAttributedText(ctx, ownerFile, repoRoot);
     const sawDefinition = (text, name) => new RegExp(
-        `\\b(?:function|def|fn|func)\\s+${escapeRegex(name)}\\s*\\(`,
+        `(?:\\b(?:function|def|fn|func)\\s+|(?:^|\\s)(?:(?:public|private|protected|static|readonly|override|async)\\s+)+)${escapeRegex(name)}\\s*\\(`,
+        "m",
     ).test(text);
     const callTo = (text, name) => new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(text);
+    // Cross-call file-level peerSeen && siteSeen accumulation for native text
+    // outputs is an intentional lower bound: bounded 200-line native reads
+    // cannot span a large-method file (e.g. search-request-coordinator.ts
+    // lines 940-1508) in one call. Structured Satori call_graph evidence still
+    // enforces a directed edge with a witnessed site above.
     if (relation.relation === "caller") {
         const target = relation.targetSymbol;
-        return Boolean(target && sawDefinition(peerText, relation.symbol)
-            && callTo(peerText, target) && !sawDefinition(peerText, target));
+        progress.peerSeen ||= sawDefinition(peerText, relation.symbol);
+        progress.siteSeen ||= Boolean(target && callTo(peerText, target) && !sawDefinition(peerText, target));
+        return progress.peerSeen && progress.siteSeen;
     }
     if (Array.isArray(relation.sitePatterns) && relation.sitePatterns.length > 0) {
         progress.siteSeen ||= relation.sitePatterns.some((pattern) => matchesPattern(ownerText, pattern));
@@ -600,6 +664,82 @@ function normalizeColdStartPhases(coldStartPhases) {
     };
 }
 
+function earliestToolTimestamp(tools) {
+    let minTs = null;
+    for (const toolCall of tools) {
+        if (!isRecord(toolCall)) continue;
+        for (const candidate of [toolCall.dispatchedAtMs, toolCall.visibleAtMs]) {
+            const parsed = parseTimestampMs(candidate);
+            if (parsed !== null && (minTs === null || parsed < minTs)) {
+                minTs = parsed;
+            }
+        }
+    }
+    return minTs;
+}
+
+function classifyPostEvidenceTool(toolCall) {
+    if (toolCall?.status === "error") return "schema_retry";
+    const tool = String(toolCall?.tool ?? "");
+    if (/(?:^|_|__)file_outline$/.test(tool)) return "outline_check";
+    if (/(?:^|_|__)(?:call_graph|find_references)$/.test(tool)) return "relation_check";
+    if (/(?:^|_|__)read(?:_file)?$/.test(tool)) return "source_reread";
+    if (/(?:^|_|__)(?:search_codebase|grep|find|glob)$/.test(tool)) return "search_extra";
+    return "other";
+}
+
+function formatCompactRepoPath(rawPath, repoRoot, effectiveCwd = null) {
+    if (typeof rawPath !== "string" || rawPath.trim().length === 0) return null;
+    const resolved = resolveInputPath(rawPath, repoRoot, effectiveCwd);
+    if (resolved?.inside) {
+        return resolved.isRoot ? "." : resolved.relativePath;
+    }
+    return normalizePosixPath(rawPath.trim());
+}
+
+function summarizePostEvidenceDetail(toolCall, repoRoot, sessionCwd = null) {
+    const truncate = (value, max = 140) => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
+    if (toolCall?.status === "error" && typeof toolCall.output === "string" && toolCall.output.trim().length > 0) {
+        const firstLine = toolCall.output.trim().split(/\r?\n/, 1)[0];
+        return truncate(firstLine);
+    }
+    const input = isRecord(toolCall?.input) ? toolCall.input : null;
+    const effectiveCwd = typeof toolCall?.cwd === "string" && toolCall.cwd.trim().length > 0
+        ? toolCall.cwd
+        : sessionCwd;
+    if (!input) return String(toolCall?.tool ?? "unknown");
+
+    const category = classifyPostEvidenceTool(toolCall);
+    const targetPath = formatCompactRepoPath(
+        input.file ?? input.filePath ?? input.path ?? input.symbolRef?.file,
+        repoRoot,
+        effectiveCwd,
+    );
+    if (category === "source_reread") {
+        let range = "";
+        if (Number.isFinite(input.start_line) || Number.isFinite(input.end_line)) {
+            range = `:${input.start_line ?? ""}..${input.end_line ?? ""}`;
+        } else if (Number.isFinite(input.offset) || Number.isFinite(input.limit)) {
+            range = ` (offset=${input.offset ?? 1}, limit=${input.limit ?? ""})`;
+        }
+        const mode = typeof input.mode === "string" ? ` [${input.mode}]` : "";
+        return truncate(`${targetPath ?? "file"}${range}${mode}`);
+    }
+    if (category === "relation_check") {
+        const dir = typeof input.direction === "string" ? `${input.direction} ` : "";
+        const sym = input.symbolRef?.symbolLabel ?? input.symbolRef?.symbol ?? input.symbolRef?.symbolId ?? "";
+        return truncate(`${dir}${sym}${targetPath ? ` (${targetPath})` : ""}`.trim() || String(toolCall?.tool ?? "relation"));
+    }
+    if (category === "outline_check") {
+        return truncate(targetPath ?? String(toolCall?.tool ?? "file_outline"));
+    }
+    if (category === "search_extra") {
+        const query = input.query ?? input.pattern ?? "";
+        return truncate(`${query ? `${JSON.stringify(query)}` : ""}${targetPath ? ` in ${targetPath}` : ""}`.trim() || String(toolCall?.tool ?? "search"));
+    }
+    return truncate(targetPath ?? String(toolCall?.tool ?? "other"));
+}
+
 export function scoreEvidenceTrajectory({
     tools,
     task,
@@ -608,6 +748,8 @@ export function scoreEvidenceTrajectory({
     expectedFixtureRevision = null,
     evidenceSpec = null,
     coldStartPhases = null,
+    sessionStartMs = null,
+    sessionCwd = null,
 }) {
     const canonicalRepo = canonicalRootPath(repoRoot);
     const spec = resolveEvidenceSpec({ task, evidenceSpec });
@@ -638,13 +780,14 @@ export function scoreEvidenceTrajectory({
     const relationProgressByKey = new Map();
     const perCallProgress = [];
     let firstSufficientEvidenceCall = null;
+    let decisiveToolIndex = null;
 
     for (let idx = 0; idx < normalizedTools.length; idx += 1) {
         const toolCall = normalizedTools[idx] ?? {};
         const ordinal = Number.isSafeInteger(toolCall.index) && toolCall.index > 0
             ? toolCall.index
             : idx + 1;
-        const ctx = evaluateCallContext(toolCall, canonicalRepo, fixtureRevision);
+        const ctx = evaluateCallContext(toolCall, canonicalRepo, fixtureRevision, sessionCwd);
         ctx.eligible &&= revisionMatches;
         const newlySatisfied = [];
 
@@ -683,6 +826,7 @@ export function scoreEvidenceTrajectory({
             && satisfiedByKey.size === requirements.length;
         if (sufficientNow && firstSufficientEvidenceCall === null) {
             firstSufficientEvidenceCall = ordinal;
+            decisiveToolIndex = idx;
         }
 
         perCallProgress.push({
@@ -707,8 +851,74 @@ export function scoreEvidenceTrajectory({
         }));
 
     const callsAfterSufficientEvidence = firstSufficientEvidenceCall !== null
-        ? Math.max(0, normalizedTools.length - firstSufficientEvidenceCall)
+        ? Math.max(0, normalizedTools.length - (decisiveToolIndex + 1))
         : null;
+
+    const resolvedSessionStartMs = parseTimestampMs(sessionStartMs) ?? earliestToolTimestamp(normalizedTools);
+    const decisiveCall = decisiveToolIndex !== null ? normalizedTools[decisiveToolIndex] : null;
+    const decisiveVisibleAtMs = decisiveCall ? parseTimestampMs(decisiveCall.visibleAtMs) : null;
+    const firstSufficientEvidenceMs = (decisiveCall !== null
+        && resolvedSessionStartMs !== null
+        && decisiveVisibleAtMs !== null)
+        ? Math.max(0, decisiveVisibleAtMs - resolvedSessionStartMs)
+        : null;
+
+    let inFlightParallelCalls = null;
+    let postEvidenceDispatchedCalls = null;
+    let postEvidenceBreakdown = [];
+    if (decisiveToolIndex !== null) {
+        const subsequentCalls = normalizedTools.slice(decisiveToolIndex + 1);
+        if (subsequentCalls.length === 0) {
+            inFlightParallelCalls = 0;
+            postEvidenceDispatchedCalls = 0;
+        } else {
+            const decisiveTurnIndex = Number.isSafeInteger(decisiveCall?.turnIndex)
+                ? decisiveCall.turnIndex
+                : null;
+            let inFlightCount = 0;
+            let postDispatchedCount = 0;
+            const breakdown = [];
+            let undetermined = false;
+
+            for (let offset = 0; offset < subsequentCalls.length; offset += 1) {
+                const call = subsequentCalls[offset] ?? {};
+                const arrayIdx = decisiveToolIndex + 1 + offset;
+                const callOrdinal = perCallProgress[arrayIdx]?.index ?? (arrayIdx + 1);
+                const callTurnIndex = Number.isSafeInteger(call.turnIndex) ? call.turnIndex : null;
+                const callDispatchedAtMs = parseTimestampMs(call.dispatchedAtMs);
+
+                let classification = null;
+                if (decisiveTurnIndex !== null && callTurnIndex !== null) {
+                    classification = callTurnIndex <= decisiveTurnIndex ? "in_flight" : "post_dispatched";
+                } else if (callDispatchedAtMs !== null && decisiveVisibleAtMs !== null) {
+                    classification = callDispatchedAtMs <= decisiveVisibleAtMs ? "in_flight" : "post_dispatched";
+                } else {
+                    undetermined = true;
+                    break;
+                }
+
+                if (classification === "in_flight") {
+                    inFlightCount += 1;
+                } else {
+                    postDispatchedCount += 1;
+                    breakdown.push({
+                        index: callOrdinal,
+                        turnIndex: callTurnIndex,
+                        tool: call.tool ?? null,
+                        status: call.status ?? "completed",
+                        category: classifyPostEvidenceTool(call),
+                        detail: summarizePostEvidenceDetail(call, canonicalRepo, sessionCwd),
+                    });
+                }
+            }
+
+            if (!undetermined) {
+                inFlightParallelCalls = inFlightCount;
+                postEvidenceDispatchedCalls = postDispatchedCount;
+                postEvidenceBreakdown = breakdown;
+            }
+        }
+    }
 
     return {
         repoRoot: canonicalRepo,
@@ -717,7 +927,11 @@ export function scoreEvidenceTrajectory({
         taskId: spec.taskId,
         sufficient: firstSufficientEvidenceCall !== null,
         firstSufficientEvidenceCall,
+        firstSufficientEvidenceMs,
         callsAfterSufficientEvidence,
+        inFlightParallelCalls,
+        postEvidenceDispatchedCalls,
+        postEvidenceBreakdown,
         totalToolCalls: normalizedTools.length,
         deliveredRequirements,
         missingRequirements,
@@ -932,6 +1146,7 @@ function extractRunMetric(run, field) {
     if (field === "strictPassed") {
         if (typeof run.strictPassed === "boolean") return run.strictPassed;
         if (typeof run.grade?.passed === "boolean") return run.grade.passed;
+        if (typeof run.passed === "boolean") return run.passed;
         return run.outcome?.strictPassed ?? null;
     }
     if (field === "totalInputTokens") {
@@ -945,6 +1160,13 @@ function extractRunMetric(run, field) {
         return run.firstSufficientEvidenceCall
             ?? run.trajectory?.firstSufficientEvidenceCall
             ?? run.ergonomics?.firstSufficientEvidenceCall
+            ?? null;
+    }
+    if (field === "firstSufficientEvidenceMs") {
+        if (run.trajectory && run.trajectory.fixtureRevisionVerified !== true) return null;
+        return run.firstSufficientEvidenceMs
+            ?? run.trajectory?.firstSufficientEvidenceMs
+            ?? run.ergonomics?.firstSufficientEvidenceMs
             ?? null;
     }
     if (field === "visibleToolBytes") {
@@ -964,6 +1186,9 @@ function summarizeArmRuns(runs) {
         wallTimeMs: median(list.map((run) => extractRunMetric(run, "wallTimeMs"))),
         firstSufficientEvidenceCall: median(
             list.map((run) => extractRunMetric(run, "firstSufficientEvidenceCall")),
+        ),
+        firstSufficientEvidenceMs: median(
+            list.map((run) => extractRunMetric(run, "firstSufficientEvidenceMs")),
         ),
         visibleToolBytes: median(list.map((run) => extractRunMetric(run, "visibleToolBytes"))),
     };
@@ -987,6 +1212,7 @@ export function evaluateErgonomicsGate({
         maxInputTokensRatio: armPolicy.maxInputTokensRatio ?? 1.10,
         maxWallTimeRatio: armPolicy.maxWallTimeRatio ?? 1.10,
         maxFirstSufficientEvidenceCallRatio: armPolicy.maxFirstSufficientEvidenceCallRatio ?? 1.0,
+        maxFirstSufficientEvidenceMsRatio: armPolicy.maxFirstSufficientEvidenceMsRatio ?? null,
         requireSufficientEvidenceImprovement: Boolean(
             armPolicy.requireSufficientEvidenceImprovement ?? false,
         ),
@@ -1047,6 +1273,22 @@ export function evaluateErgonomicsGate({
         failureReasons.push(firstSufficientEvidenceCallRatio === null ? "sufficient_evidence_unobserved" : "sufficient_evidence_calls_regression");
     }
 
+    const firstSufficientEvidenceMsRatio = ratio(
+        treatment.firstSufficientEvidenceMs,
+        control.firstSufficientEvidenceMs,
+    );
+    const firstSufficientEvidenceMsOk = thresholds.maxFirstSufficientEvidenceMsRatio === null
+        ? true
+        : (firstSufficientEvidenceMsRatio !== null
+            && firstSufficientEvidenceMsRatio <= thresholds.maxFirstSufficientEvidenceMsRatio);
+    if (!firstSufficientEvidenceMsOk) {
+        failureReasons.push(
+            firstSufficientEvidenceMsRatio === null
+                ? "sufficient_evidence_time_unobserved"
+                : "sufficient_evidence_time_regression",
+        );
+    }
+
     const visibleToolBytesRatio = ratio(treatment.visibleToolBytes, control.visibleToolBytes);
     const visibleToolBytesOk = visibleToolBytesRatio !== null && visibleToolBytesRatio <= thresholds.maxVisibleToolBytesRatio;
     if (!visibleToolBytesOk) {
@@ -1065,6 +1307,7 @@ export function evaluateErgonomicsGate({
             totalInputTokensRatio,
             wallTimeMsRatio,
             firstSufficientEvidenceCallRatio,
+            firstSufficientEvidenceMsRatio,
             visibleToolBytesRatio,
         },
         checks: {
@@ -1072,13 +1315,207 @@ export function evaluateErgonomicsGate({
             totalInputTokens: totalInputTokensOk,
             wallTimeMs: wallTimeMsOk,
             firstSufficientEvidenceCall: firstSufficientEvidenceCallOk,
+            firstSufficientEvidenceMs: firstSufficientEvidenceMsOk,
             visibleToolBytes: visibleToolBytesOk,
         },
         failureReasons,
     };
 }
 
-export function replayResultRecord({ result, task, repoRoot, evidenceSpec = null, fixture, hostEvents = [] }) {
+function parseJsonlEvents(jsonlText) {
+    return String(jsonlText)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+}
+
+function extractPiContentText(content) {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content
+        .filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("\n");
+}
+
+function isPiEventStream(events) {
+    return Array.isArray(events) && events.some((event) => isRecord(event) && (
+        event.type === "session"
+        || event.type === "tool_execution_start"
+        || event.type === "tool_execution_end"
+        || (event.type === "message_end" && event.message?.role === "toolResult")
+    ));
+}
+
+export function extractPiToolCalls(piEvents) {
+    const events = typeof piEvents === "string"
+        ? parseJsonlEvents(piEvents)
+        : (Array.isArray(piEvents) ? piEvents : []);
+    let sessionStartMs = null;
+    let earliestFallbackMs = null;
+    let sessionCwd = null;
+    let currentTurnIndex = 0;
+    let sawTurnStart = false;
+    let currentTurnAssistantTs = null;
+    const records = [];
+    const byToolCallId = new Map();
+
+    const recordEarliest = (ts) => {
+        if (ts !== null && (earliestFallbackMs === null || ts < earliestFallbackMs)) {
+            earliestFallbackMs = ts;
+        }
+    };
+
+    for (const event of events) {
+        if (!isRecord(event)) continue;
+        const eventTs = parseTimestampMs(event.timestamp ?? event.message?.timestamp);
+        recordEarliest(eventTs);
+
+        if (event.type === "session") {
+            if (eventTs !== null) sessionStartMs = eventTs;
+            if (typeof event.cwd === "string" && event.cwd.trim().length > 0) {
+                sessionCwd = event.cwd.trim();
+            }
+            continue;
+        }
+        if (event.type === "turn_start") {
+            sawTurnStart = true;
+            currentTurnIndex += 1;
+            currentTurnAssistantTs = null;
+            continue;
+        }
+        if (event.type === "turn_end") {
+            continue;
+        }
+        if ((event.type === "message_start" || event.type === "message_end") && event.message?.role === "assistant") {
+            if (eventTs !== null) currentTurnAssistantTs = eventTs;
+            continue;
+        }
+        if (event.type === "tool_execution_start") {
+            const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : null;
+            const explicitDispatchTs = parseTimestampMs(event.timestamp);
+            const turnIndex = Number.isSafeInteger(event.turnIndex)
+                ? event.turnIndex
+                : (sawTurnStart ? currentTurnIndex : null);
+            const record = {
+                index: records.length + 1,
+                tool: event.toolName ?? null,
+                status: "completed",
+                input: isRecord(event.args) ? event.args : (event.args ?? null),
+                output: "",
+                visibleBytes: 0,
+                turnIndex,
+                dispatchedAtMs: explicitDispatchTs ?? currentTurnAssistantTs,
+                visibleAtMs: null,
+                durationMs: null,
+                _hasExplicitDispatchTs: explicitDispatchTs !== null,
+                _hasMessageEnd: false,
+            };
+            records.push(record);
+            if (toolCallId !== null) byToolCallId.set(toolCallId, record);
+            continue;
+        }
+        if (event.type === "tool_execution_end") {
+            const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : null;
+            let record = toolCallId !== null ? byToolCallId.get(toolCallId) : null;
+            if (!record) {
+                record = {
+                    index: records.length + 1,
+                    tool: event.toolName ?? null,
+                    status: "completed",
+                    input: null,
+                    output: "",
+                    visibleBytes: 0,
+                    turnIndex: sawTurnStart ? currentTurnIndex : null,
+                    dispatchedAtMs: currentTurnAssistantTs,
+                    visibleAtMs: null,
+                    durationMs: null,
+                    _hasExplicitDispatchTs: false,
+                    _hasMessageEnd: false,
+                };
+                records.push(record);
+                if (toolCallId !== null) byToolCallId.set(toolCallId, record);
+            }
+            if (Number.isFinite(event.durationMs)) {
+                record.durationMs = event.durationMs;
+            }
+            if (!record._hasMessageEnd) {
+                const output = extractPiContentText(event.result?.content);
+                const isError = Boolean(event.isError);
+                record.output = output;
+                record.visibleBytes = Buffer.byteLength(output, "utf8");
+                record.status = isError ? "error" : "completed";
+                if (eventTs !== null) {
+                    record.visibleAtMs = eventTs;
+                }
+            }
+            if (!record._hasExplicitDispatchTs && record.visibleAtMs !== null && Number.isFinite(record.durationMs)) {
+                record.dispatchedAtMs = record.visibleAtMs - record.durationMs;
+            }
+            continue;
+        }
+        if (event.type === "message_end" && event.message?.role === "toolResult") {
+            const msg = event.message;
+            const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : null;
+            let record = toolCallId !== null ? byToolCallId.get(toolCallId) : null;
+            if (!record) {
+                record = {
+                    index: records.length + 1,
+                    tool: msg.toolName ?? null,
+                    status: "completed",
+                    input: null,
+                    output: "",
+                    visibleBytes: 0,
+                    turnIndex: sawTurnStart ? currentTurnIndex : null,
+                    dispatchedAtMs: currentTurnAssistantTs,
+                    visibleAtMs: null,
+                    durationMs: null,
+                    _hasExplicitDispatchTs: false,
+                    _hasMessageEnd: false,
+                };
+                records.push(record);
+                if (toolCallId !== null) byToolCallId.set(toolCallId, record);
+            }
+            const output = extractPiContentText(msg.content);
+            const isError = Boolean(msg.isError);
+            const visibleAtMs = parseTimestampMs(event.timestamp ?? msg.timestamp);
+            record.output = output;
+            record.visibleBytes = Buffer.byteLength(output, "utf8");
+            record.status = isError ? "error" : "completed";
+            record.visibleAtMs = visibleAtMs;
+            record._hasMessageEnd = true;
+            if (Number.isFinite(msg.durationMs) && record.durationMs === null) {
+                record.durationMs = msg.durationMs;
+            }
+            if (!record._hasExplicitDispatchTs && visibleAtMs !== null && Number.isFinite(record.durationMs)) {
+                record.dispatchedAtMs = visibleAtMs - record.durationMs;
+            }
+        }
+    }
+
+    const tools = records.map(({ _hasExplicitDispatchTs, _hasMessageEnd, ...clean }) => clean);
+    const extractedVisibleBytes = tools.reduce((sum, call) => sum + (call.visibleBytes ?? 0), 0);
+    return {
+        sessionStartMs: sessionStartMs ?? earliestFallbackMs,
+        sessionCwd,
+        turnCount: currentTurnIndex,
+        toolCallCount: tools.length,
+        extractedVisibleBytes,
+        tools,
+    };
+}
+export function replayResultRecord({
+    result,
+    task,
+    repoRoot,
+    evidenceSpec = null,
+    fixture,
+    fixtureRevision = undefined,
+    expectedFixtureRevision = undefined,
+    hostEvents = [],
+    piEvents = null,
+}) {
     if (!isRecord(result)) {
         throw new Error("ergonomics_scorer_invalid_result_record");
     }
@@ -1086,42 +1523,109 @@ export function replayResultRecord({ result, task, repoRoot, evidenceSpec = null
     if (!resolvedTask && !evidenceSpec) {
         throw new Error(`ergonomics_scorer_unknown_task:${result.taskId}`);
     }
+
+    const resolvedPiEvents = piEvents !== null && piEvents !== undefined
+        ? (typeof piEvents === "string" ? parseJsonlEvents(piEvents) : (Array.isArray(piEvents) ? piEvents : []))
+        : (isPiEventStream(hostEvents) ? hostEvents : null);
+    const piExtracted = resolvedPiEvents ? extractPiToolCalls(resolvedPiEvents) : null;
+
     const resolvedRepoRoot = repoRoot
         ?? result.environment?.repoRoot
-        ?? fixture?.repoRoot;
-    for (const recordedRoot of [result.environment?.repoRoot, fixture?.repoRoot]) {
-        if (recordedRoot !== undefined && canonicalRootPath(recordedRoot) !== canonicalRootPath(resolvedRepoRoot)) {
+        ?? fixture?.repoRoot
+        ?? piExtracted?.sessionCwd;
+    for (const recordedRoot of [result.environment?.repoRoot, fixture?.repoRoot, piExtracted?.sessionCwd]) {
+        if (recordedRoot != null && canonicalRootPath(recordedRoot) !== canonicalRootPath(resolvedRepoRoot)) {
             throw new Error("ergonomics_scorer_fixture_root_mismatch");
         }
     }
-    const hostCalls = hostEvents.filter((event) => event?.type === "tool_use"
-        && event.sessionID === result.harness?.sessionId && typeof event.part?.tool === "string");
-    const tools = Array.isArray(result.tools)
-        ? result.tools
-        : Array.isArray(result.harness?.toolCalls)
-            ? result.harness.toolCalls.map((call, idx) => ({
-                index: idx + 1,
-                tool: call.operation ?? call.tool,
-                status: call.status,
-                input: call.input ?? null,
-                output: typeof call.output === "string" ? call.output : matchingHostOutput(call, hostCalls[idx]),
-                visibleBytes: call.visibleResultBytes ?? call.visibleBytes ?? null,
-            }))
-            : [];
+
+    if (fixtureRevision !== undefined && fixtureRevision !== null
+        && result.environment?.gitRevision != null
+        && fixtureRevision !== result.environment.gitRevision) {
+        throw new Error("ergonomics_scorer_fixture_revision_mismatch");
+    }
+    if (expectedFixtureRevision !== undefined && expectedFixtureRevision !== null
+        && fixture?.gitRevision != null
+        && expectedFixtureRevision !== fixture.gitRevision) {
+        throw new Error("ergonomics_scorer_fixture_revision_mismatch");
+    }
+    const resolvedFixtureRevision = fixtureRevision ?? result.environment?.gitRevision ?? null;
+    const resolvedExpectedFixtureRevision = expectedFixtureRevision ?? fixture?.gitRevision ?? null;
+
+    const hostCalls = piExtracted
+        ? []
+        : hostEvents.filter((event) => event?.type === "tool_use"
+            && event.sessionID === result.harness?.sessionId && typeof event.part?.tool === "string");
+    const tools = piExtracted
+        ? piExtracted.tools
+        : Array.isArray(result.tools)
+            ? result.tools
+            : Array.isArray(result.harness?.toolCalls)
+                ? result.harness.toolCalls.map((call, idx) => ({
+                    index: idx + 1,
+                    tool: call.operation ?? call.tool,
+                    status: call.status,
+                    input: call.input ?? null,
+                    output: typeof call.output === "string" ? call.output : matchingHostOutput(call, hostCalls[idx]),
+                    visibleBytes: call.visibleResultBytes ?? call.visibleBytes ?? null,
+                }))
+                : [];
+
+    let fidelity = null;
+    if (piExtracted) {
+        const recordedToolCallCount = typeof result.toolCalls === "number"
+            ? result.toolCalls
+            : (Array.isArray(result.harness?.toolCalls) ? result.harness.toolCalls.length : null);
+        const recordedVisibleBytes = extractRunMetric(result, "visibleToolBytes");
+        const toolCallCountMatches = recordedToolCallCount === null
+            ? null
+            : piExtracted.toolCallCount === recordedToolCallCount;
+        const visibleBytesMatches = recordedVisibleBytes === null
+            ? null
+            : piExtracted.extractedVisibleBytes === recordedVisibleBytes;
+        const mismatches = [];
+        if (toolCallCountMatches === false) {
+            mismatches.push(`tool_call_count_mismatch:extracted=${piExtracted.toolCallCount},recorded=${recordedToolCallCount}`);
+        }
+        if (visibleBytesMatches === false) {
+            mismatches.push(`visible_bytes_mismatch:extracted=${piExtracted.extractedVisibleBytes},recorded=${recordedVisibleBytes}`);
+        }
+        fidelity = {
+            source: "pi_events",
+            extractedToolCallCount: piExtracted.toolCallCount,
+            recordedToolCallCount,
+            toolCallCountMatches,
+            extractedVisibleBytes: piExtracted.extractedVisibleBytes,
+            recordedVisibleBytes,
+            visibleBytesMatches,
+            matched: mismatches.length === 0,
+            mismatches,
+        };
+    }
 
     const trajectory = scoreEvidenceTrajectory({
         tools,
         task: resolvedTask,
         repoRoot: resolvedRepoRoot,
-        fixtureRevision: result.environment?.gitRevision ?? null,
-        expectedFixtureRevision: fixture?.gitRevision ?? null,
+        fixtureRevision: resolvedFixtureRevision,
+        expectedFixtureRevision: resolvedExpectedFixtureRevision,
         evidenceSpec,
         coldStartPhases: result.measurements?.coldStartPhases ?? null,
+        sessionStartMs: piExtracted?.sessionStartMs ?? null,
+        sessionCwd: piExtracted?.sessionCwd ?? null,
     });
+    const strictGrade = isRecord(result.grade)
+        ? result.grade
+        : (typeof result.passed === "boolean"
+            ? {
+                passed: result.passed,
+                failureReasons: Array.isArray(result.failureReasons) ? result.failureReasons : [],
+            }
+            : null);
     const outcome = classifyAnswerOutcome({
         agentResult: result.agentResult,
         expected: resolvedTask?.expected ?? evidenceSpec,
-        strictGrade: result.grade ?? null,
+        strictGrade,
     });
 
     return {
@@ -1133,6 +1637,11 @@ export function replayResultRecord({ result, task, repoRoot, evidenceSpec = null
         wallTimeMs: extractRunMetric(result, "wallTimeMs"),
         visibleToolBytes: extractRunMetric(result, "visibleToolBytes"),
         firstSufficientEvidenceCall: trajectory.firstSufficientEvidenceCall,
+        firstSufficientEvidenceMs: trajectory.firstSufficientEvidenceMs,
+        inFlightParallelCalls: trajectory.inFlightParallelCalls,
+        postEvidenceDispatchedCalls: trajectory.postEvidenceDispatchedCalls,
+        postEvidenceBreakdown: trajectory.postEvidenceBreakdown,
+        fidelity,
         trajectory,
         outcome,
     };
@@ -1148,29 +1657,55 @@ function matchingHostOutput(call, event) {
     return output;
 }
 
+function readCliFlag(argv, flagName) {
+    const idx = argv.indexOf(flagName);
+    if (idx !== -1 && argv[idx + 1] && !argv[idx + 1].startsWith("--")) {
+        return argv[idx + 1];
+    }
+    const prefix = `${flagName}=`;
+    const eqArg = argv.find((arg) => arg.startsWith(prefix));
+    return eqArg ? eqArg.slice(prefix.length) : undefined;
+}
+
 function main(argv) {
-    const fileArgIndex = argv.indexOf("--result");
-    if (fileArgIndex === -1 || !argv[fileArgIndex + 1]) {
-        process.stderr.write("Usage: node ergonomics-scorer.mjs --result <path-to-result.json> [--repo <repoRoot>]\n");
+    const resultArg = readCliFlag(argv, "--result");
+    if (!resultArg) {
+        process.stderr.write(
+            "Usage: node ergonomics-scorer.mjs --result <path-to-result.json> [--pi-events <events.jsonl>] [--repo <repoRoot>] [--fixture-revision <rev>] [--expected-fixture-revision <rev>]\n",
+        );
         process.exitCode = 1;
         return;
     }
-    const resultPath = path.resolve(argv[fileArgIndex + 1]);
-    const repoArgIndex = argv.indexOf("--repo");
-    const repoRoot = repoArgIndex !== -1 ? argv[repoArgIndex + 1] : undefined;
+    const resultPath = path.resolve(resultArg);
+    const repoRoot = readCliFlag(argv, "--repo");
+    const piEventsArg = readCliFlag(argv, "--pi-events");
+    const fixtureRevision = readCliFlag(argv, "--fixture-revision");
+    const expectedFixtureRevision = readCliFlag(argv, "--expected-fixture-revision");
+
     const parsed = JSON.parse(fs.readFileSync(resultPath, "utf8"));
     const manifestPath = path.join(path.dirname(resultPath), "run-manifest.json");
     const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : null;
-    const eventsPath = resultPath.replace(/\.result\.json$/, ".opencode-events.jsonl");
-    const hostEvents = eventsPath !== resultPath && fs.existsSync(eventsPath)
-        ? fs.readFileSync(eventsPath, "utf8").split("\n").filter(Boolean).map(JSON.parse)
-        : [];
+
+    let piEvents = null;
+    let hostEvents = [];
+    if (piEventsArg) {
+        piEvents = parseJsonlEvents(fs.readFileSync(path.resolve(piEventsArg), "utf8"));
+    } else {
+        const eventsPath = resultPath.replace(/\.result\.json$/, ".opencode-events.jsonl");
+        hostEvents = eventsPath !== resultPath && fs.existsSync(eventsPath)
+            ? parseJsonlEvents(fs.readFileSync(eventsPath, "utf8"))
+            : [];
+    }
+
     const summary = replayResultRecord({
         result: parsed,
         repoRoot,
         task: manifest?.taskManifest?.tasks?.find((item) => item.id === parsed.taskId),
         fixture: manifest ? { repoRoot: manifest.repoRoot, gitRevision: manifest.repositoryIdentity?.gitRevision } : undefined,
+        fixtureRevision,
+        expectedFixtureRevision,
         hostEvents,
+        piEvents,
     });
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }

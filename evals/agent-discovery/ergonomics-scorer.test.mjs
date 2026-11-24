@@ -7,6 +7,7 @@ import {
     buildBuiltinEvidenceProfiles,
     classifyAnswerOutcome,
     evaluateErgonomicsGate,
+    extractPiToolCalls,
     replayResultRecord,
     scoreEvidenceTrajectory,
 } from "./ergonomics-scorer.mjs";
@@ -941,4 +942,504 @@ test("legacy host-visible replay supplies gate metrics and missing observations 
     assert.ok(unobserved.failureReasons.includes("sufficient_evidence_unobserved"));
     assert.ok(unobserved.failureReasons.includes("input_tokens_unobserved"));
     assert.ok(unobserved.failureReasons.includes("wall_time_unobserved"));
+});
+
+test("Pi events.jsonl extraction and replay joins tool_execution_start + message_end toolResult, preserves isError, and verifies fidelity", () => {
+    const sessionIso = "2026-11-23T14:00:00.000Z";
+    const sessionStartMs = Date.parse(sessionIso);
+    const errorText = "Error: Invalid arguments for 'read_file'. open_symbol.contractVersion: 2 required";
+    const truncatedVisibleText = JSON.stringify({
+        codebaseRoot: "/repo",
+        file: "packages/mcp/src/core/search-exact-fast-path.ts",
+        content: KNOWN_FULL_OWNER_BODY,
+    });
+    const rawUnTruncatedText = `${truncatedVisibleText} /* extra raw bytes not visible to model */`;
+    const callerGraphText = JSON.stringify({
+        status: "ok",
+        codebaseRoot: "/repo",
+        nodes: [
+            { symbolId: "caller_1", symbolLabel: "method executeSearchAttempt", file: "packages/mcp/src/core/search-request-coordinator.ts" },
+            { symbolId: "owner_1", symbolLabel: "function runExactRegistryFastPath", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+            { symbolId: "callee_1", symbolLabel: "function findExactRegistryMatch", file: "packages/mcp/src/core/search/exact-registry.ts" },
+        ],
+        edges: [
+            { srcSymbolId: "caller_1", dstSymbolId: "owner_1", kind: "call", site: { file: "packages/mcp/src/core/search-request-coordinator.ts", startLine: 1508 } },
+            { srcSymbolId: "owner_1", dstSymbolId: "callee_1", kind: "call", site: { file: "packages/mcp/src/core/search-exact-fast-path.ts", startLine: 260 } },
+        ],
+    });
+    const fallbackEndText = "fallback tool_execution_end output";
+
+    const piEvents = [
+        { type: "session", version: 3, timestamp: sessionIso, cwd: "/repo" },
+        { type: "turn_start" },
+        { type: "message_end", message: { role: "assistant", timestamp: sessionStartMs + 500 } },
+        {
+            type: "tool_execution_start",
+            toolCallId: "c1",
+            toolName: "mcp__satori__read_file",
+            args: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", open_symbol: { contractVersion: 1 } },
+        },
+        {
+            type: "tool_execution_end",
+            toolCallId: "c1",
+            toolName: "mcp__satori__read_file",
+            result: { content: [{ type: "text", text: KNOWN_FULL_OWNER_BODY }] },
+            isError: true,
+            durationMs: 5,
+        },
+        {
+            type: "message_end",
+            message: {
+                role: "toolResult",
+                toolCallId: "c1",
+                toolName: "mcp__satori__read_file",
+                isError: true,
+                timestamp: sessionStartMs + 1000,
+                content: [{ type: "text", text: errorText }],
+            },
+        },
+        { type: "turn_end" },
+        { type: "turn_start" },
+        { type: "message_end", message: { role: "assistant", timestamp: sessionStartMs + 1100 } },
+        {
+            type: "tool_execution_start",
+            toolCallId: "c2",
+            toolName: "mcp__satori__read_file",
+            args: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts" },
+        },
+        {
+            type: "tool_execution_end",
+            toolCallId: "c2",
+            toolName: "mcp__satori__read_file",
+            result: { content: [{ type: "text", text: rawUnTruncatedText }] },
+            isError: false,
+            durationMs: 25,
+        },
+        {
+            type: "message_end",
+            message: {
+                role: "toolResult",
+                toolCallId: "c2",
+                toolName: "mcp__satori__read_file",
+                isError: false,
+                timestamp: sessionStartMs + 2500,
+                content: [{ type: "text", text: truncatedVisibleText }],
+            },
+        },
+        { type: "turn_end" },
+        { type: "turn_start" },
+        { type: "message_end", message: { role: "assistant", timestamp: sessionStartMs + 2600 } },
+        {
+            type: "tool_execution_start",
+            toolCallId: "c3",
+            toolName: "mcp__satori__call_graph",
+            args: { path: "/repo" },
+        },
+        {
+            type: "tool_execution_end",
+            toolCallId: "c3",
+            toolName: "mcp__satori__call_graph",
+            result: { content: [{ type: "text", text: callerGraphText }] },
+            isError: false,
+            durationMs: 40,
+        },
+        {
+            type: "message_end",
+            message: {
+                role: "toolResult",
+                toolCallId: "c3",
+                toolName: "mcp__satori__call_graph",
+                isError: false,
+                timestamp: sessionStartMs + 4200,
+                content: [{ type: "text", text: callerGraphText }],
+            },
+        },
+        {
+            type: "tool_execution_start",
+            toolCallId: "c4",
+            toolName: "mcp__satori__file_outline",
+            args: { path: "/repo", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+        },
+        {
+            type: "tool_execution_end",
+            toolCallId: "c4",
+            toolName: "mcp__satori__file_outline",
+            result: { content: [{ type: "text", text: fallbackEndText }] },
+            isError: false,
+            durationMs: 12,
+        },
+        { type: "turn_end" },
+    ];
+
+    const extracted = extractPiToolCalls(piEvents);
+    assert.equal(extracted.sessionStartMs, sessionStartMs);
+    assert.equal(extracted.sessionCwd, "/repo");
+    assert.equal(extracted.toolCallCount, 4);
+    assert.equal(extracted.tools[0].status, "error");
+    assert.equal(extracted.tools[0].output, errorText);
+    assert.equal(extracted.tools[0].turnIndex, 1);
+    assert.equal(extracted.tools[1].output, truncatedVisibleText);
+    assert.equal(extracted.tools[1].visibleBytes, Buffer.byteLength(truncatedVisibleText, "utf8"));
+    assert.equal(extracted.tools[1].turnIndex, 2);
+    assert.equal(extracted.tools[3].output, fallbackEndText);
+
+    const expectedBytes = Buffer.byteLength(errorText, "utf8")
+        + Buffer.byteLength(truncatedVisibleText, "utf8")
+        + Buffer.byteLength(callerGraphText, "utf8")
+        + Buffer.byteLength(fallbackEndText, "utf8");
+    assert.equal(extracted.extractedVisibleBytes, expectedBytes);
+
+    const replayed = replayResultRecord({
+        repoRoot: "/repo",
+        fixtureRevision: "rev-1",
+        expectedFixtureRevision: "rev-1",
+        piEvents,
+        result: {
+            runId: "pi-test-1",
+            taskId: "known-exact-target",
+            arm: "satori",
+            passed: true,
+            failureReasons: [],
+            toolCalls: 4,
+            visibleToolBytes: expectedBytes,
+            agentResult: { status: "success", answer: KNOWN_TASK.expected },
+        },
+    });
+
+    assert.equal(replayed.fidelity.matched, true);
+    assert.equal(replayed.fidelity.extractedToolCallCount, 4);
+    assert.equal(replayed.fidelity.extractedVisibleBytes, expectedBytes);
+    assert.equal(replayed.strictPassed, true);
+    // Error call #1 must not credit owner statements; call #2 credits owner statements; call #3 credits caller+callee.
+    assert.equal(replayed.trajectory.perCallProgress[0].newlySatisfied.length, 0);
+    assert.equal(replayed.firstSufficientEvidenceCall, 3);
+    assert.equal(replayed.firstSufficientEvidenceMs, 4200);
+    assert.equal(replayed.inFlightParallelCalls, 1);
+    assert.equal(replayed.postEvidenceDispatchedCalls, 0);
+
+    const mismatchReplay = replayResultRecord({
+        repoRoot: "/repo",
+        piEvents,
+        result: {
+            runId: "pi-test-mismatch",
+            taskId: "known-exact-target",
+            arm: "satori",
+            passed: true,
+            toolCalls: 99,
+            visibleToolBytes: 123,
+            agentResult: { status: "success", answer: KNOWN_TASK.expected },
+        },
+    });
+    assert.equal(mismatchReplay.fidelity.matched, false);
+    assert.equal(mismatchReplay.fidelity.toolCallCountMatches, false);
+    assert.equal(mismatchReplay.fidelity.visibleBytesMatches, false);
+    assert.equal(mismatchReplay.fidelity.mismatches.length, 2);
+});
+
+test("Turn-aware post-sufficiency breakdown separates in-flight parallel calls from later-turn dispatched categories", () => {
+    const baseMs = 1_700_000_000_000;
+    const trajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        sessionStartMs: baseMs,
+        tools: [
+            {
+                index: 1,
+                turnIndex: 1,
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: KNOWN_FULL_OWNER_BODY,
+                dispatchedAtMs: baseMs + 100,
+                visibleAtMs: baseMs + 200,
+            },
+            {
+                index: 2,
+                turnIndex: 2,
+                tool: "mcp__satori__call_graph",
+                input: { path: "/repo" },
+                output: JSON.stringify({
+                    status: "ok",
+                    nodes: [
+                        { symbolId: "c", symbolLabel: "method executeSearchAttempt", file: "packages/mcp/src/core/search-request-coordinator.ts" },
+                        { symbolId: "o", symbolLabel: "function runExactRegistryFastPath", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                        { symbolId: "e", symbolLabel: "function findExactRegistryMatch", file: "packages/mcp/src/core/search/exact-registry.ts" },
+                    ],
+                    edges: [
+                        { srcSymbolId: "c", dstSymbolId: "o", kind: "call", site: { file: "packages/mcp/src/core/search-request-coordinator.ts", startLine: 148 } },
+                        { srcSymbolId: "o", dstSymbolId: "e", kind: "call", site: { file: "packages/mcp/src/core/search-exact-fast-path.ts", startLine: 260 } },
+                    ],
+                }),
+                dispatchedAtMs: baseMs + 300,
+                visibleAtMs: baseMs + 500,
+            },
+            {
+                index: 3,
+                turnIndex: 2,
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-request-coordinator.ts", start_line: 140, end_line: 160 },
+                output: KNOWN_CALLER_EVIDENCE,
+                dispatchedAtMs: baseMs + 310,
+                visibleAtMs: baseMs + 500,
+            },
+            {
+                index: 4,
+                turnIndex: 3,
+                status: "error",
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", open_symbol: { contractVersion: 1 } },
+                output: "Error: Invalid arguments for 'read_file'. contractVersion 2 required",
+                dispatchedAtMs: baseMs + 600,
+                visibleAtMs: baseMs + 650,
+            },
+            {
+                index: 5,
+                turnIndex: 3,
+                tool: "mcp__satori__file_outline",
+                input: { path: "/repo", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: JSON.stringify({ status: "ok", outline: { symbols: [] } }),
+                dispatchedAtMs: baseMs + 600,
+                visibleAtMs: baseMs + 660,
+            },
+            {
+                index: 6,
+                turnIndex: 3,
+                tool: "mcp__satori__call_graph",
+                input: { path: "/repo", direction: "callees", symbolRef: { file: "packages/mcp/src/core/search-exact-fast-path.ts", symbol: "runExactRegistryFastPath" } },
+                output: "{}",
+                dispatchedAtMs: baseMs + 600,
+                visibleAtMs: baseMs + 670,
+            },
+            {
+                index: 7,
+                turnIndex: 4,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-exact-fast-path.ts", offset: 227, limit: 20 },
+                output: KNOWN_FULL_OWNER_BODY,
+                dispatchedAtMs: baseMs + 700,
+                visibleAtMs: baseMs + 710,
+            },
+            {
+                index: 8,
+                turnIndex: 4,
+                tool: "grep",
+                input: { path: "packages/mcp/src/core", pattern: "runExactRegistryFastPath" },
+                output: "No matches found",
+                dispatchedAtMs: baseMs + 700,
+                visibleAtMs: baseMs + 715,
+            },
+            {
+                index: 9,
+                turnIndex: 4,
+                tool: "custom_inspect",
+                input: { path: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: "ok",
+                dispatchedAtMs: baseMs + 700,
+                visibleAtMs: baseMs + 720,
+            },
+        ],
+    });
+
+    assert.equal(trajectory.firstSufficientEvidenceCall, 2);
+    assert.equal(trajectory.firstSufficientEvidenceMs, 500);
+    assert.equal(trajectory.callsAfterSufficientEvidence, 7);
+    assert.equal(trajectory.inFlightParallelCalls, 1);
+    assert.equal(trajectory.postEvidenceDispatchedCalls, 6);
+    assert.deepEqual(
+        trajectory.postEvidenceBreakdown.map((entry) => ({
+            index: entry.index,
+            turnIndex: entry.turnIndex,
+            category: entry.category,
+            status: entry.status,
+        })),
+        [
+            { index: 4, turnIndex: 3, category: "schema_retry", status: "error" },
+            { index: 5, turnIndex: 3, category: "outline_check", status: "completed" },
+            { index: 6, turnIndex: 3, category: "relation_check", status: "completed" },
+            { index: 7, turnIndex: 4, category: "source_reread", status: "completed" },
+            { index: 8, turnIndex: 4, category: "search_extra", status: "completed" },
+            { index: 9, turnIndex: 4, category: "other", status: "completed" },
+        ],
+    );
+
+    const noTurnOrTimestamps = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        tools: [
+            {
+                index: 1,
+                tool: "satori_read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: KNOWN_FULL_OWNER_BODY,
+            },
+            {
+                index: 2,
+                tool: "read",
+                input: { filePath: "/repo/packages/mcp/src/core/search-request-coordinator.ts" },
+                output: KNOWN_CALLER_EVIDENCE,
+            },
+            {
+                index: 3,
+                tool: "read",
+                input: { filePath: "/repo/packages/mcp/src/core/search/exact-registry.ts" },
+                output: KNOWN_CALLEE_EVIDENCE,
+            },
+            {
+                index: 4,
+                tool: "satori_file_outline",
+                input: { path: "/repo", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: "{}",
+            },
+        ],
+    });
+    assert.equal(noTurnOrTimestamps.firstSufficientEvidenceCall, 3);
+    assert.equal(noTurnOrTimestamps.firstSufficientEvidenceMs, null);
+    assert.equal(noTurnOrTimestamps.callsAfterSufficientEvidence, 1);
+    assert.equal(noTurnOrTimestamps.inFlightParallelCalls, null);
+    assert.equal(noTurnOrTimestamps.postEvidenceDispatchedCalls, null);
+    assert.deepEqual(noTurnOrTimestamps.postEvidenceBreakdown, []);
+});
+
+test("firstSufficientEvidenceMs gate passes, fails on regression, and fails closed when unobserved", () => {
+    const controlRuns = [
+        {
+            arm: "native",
+            strictPassed: true,
+            totalInputTokens: 10_000,
+            wallTimeMs: 5_000,
+            firstSufficientEvidenceCall: 5,
+            firstSufficientEvidenceMs: 4_000,
+            visibleToolBytes: 3_000,
+        },
+    ];
+    const fastTreatment = [
+        {
+            arm: "satori",
+            strictPassed: true,
+            totalInputTokens: 9_000,
+            wallTimeMs: 4_500,
+            firstSufficientEvidenceCall: 3,
+            firstSufficientEvidenceMs: 3_000,
+            visibleToolBytes: 2_800,
+        },
+    ];
+    const passGate = evaluateErgonomicsGate({
+        controlRuns,
+        treatmentRuns: fastTreatment,
+        armPolicy: { arm: "satori", maxFirstSufficientEvidenceMsRatio: 0.9 },
+    });
+    assert.equal(passGate.passed, true);
+    assert.equal(passGate.ratios.firstSufficientEvidenceMsRatio, 0.75);
+    assert.equal(passGate.checks.firstSufficientEvidenceMs, true);
+
+    const slowTreatment = [
+        {
+            ...fastTreatment[0],
+            firstSufficientEvidenceMs: 4_500,
+        },
+    ];
+    const regressionGate = evaluateErgonomicsGate({
+        controlRuns,
+        treatmentRuns: slowTreatment,
+        armPolicy: { arm: "satori", maxFirstSufficientEvidenceMsRatio: 1.0 },
+    });
+    assert.equal(regressionGate.passed, false);
+    assert.deepEqual(regressionGate.failureReasons, ["sufficient_evidence_time_regression"]);
+
+    const unobservedTreatment = [
+        {
+            arm: "satori",
+            strictPassed: true,
+            totalInputTokens: 9_000,
+            wallTimeMs: 4_500,
+            firstSufficientEvidenceCall: 3,
+            visibleToolBytes: 2_800,
+        },
+    ];
+    const unobservedGate = evaluateErgonomicsGate({
+        controlRuns,
+        treatmentRuns: unobservedTreatment,
+        armPolicy: { arm: "satori", maxFirstSufficientEvidenceMsRatio: 1.0 },
+    });
+    assert.equal(unobservedGate.passed, false);
+    assert.deepEqual(unobservedGate.failureReasons, ["sufficient_evidence_time_unobserved"]);
+});
+
+test("Pi native read and grep attribution supports repo-relative paths and context lines while rejecting wrong-root, signature-only, and cross-file lines", () => {
+    // 1. Repo-relative Pi read + unnumbered raw body + TS class method caller + Pi grep context lines
+    const validPiTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        sessionCwd: "/repo",
+        task: KNOWN_TASK,
+        tools: [
+            {
+                index: 1,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-exact-fast-path.ts", offset: 227, limit: 200 },
+                output: KNOWN_FULL_OWNER_BODY,
+            },
+            {
+                index: 2,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", offset: 1470, limit: 50 },
+                output: "const exactFastPath = await runExactRegistryFastPath({",
+            },
+            {
+                index: 3,
+                tool: "grep",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", pattern: "executeSearchAttempt" },
+                output: "packages/mcp/src/core/search-request-coordinator.ts/search-request-coordinator.ts-940-     private async executeSearchAttempt(",
+            },
+            {
+                index: 4,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search/exact-registry.ts", offset: 88, limit: 20 },
+                output: KNOWN_CALLEE_EVIDENCE,
+            },
+        ],
+    });
+    assert.equal(validPiTrajectory.sufficient, true);
+    assert.equal(validPiTrajectory.firstSufficientEvidenceCall, 4);
+
+    // 2. Wrong sessionCwd rejects repo-relative reads even when full source matches
+    const wrongCwdTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        sessionCwd: "/other-repo",
+        task: KNOWN_TASK,
+        tools: [
+            {
+                index: 1,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-exact-fast-path.ts", offset: 227, limit: 200 },
+                output: KNOWN_FULL_OWNER_BODY,
+            },
+        ],
+    });
+    assert.equal(wrongCwdTrajectory.sufficient, false);
+    assert.equal(wrongCwdTrajectory.deliveredRequirements.length, 0);
+
+    // 3. Signature-only + cross-file grep lines must not leak into owner file
+    const crossFileGrepTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        sessionCwd: "/repo",
+        task: KNOWN_TASK,
+        tools: [
+            {
+                index: 1,
+                tool: "grep",
+                input: { path: "packages/mcp/src/core", pattern: "runExactRegistryFastPath" },
+                output: [
+                    "packages/mcp/src/core/search-exact-fast-path.ts:227: export async function runExactRegistryFastPath(",
+                    "packages/mcp/src/core/other-copy.ts-10- const e = isExactRegistryEligible(input, host);",
+                    'packages/mcp/src/core/other-copy.ts-11- if (input.navigationAuthority !== "valid") return;',
+                    "packages/mcp/src/core/other-copy.ts-12- const m = findExactRegistryMatch({",
+                    "packages/mcp/src/core/other-copy.ts-13- semanticPassesUsed: [], rerankApplied: false",
+                ].join("\n"),
+            },
+        ],
+    });
+    assert.equal(crossFileGrepTrajectory.sufficient, false);
+    assert.deepEqual(
+        crossFileGrepTrajectory.deliveredRequirements.map((req) => req.id),
+        ["owner_definition"],
+    );
 });

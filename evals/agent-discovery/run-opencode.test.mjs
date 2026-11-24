@@ -32,7 +32,11 @@ import {
 } from "./run-opencode.mjs";
 import {
     createAgentDiscoveryGuard,
+    HYBRID_TOOLS,
+    NATIVE_TOOLS,
     normalizeToolOutput,
+    SATORI_TOOLS,
+    SCOPE_PROFILES,
     validateToolCall,
 } from "./opencode-guard.mjs";
 
@@ -1217,4 +1221,529 @@ test("shutdown observes a child that closes before the caller starts cleanup", a
     assert.deepEqual(f.signals, []);
     assert.equal(f.logStream.closed, true);
     assert.equal(f.timers.size, 0);
+});
+
+test("CLI arg parsing supports --first-call, --arms, and --scope-profile and protects --acceptance-baseline", () => {
+    const defaults = parseArgs([]);
+    assert.equal(defaults.firstCall, "scripted");
+    assert.deepEqual(defaults.arms, ["native", "satori"]);
+    assert.equal(defaults.scopeProfile, "production");
+
+    const custom = parseArgs([
+        "--first-call", "unscripted",
+        "--arms", "native,satori,hybrid",
+        "--scope-profile", "production_and_tests",
+    ]);
+    assert.equal(custom.firstCall, "unscripted");
+    assert.deepEqual(custom.arms, ["native", "satori", "hybrid"]);
+    assert.equal(custom.scopeProfile, "production_and_tests");
+
+    assert.throws(() => parseArgs(["--first-call", "other"]), /Unsupported first-call mode/);
+    assert.throws(() => parseArgs(["--scope-profile", "all"]), /Unsupported scope profile/);
+    assert.throws(() => parseArgs(["--arms", ""]), /--arms must/);
+    assert.throws(() => parseArgs(["--arms", "native,unknown"]), /Unsupported arm/);
+    assert.throws(() => parseArgs(["--arms", "native,native"]), /duplicate arms/);
+
+    for (const incompatible of [
+        ["--acceptance-baseline", "--repo", "/repo", "--first-call", "unscripted"],
+        ["--acceptance-baseline", "--repo", "/repo", "--arms", "native,satori,hybrid"],
+        ["--acceptance-baseline", "--repo", "/repo", "--arms", "satori,native"],
+        ["--acceptance-baseline", "--repo", "/repo", "--arms", "hybrid"],
+        ["--acceptance-baseline", "--repo", "/repo", "--scope-profile", "production_and_tests"],
+    ]) {
+        assert.throws(() => parseArgs(incompatible), /--acceptance-baseline requires/);
+    }
+});
+
+test("run schedule rotates deterministically for 3 arms while preserving 2-arm alternation", () => {
+    const twoArm = buildRunSchedule([{ id: "task" }], 3, ["native", "satori"]);
+    assert.deepEqual(twoArm.map(({ repetition, arm, order }) => ({ repetition, arm, order })), [
+        { repetition: 1, arm: "native", order: 1 },
+        { repetition: 1, arm: "satori", order: 2 },
+        { repetition: 2, arm: "satori", order: 1 },
+        { repetition: 2, arm: "native", order: 2 },
+        { repetition: 3, arm: "native", order: 1 },
+        { repetition: 3, arm: "satori", order: 2 },
+    ]);
+
+    const threeArm = buildRunSchedule([{ id: "task" }], 4, ["native", "satori", "hybrid"]);
+    assert.deepEqual(threeArm.map(({ repetition, arm, order }) => ({ repetition, arm, order })), [
+        { repetition: 1, arm: "native", order: 1 },
+        { repetition: 1, arm: "satori", order: 2 },
+        { repetition: 1, arm: "hybrid", order: 3 },
+        { repetition: 2, arm: "satori", order: 1 },
+        { repetition: 2, arm: "hybrid", order: 2 },
+        { repetition: 2, arm: "native", order: 3 },
+        { repetition: 3, arm: "hybrid", order: 1 },
+        { repetition: 3, arm: "native", order: 2 },
+        { repetition: 3, arm: "satori", order: 3 },
+        { repetition: 4, arm: "native", order: 1 },
+        { repetition: 4, arm: "satori", order: 2 },
+        { repetition: 4, arm: "hybrid", order: 3 },
+    ]);
+});
+
+test("buildAgentPrompt and gradeRun support unscripted firstCall and hybrid arm", () => {
+    const validAnswer = {
+        status: "success",
+        answer: {
+            ownerFile: knownTask.expected.ownerFile,
+            ownerSymbol: knownTask.expected.ownerSymbol,
+            ownerSpan: knownTask.expected.ownerSpan,
+            relatedSymbols: knownTask.expected.requiredRelations,
+            taskFacts: knownTask.expected.taskFacts,
+            behavioralConclusion: "Owner behavior.",
+        },
+    };
+
+    const satoriUnscripted = buildAgentPrompt({
+        repoRoot: "/repo",
+        task: knownTask,
+        arm: "satori",
+        mode: "natural",
+        firstCall: "unscripted",
+    });
+    assert.doesNotMatch(satoriUnscripted, /The first call must be satori_search_codebase/);
+    assert.doesNotMatch(satoriUnscripted, /"rankingMode":"default"/);
+
+    const hybridUnscripted = buildAgentPrompt({
+        repoRoot: "/repo",
+        task: knownTask,
+        arm: "hybrid",
+        mode: "natural",
+        firstCall: "unscripted",
+    });
+    assert.match(hybridUnscripted, /ARM=hybrid/);
+    assert.match(hybridUnscripted, /grep, glob, read, satori_search_codebase/);
+    assert.doesNotMatch(hybridUnscripted, /The first call must be satori_search_codebase/);
+
+    // Satori unscripted skips invalid_satori_first_search even with custom first query.
+    const satoriGrade = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "satori",
+        mode: "natural",
+        firstCall: "unscripted",
+        repoRoot: "/repo",
+        tools: [{
+            tool: "satori_search_codebase",
+            input: { path: "/repo", query: "custom query", limit: 10 },
+            output: "packages/mcp/src/owner.ts targetOwner",
+            visibleBytes: 100,
+        }],
+    });
+    assert.equal(satoriGrade.passed, true);
+    assert.deepEqual(satoriGrade.failureReasons, []);
+
+    // Scripted Satori still enforces invalid_satori_first_search.
+    const scriptedFail = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "satori",
+        mode: "natural",
+        firstCall: "scripted",
+        repoRoot: "/repo",
+        tools: [{
+            tool: "satori_search_codebase",
+            input: { path: "/repo", query: "custom query", limit: 10 },
+            output: "packages/mcp/src/owner.ts targetOwner",
+            visibleBytes: 100,
+        }],
+    });
+    assert.equal(scriptedFail.passed, false);
+    assert.ok(scriptedFail.failureReasons.includes("invalid_satori_first_search"));
+
+    // Hybrid arm allows both native and Satori tools and skips invalid_satori_first_search when unscripted.
+    const hybridGrade = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "hybrid",
+        mode: "natural",
+        firstCall: "unscripted",
+        repoRoot: "/repo",
+        tools: [
+            {
+                tool: "satori_search_codebase",
+                input: { path: "/repo", query: "custom query", limit: 5 },
+                output: "packages/mcp/src/owner.ts targetOwner",
+                visibleBytes: 100,
+            },
+            {
+                tool: "read",
+                input: { filePath: "/repo/packages/mcp/src/owner.ts", offset: 1, limit: 20 },
+                output: "targetOwner resolver",
+                visibleBytes: 100,
+            },
+        ],
+    });
+    assert.equal(hybridGrade.passed, true);
+
+    // Hybrid arm still rejects forbidden tools (e.g., bash).
+    const hybridForbidden = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "hybrid",
+        mode: "natural",
+        firstCall: "unscripted",
+        repoRoot: "/repo",
+        tools: [{
+            tool: "bash",
+            input: { command: "rg targetOwner" },
+            output: "targetOwner",
+            visibleBytes: 20,
+        }],
+    });
+    assert.equal(hybridForbidden.passed, false);
+    assert.ok(hybridForbidden.failureReasons.includes("forbidden_hybrid_tool:bash"));
+
+    // Isolated OpenCode config includes satori-eval-hybrid with HYBRID_TOOLS.
+    const config = buildIsolatedOpenCodeConfig({
+        mcp: { satori: { type: "local", command: ["node", "index.js"] } },
+    }, "opencode/model", "/repo");
+    assert.equal(config.agent["satori-eval-hybrid"].steps, 26);
+    for (const tool of HYBRID_TOOLS) {
+        assert.equal(config.agent["satori-eval-hybrid"].tools[tool], true);
+        assert.equal(config.agent["satori-eval-hybrid"].permission[tool], "allow");
+    }
+});
+
+test("production_and_tests scope profile grants symmetric test access while keeping bounds", async () => {
+    assert.deepEqual(SCOPE_PROFILES, ["production", "production_and_tests"]);
+    assert.deepEqual(HYBRID_TOOLS, [...NATIVE_TOOLS, ...SATORI_TOOLS]);
+
+    const repoRoot = "/repo";
+    const coreTest = "/repo/packages/core/src/index.test.ts";
+    const mcpTest = "/repo/packages/mcp/src/owner.test.ts";
+    const outsideTest = "/repo/evals/agent-discovery/run-opencode.test.ts";
+    const externalTest = "/other/packages/mcp/src/owner.test.ts";
+
+    // Default "production" rejects *.test.ts for both native and Satori.
+    assert.throws(() => validateToolCall("read", { filePath: mcpTest, limit: 10 }, repoRoot), /out_of_scope/);
+    assert.throws(() => validateToolCall("grep", { path: coreTest, pattern: "x" }, repoRoot), /out_of_scope/);
+    assert.throws(() => validateToolCall("satori_read_file", { path: mcpTest }, repoRoot), /out_of_scope/);
+    assert.throws(() => validateToolCall("satori_file_outline", { path: repoRoot, file: "packages/mcp/src/owner.test.ts" }, repoRoot), /out_of_scope/);
+    assert.throws(() => validateToolCall("satori_call_graph", { path: repoRoot, symbolRef: { file: "packages/mcp/src/owner.test.ts", name: "fn" } }, repoRoot), /out_of_scope/);
+
+    // "production_and_tests" grants symmetric access inside packages/{core,mcp}/src.
+    const opts = { scopeProfile: "production_and_tests" };
+    assert.doesNotThrow(() => validateToolCall("read", { filePath: mcpTest, offset: 1, limit: 50 }, repoRoot, opts));
+    assert.doesNotThrow(() => validateToolCall("grep", { path: coreTest, pattern: "x" }, repoRoot, opts));
+    assert.doesNotThrow(() => validateToolCall("glob", { path: "/repo/packages/core/src", pattern: "*.test.ts" }, repoRoot, opts));
+    assert.doesNotThrow(() => validateToolCall("satori_read_file", { path: mcpTest }, repoRoot, opts));
+    assert.doesNotThrow(() => validateToolCall("satori_file_outline", { path: repoRoot, file: "packages/mcp/src/owner.test.ts" }, repoRoot, opts));
+    assert.doesNotThrow(() => validateToolCall("satori_call_graph", { path: repoRoot, symbolRef: { file: "packages/core/src/index.test.ts", name: "fn" } }, repoRoot, opts));
+
+    // Out-of-scope and out-of-repo paths are still blocked under production_and_tests.
+    assert.throws(() => validateToolCall("read", { filePath: outsideTest, limit: 10 }, repoRoot, opts), /out_of_scope/);
+    assert.throws(() => validateToolCall("satori_read_file", { path: externalTest }, repoRoot, opts), /out_of_scope/);
+    assert.throws(() => validateToolCall("satori_file_outline", { path: repoRoot, file: "evals/agent-discovery/run-opencode.test.ts" }, repoRoot, opts), /out_of_scope/);
+
+    // Arm toolset enforcement in validateToolCall and plugin guard.
+    assert.throws(() => validateToolCall("satori_search_codebase", { path: repoRoot }, repoRoot, { arm: "native" }), /forbidden_tool/);
+    assert.throws(() => validateToolCall("read", { filePath: "/repo/packages/mcp/src/owner.ts", limit: 10 }, repoRoot, { arm: "satori" }), /forbidden_tool/);
+    assert.doesNotThrow(() => validateToolCall("read", { filePath: mcpTest, limit: 10 }, repoRoot, { arm: "hybrid", ...opts }));
+    assert.doesNotThrow(() => validateToolCall("satori_read_file", { path: mcpTest }, repoRoot, { arm: "hybrid", ...opts }));
+
+    // normalizeToolOutput keeps .test.ts lines under production_and_tests and enforces 32768 B cap.
+    const normalized = normalizeToolOutput(
+        `packages/mcp/src/owner.test.ts:1 kept\n${"x".repeat(40_000)}`,
+        "grep",
+        opts,
+    );
+    assert.equal(normalized.truncated, true);
+    assert.ok(Buffer.byteLength(normalized.output, "utf8") <= 32_768);
+    assert.match(normalized.output, /owner\.test\.ts:1 kept/);
+    assert.match(normalized.output, /TRUNCATED AT 32768 UTF-8 BYTES/);
+
+    // Plugin guard honors SATORI_AGENT_DISCOVERY_SCOPE_PROFILE and 24-call budget.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-scope-"));
+    try {
+        const hooks = createAgentDiscoveryGuard({
+            SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
+            SATORI_AGENT_DISCOVERY_REPO_ROOT: repoRoot,
+            SATORI_AGENT_DISCOVERY_SCOPE_PROFILE: "production_and_tests",
+            SATORI_AGENT_DISCOVERY_ARM: "hybrid",
+            SATORI_AGENT_DISCOVERY_TOOL_LEDGER: path.join(directory, "ledger.jsonl"),
+            SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: path.join(directory, "definitions.jsonl"),
+        });
+        const afterOutput = { output: "packages/mcp/src/owner.test.ts:1 match", metadata: {} };
+        await hooks["tool.execute.before"](
+            { tool: "read", sessionID: "s1", callID: "c1" },
+            { args: { filePath: mcpTest, offset: 1, limit: 10 } },
+        );
+        await hooks["tool.execute.after"](
+            { tool: "read", sessionID: "s1", callID: "c1" },
+            afterOutput,
+        );
+        assert.match(afterOutput.output, /owner\.test\.ts:1 match/);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+
+    // buildAgentPrompt and gradeRun under production_and_tests do not ban or penalize allowed tests.
+    const prompt = buildAgentPrompt({
+        repoRoot,
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+        scopeProfile: "production_and_tests",
+    });
+    assert.match(prompt, /including \*\.test\.ts/);
+    assert.doesNotMatch(prompt, /Never inspect \*\.test\.ts/);
+
+    const grade = gradeRun({
+        agentResult: {
+            status: "success",
+            answer: {
+                ownerFile: knownTask.expected.ownerFile,
+                ownerSymbol: knownTask.expected.ownerSymbol,
+                ownerSpan: knownTask.expected.ownerSpan,
+                relatedSymbols: knownTask.expected.requiredRelations,
+                taskFacts: knownTask.expected.taskFacts,
+                behavioralConclusion: "Owner behavior.",
+            },
+        },
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+        scopeProfile: "production_and_tests",
+        repoRoot,
+        tools: [
+            {
+                tool: "grep",
+                input: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+                output: "packages/mcp/src/owner.test.ts:1 targetOwner",
+                visibleBytes: 50,
+            },
+            {
+                tool: "read",
+                input: { filePath: mcpTest, offset: 1, limit: 20 },
+                output: "test body",
+                visibleBytes: 20,
+            },
+        ],
+    });
+    assert.equal(grade.passed, true);
+    assert.deepEqual(grade.failureReasons, []);
+});
+
+test("native and hybrid evidence checks resolve subdirectory-relative grep paths", () => {
+    const validAnswer = {
+        status: "success",
+        answer: {
+            ownerFile: knownTask.expected.ownerFile,
+            ownerSymbol: knownTask.expected.ownerSymbol,
+            ownerSpan: knownTask.expected.ownerSpan,
+            relatedSymbols: knownTask.expected.requiredRelations,
+            taskFacts: knownTask.expected.taskFacts,
+            behavioralConclusion: "Owner behavior.",
+        },
+    };
+    const base = {
+        agentResult: validAnswer,
+        task: knownTask,
+        mode: "natural",
+        firstCall: "unscripted",
+        scopeProfile: "production_and_tests",
+        repoRoot: "/repo",
+    };
+    for (const arm of ["native", "hybrid"]) {
+        const relative = gradeRun({
+            ...base,
+            arm,
+            tools: [
+                {
+                    tool: "grep",
+                    input: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+                    output: "tools/read_file.test.ts:1: targetOwner",
+                    visibleBytes: 40,
+                },
+                {
+                    tool: "read",
+                    input: {
+                        filePath: "/repo/packages/mcp/src/tools/read_file.test.ts",
+                        offset: 1,
+                        limit: 20,
+                    },
+                    output: "test body",
+                    visibleBytes: 9,
+                },
+            ],
+        });
+        assert.equal(relative.passed, true, `${arm}: ${relative.failureReasons}`);
+        assert.deepEqual(relative.failureReasons, []);
+
+        for (const output of [
+            "../cli/src/install.test.ts:1: targetOwner",
+            "packages/cli/src/install.test.ts:1: targetOwner",
+            "/other/packages/mcp/src/owner.test.ts:1: targetOwner",
+        ]) {
+            const outside = gradeRun({
+                ...base,
+                arm,
+                tools: [{
+                    tool: "grep",
+                    input: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+                    output,
+                    visibleBytes: 40,
+                }],
+            });
+            assert.equal(outside.passed, false, `${arm}: ${output}`);
+            assert.ok(
+                outside.failureReasons.includes("native_test_evidence_visible"),
+                `${arm}: ${output}`,
+            );
+        }
+    }
+});
+
+test("guard enforces each arm's toolset from the OpenCode agent identity", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-arms-"));
+    try {
+        const hooks = createAgentDiscoveryGuard({
+            SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
+            SATORI_AGENT_DISCOVERY_REPO_ROOT: "/repo",
+            SATORI_AGENT_DISCOVERY_TOOL_LEDGER: path.join(directory, "ledger.jsonl"),
+            SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: path.join(directory, "definitions.jsonl"),
+        });
+        const satoriCall = { args: { path: "/repo" } };
+        const nativeCall = {
+            args: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+        };
+
+        await assert.rejects(() => hooks["tool.execute.before"](
+            {
+                tool: "satori_search_codebase",
+                sessionID: "native-session",
+                callID: "native-1",
+                agent: "satori-eval-native",
+            },
+            satoriCall,
+        ), /agent_discovery_forbidden_tool:satori_search_codebase/);
+        await assert.doesNotReject(() => hooks["tool.execute.before"](
+            {
+                tool: "grep",
+                sessionID: "native-session",
+                callID: "native-2",
+                agent: "satori-eval-native",
+            },
+            nativeCall,
+        ));
+
+        await assert.rejects(() => hooks["tool.execute.before"](
+            {
+                tool: "grep",
+                sessionID: "satori-session",
+                callID: "satori-1",
+                agent: "satori-eval-satori",
+            },
+            nativeCall,
+        ), /agent_discovery_forbidden_tool:grep/);
+        await assert.doesNotReject(() => hooks["tool.execute.before"](
+            {
+                tool: "satori_search_codebase",
+                sessionID: "satori-session",
+                callID: "satori-2",
+                agent: "satori-eval-satori",
+            },
+            satoriCall,
+        ));
+
+        await assert.doesNotReject(() => hooks["tool.execute.before"](
+            {
+                tool: "grep",
+                sessionID: "hybrid-session",
+                callID: "hybrid-1",
+                agent: "satori-eval-hybrid",
+            },
+            nativeCall,
+        ));
+        await assert.doesNotReject(() => hooks["tool.execute.before"](
+            {
+                tool: "satori_search_codebase",
+                sessionID: "hybrid-session",
+                callID: "hybrid-2",
+                agent: "satori-eval-hybrid",
+            },
+            satoriCall,
+        ));
+
+        // chat.params carries the session arm when later tool calls omit it.
+        await hooks["chat.params"](
+            { sessionID: "remembered-session", agent: "satori-eval-satori" },
+            {},
+        );
+        await assert.rejects(() => hooks["tool.execute.before"](
+            {
+                tool: "grep",
+                sessionID: "remembered-session",
+                callID: "remembered-1",
+            },
+            nativeCall,
+        ), /agent_discovery_forbidden_tool:grep/);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test("reporting omits absent arms and their delta sections", () => {
+    const run = (arm, passed = true) => ({
+        taskId: "task",
+        arm,
+        grade: { passed },
+        measurements: {
+            taskWallTimeMs: arm === "native" ? 300 : 200,
+            timeToFirstCorrectTargetMs: 100,
+            timeToFirstOwnerSourceMs: 150,
+            toolLatencyMs: 50,
+            apiInputTokens: 1_000,
+            apiOutputTokens: 100,
+            reasoningTokens: 10,
+            cachedInputTokens: 20,
+            visibleToolResultBytes: 500,
+            toolCalls: arm === "native" ? 4 : 3,
+            modelTurns: arm === "native" ? 5 : 4,
+            stepsToFirstCorrectTarget: 1,
+            stepsToFirstOwnerSource: 2,
+            stepsToVerifiedAnswer: 3,
+            investigationTailToolCalls: 0,
+        },
+    });
+    const metadata = {
+        suiteId: "suite",
+        gitRevision: "abc",
+        protocolVersion: "satori-agent-discovery-v4",
+        openCodeVersion: "1.17.20",
+        model: "opencode/model",
+        runClass: "exploratory",
+        mode: "natural",
+        repetitions: 1,
+        measurementValidity: {
+            status: "valid",
+            valid: true,
+            expectedRunCount: 1,
+            observedRunCount: 1,
+            failureReasons: [],
+        },
+    };
+
+    const hybridOnly = summarizeRuns([run("hybrid"), run("hybrid")]);
+    assert.deepEqual(Object.keys(hybridOnly.task), ["hybrid"]);
+    const hybridReport = formatMarkdownReport(hybridOnly, metadata);
+    assert.match(hybridReport, /\| task \| hybrid \|/);
+    assert.doesNotMatch(hybridReport, /\| task \| native \|/);
+    assert.doesNotMatch(hybridReport, /\| task \| satori \|/);
+    assert.doesNotMatch(hybridReport, /Satori minus native/);
+    assert.doesNotMatch(hybridReport, /Hybrid minus native/);
+
+    const threeArm = summarizeRuns([run("native"), run("satori"), run("hybrid")]);
+    assert.deepEqual(Object.keys(threeArm.task), ["native", "satori", "hybrid"]);
+    const threeArmReport = formatMarkdownReport(threeArm, metadata);
+    assert.match(threeArmReport, /\| task \| native \|/);
+    assert.match(threeArmReport, /\| task \| satori \|/);
+    assert.match(threeArmReport, /\| task \| hybrid \|/);
+    assert.match(threeArmReport, /Correct-run Satori minus native median/);
+    assert.match(threeArmReport, /Correct-run Hybrid minus native median/);
+    assert.match(threeArmReport, /Raw Satori minus native median/);
+    assert.match(threeArmReport, /Raw Hybrid minus native median/);
 });

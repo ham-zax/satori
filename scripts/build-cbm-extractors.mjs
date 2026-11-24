@@ -29,11 +29,23 @@ const coreLanguages = new Set([
     'svelte', 'protobuf', 'graphql', 'dockerfile', 'makefile', 'cmake', 'powershell',
     'gdscript', 'gleam', 'commonlisp',
 ]);
-const closureSources = [
-    'internal/cbm/extract_defs.c', 'internal/cbm/helpers.c', 'internal/cbm/lang_specs.c',
-    'internal/cbm/ts_runtime.c', 'src/foundation/arena.c', 'src/semantic/ast_profile.c',
-    'src/simhash/minhash.c', 'satori_extractor.c', 'satori_shim.c',
+const sharedObjectSources = [
+    'internal/cbm/callable_sig.c',
+    'internal/cbm/extract_defs.c',
+    'internal/cbm/helpers.c',
+    'internal/cbm/lang_specs.c',
+    'internal/cbm/ts_runtime.c',
+    'src/discover/test_conventions.c',
+    'src/foundation/arena.c',
+    'src/foundation/hash_table.c',
+    'src/foundation/secure_random.c',
+    'src/foundation/sha256.c',
+    'src/semantic/ast_profile.c',
+    'src/simhash/minhash.c',
+    'vendored/yyjson/yyjson.c',
+    'satori_shim.c',
 ];
+const perLanguageSources = ['satori_extractor.c'];
 const fixedFlags = [
     '-std=gnu11', '-D_GNU_SOURCE', '-O2', '-sSTACK_SIZE=8388608',
     '-sALLOW_MEMORY_GROWTH=1', '-sMAXIMUM_MEMORY=1073741824', '-sMODULARIZE=1',
@@ -123,6 +135,9 @@ if (existsSync(manifestPath)) {
 }
 let glue = existsSync(gluePath) ? readFileSync(gluePath) : null;
 if (oldManifest?.glue && (!glue || sha256(glue) !== oldManifest.glue.sha256)) fail('shipped glue differs from manifest');
+if (!checkOnly && oldManifest && oldManifest.cbmCommit !== commit) {
+    glue = null;
+}
 if (!checkOnly) {
     const version = spawnSync('emcc', ['--version'], { encoding: 'utf8' });
     if (version.status !== 0 || !new RegExp(`\\b${emscripten.replaceAll('.', '\\.')}\\b`).test(version.stdout)) {
@@ -147,6 +162,39 @@ if (!checkOnly) {
 }
 const memoryFailure = `exceeded the ${memoryMax} build memory budget`;
 
+const vendorIncludes = [
+    path.join(vendorRoot, 'internal/cbm/vendored/ts_runtime/include'),
+    path.join(vendorRoot, 'internal/cbm/vendored/ts_runtime/src'),
+    path.join(vendorRoot, 'internal/cbm'),
+    path.join(vendorRoot, 'src'),
+    path.join(vendorRoot, 'vendored'),
+];
+let sharedObjRoot = null;
+let sharedObjects = null;
+function ensureSharedObjects() {
+    if (sharedObjects) return sharedObjects;
+    sharedObjRoot = mkdtempSync(path.join(os.tmpdir(), 'satori-cbm-shared-obj-'));
+    const objects = [];
+    for (let index = 0; index < sharedObjectSources.length; index++) {
+        const relativeName = sharedObjectSources[index];
+        const sourcePath = path.join(vendorRoot, relativeName);
+        const objectPath = path.join(sharedObjRoot, `${index}_${path.basename(relativeName, '.c')}.o`);
+        const compileArgs = [
+            '-c', ...fixedFlags.slice(0, 3),
+            ...vendorIncludes.flatMap((include) => [`-I${include}`]),
+            sourcePath, '-o', objectPath,
+        ];
+        const result = cappedEmcc(compileArgs);
+        if (result.status !== 0) {
+            const detail = result.error?.message ?? result.stderr.trim().split('\n').slice(0, 12).join('\n');
+            fail(`shared object compile failed for ${relativeName}: ${detail}`);
+        }
+        objects.push(objectPath);
+    }
+    sharedObjects = objects;
+    return sharedObjects;
+}
+
 const modules = [];
 const failures = [];
 let built = 0;
@@ -155,6 +203,7 @@ const startTime = Date.now();
 // SATORI_BUILD_ONLY=KOTLIN,LUA builds a subset for quick checks; the manifest
 // then lists only that subset, so finish with a full build before committing.
 const only = process.env.SATORI_BUILD_ONLY ? new Set(process.env.SATORI_BUILD_ONLY.split(',')) : null;
+try {
 for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLanguage)) : selected) {
     const matches = dirs.get(row.grammarFactory) ?? [];
     if (matches.length !== 1) fail(`${row.cbmLanguage}: expected one ${row.grammarFactory}(void) parser, found ${matches.length}`);
@@ -186,23 +235,20 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
     const absentExtended = checkOnly && pack === 'extended' && previous && !existsSync(output);
     if (checkOnly && !cached && !absentExtended) fail(`${row.cbmLanguage}: source or module is stale`);
     if (!cached && !absentExtended) {
+        const objects = ensureSharedObjects();
         const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'satori-cbm-extractor-'));
         try {
             const tempJs = path.join(tempRoot, 'cbm-extractor.js');
             const tempWasm = path.join(tempRoot, 'cbm-extractor.wasm');
             const tempStubs = path.join(tempRoot, 'stubs.c');
             writeFileSync(tempStubs, stubs);
-            const includes = [
-                path.join(vendorRoot, 'internal/cbm/vendored/ts_runtime/include'),
-                path.join(vendorRoot, 'internal/cbm/vendored/ts_runtime/src'),
-                path.join(vendorRoot, 'internal/cbm'), path.join(vendorRoot, 'src'),
-                path.join(vendorRoot, 'vendored'), dir,
-            ];
-            const sources = closureSources.map((name) => path.join(vendorRoot, name));
+            const includes = [...vendorIncludes, dir];
+            const sources = perLanguageSources.map((name) => path.join(vendorRoot, name));
             const command = [
-                '-std=gnu11', '-D_GNU_SOURCE', '-O2', `-DSATORI_CBM_LANG=CBM_LANG_${row.cbmLanguage}`,
+                ...fixedFlags.slice(0, 3), `-DSATORI_CBM_LANG=CBM_LANG_${row.cbmLanguage}`,
                 ...includes.flatMap((include) => [`-I${include}`]), ...sources, tempStubs,
                 path.join(dir, 'parser.c'), ...(existsSync(scannerC) ? [scannerC] : []),
+                ...objects,
                 ...fixedFlags.slice(3), '-o', tempJs,
             ];
             let result = cappedEmcc(command);
@@ -238,7 +284,7 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
             }
             glue = emittedGlue;
             copyFileSync(tempWasm, output);
-            if (!existsSync(gluePath)) writeFileSync(gluePath, glue);
+            if (!existsSync(gluePath) || !readFileSync(gluePath).equals(glue)) writeFileSync(gluePath, glue);
             built++;
             console.log(`built ${row.cbmLanguage} (${pack}, ${(statSync(output).size / 1048576).toFixed(2)} MiB)`);
         } finally {
@@ -248,6 +294,9 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
     const metadata = absentExtended ? { sizeBytes: previous.sizeBytes, sha256: previous.sha256 } : moduleMetadata(output);
     modules.push({ cbmLanguage: row.cbmLanguage, satoriLanguageId: row.satoriLanguageId, file,
         ...metadata, sourceSha256, pack });
+}
+} finally {
+    if (sharedObjRoot) rmSync(sharedObjRoot, { recursive: true, force: true });
 }
 if (!glue) fail('no shared Emscripten glue');
 const manifest = { schemaVersion: 1, cbmCommit: commit, emscripten,

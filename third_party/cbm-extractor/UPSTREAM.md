@@ -1,26 +1,30 @@
 # CBM definition extractor sources
 
-Pinned upstream commit: `11b662f9f7fba92012b872dd4fcaef7ee0c1300d` ([codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)).
+Pinned upstream commit: `1111d9a9e1380a0429ef2250f63223706af6289a` ([codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)).
 
 These files are copied from that commit. Grammar sources are read from the pinned checkout during the build.
 
 ## Local patches
 
 - `internal/cbm/cbm.h`: append `start_byte` and `end_byte` to `CBMDefinition`.
-- `internal/cbm/extract_defs.c`: set both byte spans at all 22 definition line-span sites.
+- `internal/cbm/extract_defs.c`: set both byte spans at all 26 definition line-span sites and extend `end_byte` in `fold_elixir_clause`.
 - `satori_extractor.c` and `satori_shim.c` are Satori-owned ABI and link shims.
 
 ## Vendored files
 
 - `LICENSE`
 - `internal/cbm/arena.h`
+- `internal/cbm/callable_sig.c`
+- `internal/cbm/callable_sig.h`
 - `internal/cbm/cbm.h`
+- `internal/cbm/doclink.h`
 - `internal/cbm/extract_defs.c`
 - `internal/cbm/extract_node_stack.h`
 - `internal/cbm/helpers.c`
 - `internal/cbm/helpers.h`
 - `internal/cbm/lang_specs.c`
 - `internal/cbm/lang_specs.h`
+- `internal/cbm/resolve_stats.h`
 - `internal/cbm/ts_runtime.c`
 - `internal/cbm/vendored/ts_runtime/LICENSE`
 - `internal/cbm/vendored/ts_runtime/include/tree_sitter/api.h`
@@ -65,17 +69,30 @@ These files are copied from that commit. Grammar sources are read from the pinne
 - `internal/cbm/vendored/ts_runtime/src/unicode/utf8.h`
 - `internal/cbm/vendored/ts_runtime/src/wasm_store.c`
 - `internal/cbm/vendored/ts_runtime/src/wasm_store.h`
+- `internal/cbm/vendored/verstable/LICENSE`
+- `internal/cbm/vendored/verstable/verstable.h`
+- `src/discover/test_conventions.c`
+- `src/discover/test_conventions.h`
 - `src/foundation/arena.c`
 - `src/foundation/arena.h`
 - `src/foundation/compat.h`
 - `src/foundation/constants.h`
+- `src/foundation/hash_table.c`
+- `src/foundation/hash_table.h`
 - `src/foundation/log.h`
 - `src/foundation/mem_core.h`
 - `src/foundation/mem_events.h`
 - `src/foundation/platform.h`
+- `src/foundation/secure_random.c`
+- `src/foundation/secure_random.h`
+- `src/foundation/sha256.c`
+- `src/foundation/sha256.h`
 - `src/semantic/ast_profile.c`
 - `src/semantic/ast_profile.h`
 - `src/simhash/minhash.c`
 - `src/simhash/minhash.h`
 - `vendored/xxhash/LICENSE`
 - `vendored/xxhash/xxhash.h`
+- `vendored/yyjson/LICENSE`
+- `vendored/yyjson/yyjson.c`
+- `vendored/yyjson/yyjson.h`

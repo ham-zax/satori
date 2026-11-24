@@ -20,49 +20,71 @@ if (checkoutCommit !== pinnedCommit) throw new Error(`CBM extractor sync: checko
 
 const closureFiles = [
     'internal/cbm/arena.h',
+    'internal/cbm/callable_sig.c',
+    'internal/cbm/callable_sig.h',
     'internal/cbm/cbm.h',
+    'internal/cbm/doclink.h',
     'internal/cbm/extract_defs.c',
     'internal/cbm/extract_node_stack.h',
     'internal/cbm/helpers.c',
     'internal/cbm/helpers.h',
     'internal/cbm/lang_specs.c',
     'internal/cbm/lang_specs.h',
+    'internal/cbm/resolve_stats.h',
     'internal/cbm/ts_runtime.c',
+    'internal/cbm/vendored/verstable/verstable.h',
+    'src/discover/test_conventions.c',
+    'src/discover/test_conventions.h',
     'src/foundation/arena.c',
     'src/foundation/arena.h',
     'src/foundation/compat.h',
     'src/foundation/constants.h',
+    'src/foundation/hash_table.c',
+    'src/foundation/hash_table.h',
     'src/foundation/log.h',
     'src/foundation/mem_core.h',
     'src/foundation/mem_events.h',
     'src/foundation/platform.h',
+    'src/foundation/secure_random.c',
+    'src/foundation/secure_random.h',
+    'src/foundation/sha256.c',
+    'src/foundation/sha256.h',
     'src/semantic/ast_profile.c',
     'src/semantic/ast_profile.h',
     'src/simhash/minhash.c',
     'src/simhash/minhash.h',
     'vendored/xxhash/xxhash.h',
+    'vendored/yyjson/yyjson.c',
+    'vendored/yyjson/yyjson.h',
 ];
 const runtimeFiles = execFileSync('git', ['-C', cbmRoot, 'ls-tree', '-r', '--name-only', pinnedCommit, '--', 'internal/cbm/vendored/ts_runtime'], { encoding: 'utf8' })
     .trim().split('\n').filter((name) => /\.(?:c|h)$/.test(name));
 if (runtimeFiles.length < 30) throw new Error(`CBM extractor sync: incomplete tree-sitter runtime (${runtimeFiles.length} files)`);
 const sourceFiles = [...new Set([...closureFiles, ...runtimeFiles, 'LICENSE',
-    'internal/cbm/vendored/ts_runtime/LICENSE', 'vendored/xxhash/LICENSE'])].sort();
+    'internal/cbm/vendored/ts_runtime/LICENSE', 'internal/cbm/vendored/verstable/LICENSE',
+    'vendored/xxhash/LICENSE', 'vendored/yyjson/LICENSE'])].sort();
 
 function source(name) {
     return execFileSync('git', ['-C', cbmRoot, 'show', `${pinnedCommit}:${name}`]);
 }
 function patchHeader(input) {
-    const marker = '    const char *impl_trait;';
+    const marker = '    const struct CBMDefTypeFacts *type_facts;';
     if (input.split(marker).length !== 2) throw new Error('CBM extractor sync: CBMDefinition tail changed');
     const output = input.replace(marker, `${marker}\n    uint32_t start_byte;\n    uint32_t end_byte;`);
     if (!/uint32_t end_byte;\n} CBMDefinition;/.test(output)) throw new Error('CBM extractor sync: span fields are not at CBMDefinition tail');
     return output;
 }
+function replaceExactOnce(input, oldText, newText, label) {
+    if (input.split(oldText).length !== 2) {
+        throw new Error(`CBM extractor sync: missing or ambiguous anchor for ${label}`);
+    }
+    return input.replace(oldText, newText);
+}
 function patchDefinitions(input) {
     const starts = [...input.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\.start_line\s*=/g)].length;
     const ends = [...input.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\.end_line\s*=/g)].length;
     let pairs = 0;
-    const output = input.replace(
+    let output = input.replace(
         /^([ \t]*)([A-Za-z_][A-Za-z0-9_]*)\.start_line = (ts_node_start_point\(([^)]+)\)\.row \+ TS_LINE_OFFSET|FIRST_LINE);\r?\n\1\2\.end_line = ts_node_end_point\(([^)]+)\)\.row \+ TS_LINE_OFFSET;/gm,
         (_match, indent, variable, startLine, startNode, endNode) => {
             pairs++;
@@ -73,6 +95,87 @@ function patchDefinitions(input) {
                 `${indent}${variable}.end_byte = ts_node_end_byte(${endNode});`;
         },
     );
+
+    // 1) Multiline extract_func_def site.
+    output = replaceExactOnce(
+        output,
+        '    def.start_line =\n' +
+            '        ts_node_start_point(configured && ctx->language == CBM_LANG_C ? name_node : node).row +\n' +
+            '        TS_LINE_OFFSET;\n' +
+            '    def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;',
+        '    def.start_line =\n' +
+            '        ts_node_start_point(configured && ctx->language == CBM_LANG_C ? name_node : node).row +\n' +
+            '        TS_LINE_OFFSET;\n' +
+            '    def.start_byte = ts_node_start_byte(configured && ctx->language == CBM_LANG_C ? name_node : node);\n' +
+            '    def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;\n' +
+            '    def.end_byte = ts_node_end_byte(node);',
+        'extract_func_def span',
+    );
+    pairs++;
+
+    // 2) Elixir multi-clause folding + extract_elixir_func_def.
+    output = replaceExactOnce(
+        output,
+        '    if (end_line > prev->end_line) {\n        prev->end_line = end_line;\n    }',
+        '    if (end_line > prev->end_line) {\n        prev->end_line = end_line;\n    }\n' +
+            '    uint32_t end_byte = ts_node_end_byte(node);\n' +
+            '    if (end_byte > prev->end_byte) {\n        prev->end_byte = end_byte;\n    }',
+        'fold_elixir_clause end_byte',
+    );
+    output = replaceExactOnce(
+        output,
+        '    def.start_line = start_line;\n    def.end_line = end_line;',
+        '    def.start_line = start_line;\n' +
+            '    def.start_byte = ts_node_start_byte(node);\n' +
+            '    def.end_line = end_line;\n' +
+            '    def.end_byte = ts_node_end_byte(node);',
+        'extract_elixir_func_def span',
+    );
+    pairs++;
+
+    // 3) recover_c_error_tag_heads + c_matching_brace_line.
+    output = replaceExactOnce(
+        output,
+        'static uint32_t c_matching_brace_line(const char *src, uint32_t open, uint32_t limit,\n' +
+            '                                      uint32_t open_row) {',
+        'static uint32_t c_matching_brace_line(const char *src, uint32_t open, uint32_t limit,\n' +
+            '                                      uint32_t open_row, uint32_t *out_end_byte) {',
+        'c_matching_brace_line signature',
+    );
+    output = replaceExactOnce(
+        output,
+        '        } else if (c == \'}\' && --depth == 0) {\n            return row + TS_LINE_OFFSET;\n        }',
+        '        } else if (c == \'}\' && --depth == 0) {\n' +
+            '            if (out_end_byte) {\n                *out_end_byte = i + 1;\n            }\n' +
+            '            return row + TS_LINE_OFFSET;\n        }',
+        'c_matching_brace_line return',
+    );
+    output = replaceExactOnce(
+        output,
+        '        uint32_t end_line = unclosed ? 0\n' +
+            '                                     : c_matching_brace_line(ctx->source, ts_node_start_byte(brace),\n' +
+            '                                                             ts_node_end_byte(error_node),\n' +
+            '                                                             ts_node_start_point(brace).row);',
+        '        uint32_t brace_end_byte = 0;\n' +
+            '        uint32_t end_line = unclosed ? 0\n' +
+            '                                     : c_matching_brace_line(ctx->source, ts_node_start_byte(brace),\n' +
+            '                                                             ts_node_end_byte(error_node),\n' +
+            '                                                             ts_node_start_point(brace).row,\n' +
+            '                                                             &brace_end_byte);',
+        'recover_c_error_tag_heads call',
+    );
+    output = replaceExactOnce(
+        output,
+        '        def.start_line = ts_node_start_point(kw).row + TS_LINE_OFFSET;\n' +
+            '        def.end_line = end_line ? end_line : ts_node_end_point(error_node).row + TS_LINE_OFFSET;',
+        '        def.start_line = ts_node_start_point(kw).row + TS_LINE_OFFSET;\n' +
+            '        def.start_byte = ts_node_start_byte(kw);\n' +
+            '        def.end_line = end_line ? end_line : ts_node_end_point(error_node).row + TS_LINE_OFFSET;\n' +
+            '        def.end_byte = end_line ? brace_end_byte : ts_node_end_byte(error_node);',
+        'recover_c_error_tag_heads span',
+    );
+    pairs++;
+
     const patchedStarts = [...output.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\.start_byte\s*=/g)].length;
     const patchedEnds = [...output.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\.end_byte\s*=/g)].length;
     if (pairs < 20 || pairs !== starts || pairs !== ends || patchedStarts !== starts || patchedEnds !== ends) {
@@ -98,7 +201,7 @@ const upstream = `# CBM definition extractor sources\n\n` +
     `These files are copied from that commit. Grammar sources are read from the pinned checkout during the build.\n\n` +
     `## Local patches\n\n` +
     `- \`internal/cbm/cbm.h\`: append \`start_byte\` and \`end_byte\` to \`CBMDefinition\`.\n` +
-    `- \`internal/cbm/extract_defs.c\`: set both byte spans at all ${spanSites} definition line-span sites.\n` +
+    `- \`internal/cbm/extract_defs.c\`: set both byte spans at all ${spanSites} definition line-span sites and extend \`end_byte\` in \`fold_elixir_clause\`.\n` +
     `- \`satori_extractor.c\` and \`satori_shim.c\` are Satori-owned ABI and link shims.\n\n` +
     `## Vendored files\n\n${sourceFiles.map((name) => `- \`${name}\``).join('\n')}\n`;
 expected.set('UPSTREAM.md', Buffer.from(upstream));
@@ -124,7 +227,7 @@ if (checkOnly || existsSync(shimPath)) {
         throw new Error('CBM extractor sync: GROW_ARRAY differs from pinned CBM');
     }
     for (const name of ['cbm_first_line', 'cbm_js_family_path', 'cbm_js_name_is_junk',
-        'cbm_defs_push', 'cbm_usages_push', 'cbm_impltrait_push', 'cbm_result_alloc']) {
+        'cbm_defs_push', 'cbm_usages_push', 'cbm_fieldtype_push', 'cbm_impltrait_push', 'cbm_result_alloc']) {
         const definition = new RegExp(`^[^\\n;]*\\b${name}\\([^;]*\\)\\s*\\{`, 'm').exec(upstreamCbm);
         if (!definition) throw new Error(`CBM extractor sync: missing pinned ${name}`);
         const end = upstreamCbm.indexOf('\n}\n', definition.index) + 2;

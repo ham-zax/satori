@@ -4,11 +4,27 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { PublicationLease, SymbolRecord, SymbolRegistry } from '@satori-code/core';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRecordsForFile,
+    createLanguageAnalysisService,
+    detectLanguageId,
+    type PublicationLease,
+    type SymbolRecord,
+    type SymbolRegistry,
+} from '@satori-code/core';
 import { ToolHandlers } from '../core/handlers.js';
 import { ToolResponseBuilders } from '../core/tool-response-builders.js';
 import { NavigationHandlers } from '../core/navigation-handlers.js';
+import { buildRegistryFileOutlinePayload } from '../core/registry-file-outline.js';
+import type { FileOutlineSymbolResult } from '../core/search-types.js';
+import {
+    composeSymbolContext,
+    type ComposeSymbolContextInput,
+    type PreparedSymbolContextSnapshot,
+} from '../core/symbol-context-composer.js';
 import { fileOutlineTool } from './file_outline.js';
+import { readFileTool } from './read_file.js';
 import { ToolContext } from './types.js';
 import {
     createSessionWorkspacePolicy,
@@ -618,6 +634,235 @@ test('file_outline accepts in-root absolute paths (including under symlinked wor
         file: `${linkRoot}/src/../../outside.ts`,
     }, ctx);
     assert.equal(traversalResponse.isError, true);
+});
+
+const DART_HOLDER_SOURCE = [
+    'class Holder {',
+    '  final int value;',
+    '  const Holder(this.value);',
+    '}',
+    '',
+    'extension HolderMath on Holder {',
+    '  int doubled() => value + value;',
+    '  int tripled() => value + value + value;',
+    "  String describeHolder() => 'holder';",
+    '}',
+    '',
+    'int topLevelHelper(int x) => x + 1;',
+    '',
+    'extension on String {',
+    '  bool isShout() => this == toUpperCase();',
+    '}',
+    '',
+].join('\n');
+
+function buildDartRegistry(root: string, symbols: SymbolRecord[]): SymbolRegistry {
+    const symbolsByInstanceId = new Map(symbols.map((entry) => [entry.symbolInstanceId, entry]));
+    const symbolsByKey = new Map<string, SymbolRecord[]>();
+    const symbolsByFile = new Map<string, SymbolRecord[]>();
+    const symbolsByLabel = new Map<string, SymbolRecord[]>();
+    const symbolsByQualifiedName = new Map<string, SymbolRecord[]>();
+    for (const entry of symbols) {
+        for (const [map, key] of [
+            [symbolsByKey, entry.symbolKey],
+            [symbolsByFile, entry.file],
+            [symbolsByLabel, entry.label],
+            [symbolsByQualifiedName, entry.qualifiedName],
+        ] as const) {
+            map.set(key, [...(map.get(key) || []), entry]);
+        }
+    }
+    return {
+        manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath: root,
+            rootFingerprint: 'root-fp',
+            indexPolicyHash: 'policy-hash',
+            languageRouterVersion: 'router',
+            extractorVersion: 'extractor',
+            relationshipVersion: 'relationships',
+            builtAt: '2026-11-24T00:00:00.000Z',
+            files: [],
+        },
+        symbols,
+        symbolsByInstanceId,
+        symbolsByKey,
+        symbolsByFile,
+        symbolsByLabel,
+        symbolsByQualifiedName,
+        warnings: [],
+    };
+}
+
+test('Dart extensions survive the agent-visible outline and exact-symbol read path', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'file-outline-dart-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const relativeFile = 'lib/holder.dart';
+    const absoluteFile = path.join(root, relativeFile);
+    fs.mkdirSync(path.dirname(absoluteFile), { recursive: true });
+    fs.writeFileSync(absoluteFile, DART_HOLDER_SOURCE, 'utf8');
+
+    assert.equal(detectLanguageId(relativeFile, DART_HOLDER_SOURCE), 'dart');
+    const analysis = await createLanguageAnalysisService().analyze({
+        content: DART_HOLDER_SOURCE,
+        language: 'dart',
+        relativePath: relativeFile,
+    });
+    const fileBytes = Buffer.from(DART_HOLDER_SOURCE, 'utf8');
+    const fileHash = crypto.createHash('sha256').update(fileBytes).digest('hex');
+    const records = buildSymbolRecordsForFile({
+        relativePath: relativeFile,
+        language: 'dart',
+        content: DART_HOLDER_SOURCE,
+        fileHash,
+        extractorVersion: 'test',
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+
+    const outlineCtx = {
+        workspacePolicy: buildWorkspacePolicy([root]),
+        toolHandlers: {
+            handleFileOutline: async () => {
+                const payload = await buildRegistryFileOutlinePayload({
+                    codebaseRoot: root,
+                    file: relativeFile,
+                    symbols: records,
+                    limitSymbols: 500,
+                    resolveMode: 'outline',
+                    buildCallGraphHint: () => ({ supported: false, reason: 'test' }) as never,
+                    buildOutlineSpanWarningCodes: () => [],
+                    readSourceLines: async () => undefined,
+                });
+                return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+            },
+        },
+    } as unknown as ToolContext;
+    const outline = await fileOutlineTool.execute({ path: root, file: relativeFile }, outlineCtx);
+    assert.equal(outline.isError, undefined);
+    const outlinePayload = JSON.parse(outline.content[0].text);
+    assert.equal(outlinePayload.status, 'ok');
+
+    const expected = new Map([
+        ['Holder', { kind: 'class', label: 'class Holder', lines: [1, 4], text: 'class Holder {\n  final int value;\n  const Holder(this.value);\n}' }],
+        ['HolderMath', { kind: 'class', label: 'class HolderMath', lines: [6, 10], text: "extension HolderMath on Holder {\n  int doubled() => value + value;\n  int tripled() => value + value + value;\n  String describeHolder() => 'holder';\n}" }],
+        ['HolderMath.doubled', { kind: 'method', label: 'method doubled', lines: [7, 7], text: 'int doubled()' }],
+        ['HolderMath.tripled', { kind: 'method', label: 'method tripled', lines: [8, 8], text: 'int tripled()' }],
+        ['HolderMath.describeHolder', { kind: 'method', label: 'method describeHolder', lines: [9, 9], text: 'String describeHolder()' }],
+        ['topLevelHelper', { kind: 'function', label: 'function topLevelHelper', lines: [12, 12], text: 'int topLevelHelper(int x)' }],
+        ['isShout', { kind: 'function', label: 'function isShout', lines: [15, 15], text: 'bool isShout()' }],
+    ]);
+    const outlined = new Map<string, FileOutlineSymbolResult>(
+        (outlinePayload.outline.symbols as FileOutlineSymbolResult[]).map((symbol) => [symbol.qualifiedName, symbol]),
+    );
+    assert.equal(outlined.size, expected.size);
+    assert.equal(new Set([...outlined.values()].map((symbol) => symbol.symbolId)).size, expected.size);
+    for (const [qualifiedName, want] of expected) {
+        const symbol = outlined.get(qualifiedName);
+        assert.ok(symbol, qualifiedName);
+        const record = records.find((entry) => entry.qualifiedName === qualifiedName);
+        assert.ok(record, qualifiedName);
+        assert.equal(symbol.kind, want.kind, qualifiedName);
+        assert.equal(symbol.symbolLabel, want.label, qualifiedName);
+        assert.equal(symbol.symbolId, record.symbolInstanceId, qualifiedName);
+        assert.deepEqual([symbol.span.startLine, symbol.span.endLine], want.lines, qualifiedName);
+        assert.deepEqual(
+            [symbol.span.startByte, symbol.span.endByte],
+            [record.span.startByte, record.span.endByte],
+            qualifiedName,
+        );
+        const bytes = fileBytes.subarray(record.span.startByte, record.span.endByte).toString('utf8');
+        assert.equal(bytes, want.text, qualifiedName);
+    }
+    assert.deepEqual(outlined.get('HolderMath.doubled')!.parentQualifiedNamePath, ['HolderMath']);
+    assert.deepEqual(outlined.get('isShout')!.parentQualifiedNamePath, []);
+
+    const snapshot: PreparedSymbolContextSnapshot = {
+        canonicalRoot: root,
+        registryManifestIdentity: 'dart-registry-manifest',
+        registry: buildDartRegistry(root, records),
+        navigationAuthority: 'remote_generation_proven',
+        relationships: {
+            status: 'available',
+            authority: 'remote_generation_proven',
+            manifestIdentity: 'dart-relationship-manifest',
+            callers: { edges: [], availableCount: 0, suppressedCount: 0, suppressionNotes: [] },
+            callees: { edges: [], availableCount: 0, suppressedCount: 0, suppressionNotes: [] },
+        },
+        validateAuthority: async () => true,
+    };
+    const publication = { publication: { canonicalRoot: root } };
+    const readCtx = {
+        readFileMaxLines: 200,
+        workspacePolicy: buildWorkspacePolicy([root]),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [[relativeFile, fileHash]] }),
+            hasSearchableGeneration: () => true,
+            getCurrentSearchGeneration: () => ({ generationId: 'gen-1', compatibility: 'compatible' }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+        toolHandlers: {
+            composeSymbolContext: async (input: ComposeSymbolContextInput) => composeSymbolContext(input, {
+                prepareSnapshot: async () => ({ status: 'ready', snapshot }),
+                prepareSource: async () => ({
+                    status: 'available',
+                    evidence: {
+                        canonicalRoot: root,
+                        relativeFile,
+                        sourceBytes: fileBytes,
+                        source: DART_HOLDER_SOURCE,
+                        sourceByteLength: fileBytes.length,
+                        observedHash: fileHash,
+                        identity: {
+                            platform: 'linux',
+                            stableIdentity: 'dart-fixture-id',
+                            canonicalRelativePath: relativeFile,
+                            strength: 'target_only',
+                        },
+                        selectionCapabilities: {
+                            localLexical: 'available',
+                            lineWindows: 'available',
+                            syntaxBoundaries: 'unavailable_streaming_source',
+                            controlFlowAnchors: 'unavailable_streaming_source',
+                        },
+                    },
+                    finalizer: {
+                        finalize: async () => ({ status: 'available', freshness: 'current_at_final_observation' }),
+                        release: async () => undefined,
+                    },
+                }),
+            }),
+        },
+    } as unknown as ToolContext;
+
+    const sourceLines = DART_HOLDER_SOURCE.replace(/\n$/, '').split('\n');
+    for (const [qualifiedName, declaration] of [
+        ['HolderMath.doubled', 'int doubled() => value + value;'],
+        ['isShout', 'bool isShout() => this == toUpperCase();'],
+    ] as const) {
+        const record = records.find((entry) => entry.qualifiedName === qualifiedName);
+        assert.ok(record, qualifiedName);
+        const response = await readFileTool.execute({
+            path: absoluteFile,
+            codebaseRoot: root,
+            open_symbol: { contractVersion: 2, symbolId: record.symbolInstanceId },
+        }, readCtx);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.kind, 'symbol_context', qualifiedName);
+        assert.equal(payload.status, 'ok', qualifiedName);
+        assert.equal(payload.symbol.symbolId, record.symbolInstanceId, qualifiedName);
+        assert.equal(payload.symbol.qualifiedName, qualifiedName);
+        assert.equal(payload.source.status, 'available', qualifiedName);
+        assert.equal(payload.source.mode, 'complete', qualifiedName);
+        assert.equal(payload.source.truncated, false, qualifiedName);
+        assert.equal(payload.source.excerpts.length, 1, qualifiedName);
+        const content = payload.source.excerpts[0].content;
+        assert.equal(content, sourceLines[record.span.startLine - 1], qualifiedName);
+        assert.equal(content.trim(), declaration, qualifiedName);
+    }
 });
 
 test('file_outline returns unsupported_language for ObjectScript UDL .cls and structural_evidence_unavailable for Apex .cls when structural_unavailable', async (t) => {

@@ -3,11 +3,12 @@
 #include "foundation/log.h"
 #include "foundation/mem_core.h"
 #include "cbm.h"
+#include "doclink.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: GROW_ARRAY. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: GROW_ARRAY. */
 #define GROW_ARRAY(arr, arena)                                                                   \
     do {                                                                                         \
         if ((arr)->count >= (arr)->cap) {                                                        \
@@ -23,7 +24,7 @@
         }                                                                                        \
     } while (0)
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_first_line. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_first_line. */
 static const char *cbm_first_line(CBMArena *a, const char *text) {
     if (!text) {
         return text;
@@ -45,7 +46,7 @@ static const char *cbm_first_line(CBMArena *a, const char *text) {
     return cut;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_js_family_path. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_js_family_path. */
 static bool cbm_js_family_path(const char *path) {
     if (!path) {
         return false;
@@ -64,7 +65,7 @@ static bool cbm_js_family_path(const char *path) {
     return false;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_js_name_is_junk. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_js_name_is_junk. */
 static bool cbm_js_name_is_junk(const char *name) {
     if (!name || !name[0]) {
         return false; /* empty names are handled by the callers' own rules */
@@ -82,7 +83,7 @@ static bool cbm_js_name_is_junk(const char *name) {
     return !identifier_start && !member_key_start;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_defs_push. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_defs_push. */
 void cbm_defs_push(CBMDefArray *arr, CBMArena *a, CBMDefinition def) {
     def.name = cbm_first_line(a, def.name);
     def.qualified_name = cbm_first_line(a, def.qualified_name);
@@ -93,19 +94,25 @@ void cbm_defs_push(CBMDefArray *arr, CBMArena *a, CBMDefinition def) {
     arr->items[arr->count++] = def;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_usages_push. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_usages_push. */
 void cbm_usages_push(CBMUsageArray *arr, CBMArena *a, CBMUsage usage) {
     GROW_ARRAY(arr, a);
     arr->items[arr->count++] = usage;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_impltrait_push. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_fieldtype_push. */
+void cbm_fieldtype_push(CBMFieldTypeArray *arr, CBMArena *a, CBMFieldType ft) {
+    GROW_ARRAY(arr, a);
+    arr->items[arr->count++] = ft;
+}
+
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_impltrait_push. */
 void cbm_impltrait_push(CBMImplTraitArray *arr, CBMArena *a, CBMImplTrait it) {
     GROW_ARRAY(arr, a);
     arr->items[arr->count++] = it;
 }
 
-/* Copied verbatim from internal/cbm/cbm.c at 11b662f9: cbm_result_alloc. */
+/* Copied verbatim from internal/cbm/cbm.c at 1111d9a9: cbm_result_alloc. */
 CBMFileResult *cbm_result_alloc(void) {
     /* The one raw allocation of a result: cbm_free_result releases it with
      * the matching free. Extraction and the spill loader both come here. */
@@ -123,3 +130,13 @@ void *cbm_calloc(cbm_mem_class_t cls, size_t bytes) { (void)cls; return calloc(1
 void *cbm_realloc(cbm_mem_class_t cls, void *block, size_t bytes) { (void)cls; return realloc(block, bytes); }
 void cbm_free(cbm_mem_class_t cls, void *block) { (void)cls; free(block); }
 void cbm_log(CBMLogLevel level, const char *msg, ...) { (void)level; (void)msg; }
+bool cbm_doclink_lang_supported(CBMLanguage lang) { (void)lang; return false; }
+void cbm_doclink_note_doc_line(CBMExtractCtx *ctx, const char *doc, uint32_t line) {
+    (void)ctx; (void)doc; (void)line;
+}
+bool cbm_diagram_fence_is_diagram(const char *source, TSNode block) {
+    (void)source; (void)block; return false;
+}
+const char *cbm_diagram_fence_labels(CBMExtractCtx *ctx, TSNode block) {
+    (void)ctx; (void)block; return NULL;
+}

@@ -245,7 +245,27 @@ test('trace path qualifies additive recursion diagnostics and abstains on possib
         cycleObserved: false,
     });
 
-    // 3. Non-CALLS traversal reports unknown recursion state without touching possibleOverrides abstention
+    // 3. Mixed IMPORTS + CALLS back-edge must not be misclassified as a CALLS recursion cycle
+    const mixedCycle = fixture([a, b, d], [
+        edge(a, b, 'IMPORTS', 1),
+        edge(b, a, 'CALLS', 2),
+    ]);
+    const mixedCycleResult = await traceRelationshipPath(request(mixedCycle.navigationStore, {
+        sourceSymbolId: 'a',
+        targetSymbolId: 'd',
+        allowedTypes: ['CALLS', 'IMPORTS', 'EXPORTS'],
+        maxDepth: 4,
+    }));
+    assert.equal(mixedCycleResult.status, 'ok');
+    if (mixedCycleResult.status !== 'ok') return;
+    assert.deepEqual(mixedCycleResult.diagnostics.recursion, {
+        state: 'not_observed',
+        sourceSelfRecursive: false,
+        targetSelfRecursive: false,
+        cycleObserved: false,
+    });
+
+    // 4. Non-CALLS traversal reports unknown recursion state without touching possibleOverrides abstention
     const importsOnly = await traceRelationshipPath(request(fixture([a, d], [edge(a, d, 'IMPORTS')]).navigationStore, {
         sourceSymbolId: 'a',
         targetSymbolId: 'd',

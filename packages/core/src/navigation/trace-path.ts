@@ -83,7 +83,7 @@ function bounded(value: number, maximum: number): number {
     return Number.isInteger(value) ? Math.max(1, Math.min(value, maximum)) : 1;
 }
 
-function isAncestorInPredecessorChain(
+function isCallAncestorInPredecessorChain(
     predecessor: ReadonlyMap<string, { from: string; edge: RelationshipRecord }>,
     nodeId: string,
     candidateAncestorId: string,
@@ -91,7 +91,9 @@ function isAncestorInPredecessorChain(
     let cursor: string | undefined = nodeId;
     while (cursor !== undefined) {
         if (cursor === candidateAncestorId) return true;
-        cursor = predecessor.get(cursor)?.from;
+        const previous = predecessor.get(cursor);
+        if (!previous || previous.edge.type !== 'CALLS') return false;
+        cursor = previous.from;
     }
     return false;
 }
@@ -188,7 +190,7 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
                 if (callsEnabled
                     && record.type === 'CALLS'
                     && !cycleObserved
-                    && isAncestorInPredecessorChain(predecessor, current.id, peer)) {
+                    && isCallAncestorInPredecessorChain(predecessor, current.id, peer)) {
                     cycleObserved = true;
                 }
                 continue;

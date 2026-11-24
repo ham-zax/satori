@@ -244,6 +244,9 @@ export function createAgentDiscoveryGuard(environment = process.env) {
             const arm = resolveArmFromAgent(input.agent)
                 ?? sessionArms.get(input.sessionID)
                 ?? defaultArm;
+            if (!arm) {
+                throw new Error("agent_discovery_unknown_arm");
+            }
             validateToolCall(input.tool, output.args, repoRoot, { scopeProfile, arm });
             startedCalls.set(input.callID, Date.now());
             appendRecord(ledgerFile, {

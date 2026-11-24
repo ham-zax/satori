@@ -433,6 +433,7 @@ function extractFileAttributedText(ctx, relativeFile, repoRoot) {
         const responseFile = parsedJson.symbol?.file ?? parsedJson.file ?? parsedJson.path ?? scope.explicitSingleFile;
         if (matchesFile(responseFile)) {
             sections.push(parsedJson.code, parsedJson.content);
+            if (typeof parsedJson.source === "string") sections.push(parsedJson.source);
             const excerpts = parsedJson.source?.excerpts;
             for (const excerpt of Array.isArray(excerpts) ? excerpts : []) sections.push(excerpt?.content);
         }
@@ -614,6 +615,167 @@ function structuredGraphWitnessesRelation(ctx, relation, repoRoot, ownerFile, ow
     return false;
 }
 
+function extractFileAttributedNumberedLines(ctx, relativeFile, repoRoot) {
+    const { parsedJson, rawOutput, scope, input } = ctx;
+    const matchesFile = (file) => resolveInputPath(file, repoRoot, ctx.effectiveCwd)?.relativePath === relativeFile;
+    const pairs = [];
+    const pushBlock = (text, startLine) => {
+        if (typeof text !== "string" || !Number.isSafeInteger(startLine) || startLine < 1) return;
+        const split = text.split(/\r\n|\n|\r/);
+        for (let i = 0; i < split.length; i += 1) {
+            pairs.push({ line: startLine + i, text: split[i] });
+        }
+    };
+
+    if (parsedJson !== null) {
+        if (!isRecord(parsedJson) || !ctx.rooted) return pairs;
+        const responseFile = parsedJson.symbol?.file ?? parsedJson.file ?? parsedJson.path ?? scope.explicitSingleFile;
+        if (matchesFile(responseFile)) {
+            const jsonStart = Number.isSafeInteger(parsedJson.startLine)
+                ? parsedJson.startLine
+                : (Number.isSafeInteger(parsedJson.start_line) ? parsedJson.start_line : null);
+            if (typeof parsedJson.source === "string" && jsonStart !== null) {
+                pushBlock(parsedJson.source, jsonStart);
+            } else if (typeof parsedJson.content === "string" && jsonStart !== null) {
+                pushBlock(parsedJson.content, jsonStart);
+            } else if (typeof parsedJson.code === "string" && jsonStart !== null) {
+                pushBlock(parsedJson.code, jsonStart);
+            }
+            const excerpts = parsedJson.source?.excerpts;
+            for (const excerpt of Array.isArray(excerpts) ? excerpts : []) {
+                const exStart = Number.isSafeInteger(excerpt?.startLine) ? excerpt.startLine : null;
+                if (typeof excerpt?.content === "string" && exStart !== null) {
+                    pushBlock(excerpt.content, exStart);
+                }
+            }
+        }
+        return pairs;
+    }
+
+    let active = ctx.rooted && scope.explicitSingleFile === relativeFile && /(?:^|_)read(?:_file)?$/.test(ctx.tool);
+    let numberedOnly = false;
+    let implicitNextLine = active && Number.isSafeInteger(input?.offset) && input.offset >= 1
+        ? input.offset
+        : (active && Number.isSafeInteger(input?.start_line) && input.start_line >= 1 ? input.start_line : null);
+    for (const line of rawOutput.split(/\r\n|\n|\r/)) {
+        const pathTag = /^<path>(.+)<\/path>$/.exec(line);
+        const satoriHeader = /^# (.+?):(\d+)-\d+(?:\s*\||$)/.exec(line);
+        const fileHeader = /^(?:===\s+|---\s+|\*\*\*\s+)?([^\s:]+\.[\w]+)(?::(?:(\d+):(.*))?|-(\d+)-(.*))$/.exec(line);
+        if (pathTag || satoriHeader || fileHeader) {
+            const rawFile = (pathTag ?? satoriHeader ?? fileHeader)[1];
+            const file = normalizeAttributedHeaderFile(rawFile, ctx);
+            active = (ctx.rooted || path.posix.isAbsolute(file)) && matchesFile(file);
+            numberedOnly = Boolean(satoriHeader);
+            implicitNextLine = satoriHeader ? Number.parseInt(satoriHeader[2], 10) : null;
+            const headerLineNo = fileHeader?.[2] ?? fileHeader?.[4];
+            const headerCode = fileHeader?.[3] ?? fileHeader?.[5];
+            if (active && headerLineNo && headerCode !== undefined) {
+                pairs.push({ line: Number.parseInt(headerLineNo, 10), text: headerCode });
+            }
+            continue;
+        }
+        if (!active) continue;
+        const explicitNum = /^\s*(?:Line\s+)?(\d+)(?:\|\s?|\s*:\s?)(.*)$/.exec(line);
+        if (explicitNum) {
+            const lineNo = Number.parseInt(explicitNum[1], 10);
+            pairs.push({ line: lineNo, text: explicitNum[2] });
+            implicitNextLine = lineNo + 1;
+        } else if (!numberedOnly && implicitNextLine !== null) {
+            pairs.push({ line: implicitNextLine, text: line });
+            implicitNextLine += 1;
+        }
+    }
+    return pairs;
+}
+
+function updateBraceDepth(line, state) {
+    let depth = state.depth;
+    let inBlockComment = state.inBlockComment;
+    let quote = null;
+    for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i];
+        const next = line[i + 1];
+        if (inBlockComment) {
+            if (ch === "*" && next === "/") {
+                inBlockComment = false;
+                i += 1;
+            }
+            continue;
+        }
+        if (quote !== null) {
+            if (ch === "\\") {
+                i += 1;
+            } else if (ch === quote) {
+                quote = null;
+            }
+            continue;
+        }
+        if (ch === "/" && next === "/") break;
+        if (ch === "/" && next === "*") {
+            inBlockComment = true;
+            i += 1;
+            continue;
+        }
+        if (ch === '"' || ch === "'" || ch === "`") {
+            quote = ch;
+            continue;
+        }
+        if (ch === "{") {
+            depth += 1;
+            state.opened = true;
+        } else if (ch === "}") {
+            if (depth > 0) depth -= 1;
+        }
+    }
+    state.depth = depth;
+    state.inBlockComment = inBlockComment;
+}
+
+function spanContainsCallerCall(lines, callerName, targetName, sawDefinition, callTo) {
+    let tracking = false;
+    let state = { depth: 0, opened: false, inBlockComment: false };
+    let headerLookahead = 0;
+
+    for (const rawLine of lines) {
+        const line = typeof rawLine === "string" ? rawLine : "";
+        if (!tracking) {
+            if (sawDefinition(line, callerName)) {
+                tracking = true;
+                state = { depth: 0, opened: false, inBlockComment: false };
+                headerLookahead = 0;
+                updateBraceDepth(line, state);
+                if (state.opened && callTo(line, targetName) && !sawDefinition(line, targetName)) {
+                    return true;
+                }
+                if (state.opened && state.depth === 0) {
+                    tracking = false;
+                }
+            }
+            continue;
+        }
+
+        if (!state.opened) {
+            headerLookahead += 1;
+            if (headerLookahead > 12) {
+                tracking = false;
+                continue;
+            }
+        }
+        const wasOpened = state.opened;
+        const depthBefore = state.depth;
+        updateBraceDepth(line, state);
+        if ((wasOpened && depthBefore > 0) || state.opened) {
+            if (callTo(line, targetName) && !sawDefinition(line, targetName)) {
+                return true;
+            }
+        }
+        if (state.opened && state.depth === 0) {
+            tracking = false;
+        }
+    }
+    return false;
+}
+
 function callSatisfiesRelation(ctx, relation, repoRoot, ownerFile, progress) {
     if (!ctx.eligible || ctx.outlineOnly) return false;
     if (structuredGraphWitnessesRelation(ctx, relation, repoRoot, ownerFile, progress.siteSeen)) return true;
@@ -626,16 +788,47 @@ function callSatisfiesRelation(ctx, relation, repoRoot, ownerFile, progress) {
         "m",
     ).test(text);
     const callTo = (text, name) => new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(text);
-    // Cross-call file-level peerSeen && siteSeen accumulation for native text
-    // outputs is an intentional lower bound: bounded 200-line native reads
-    // cannot span a large-method file (e.g. search-request-coordinator.ts
-    // lines 940-1508) in one call. Structured Satori call_graph evidence still
-    // enforces a directed edge with a witnessed site above.
+    // Span-tied caller attribution: native text proves caller -> target only
+    // when the call site is witnessed inside the caller's braced body (either
+    // in one read chunk or across contiguous line-numbered reads without
+    // intervening gaps or closing braces). Disjoint file-level co-occurrence
+    // no longer credits an unverified caller relation.
     if (relation.relation === "caller") {
         const target = relation.targetSymbol;
-        progress.peerSeen ||= sawDefinition(peerText, relation.symbol);
-        progress.siteSeen ||= Boolean(target && callTo(peerText, target) && !sawDefinition(peerText, target));
-        return progress.peerSeen && progress.siteSeen;
+        if (!target) return false;
+        if (peerText && spanContainsCallerCall(peerText.split(/\r\n|\n|\r/), relation.symbol, target, sawDefinition, callTo)) {
+            progress.peerSeen = true;
+            progress.siteSeen = true;
+            return true;
+        }
+        const numbered = extractFileAttributedNumberedLines(ctx, relation.file, repoRoot);
+        if (numbered.length > 0) {
+            if (!progress.observedLines) progress.observedLines = new Map();
+            for (const entry of numbered) {
+                progress.observedLines.set(entry.line, entry.text);
+            }
+            const sortedLines = [...progress.observedLines.keys()].sort((a, b) => a - b);
+            let run = [];
+            let prevLine = null;
+            for (const lineNo of sortedLines) {
+                if (prevLine !== null && lineNo !== prevLine + 1) {
+                    if (run.length > 0 && spanContainsCallerCall(run, relation.symbol, target, sawDefinition, callTo)) {
+                        progress.peerSeen = true;
+                        progress.siteSeen = true;
+                        return true;
+                    }
+                    run = [];
+                }
+                run.push(progress.observedLines.get(lineNo));
+                prevLine = lineNo;
+            }
+            if (run.length > 0 && spanContainsCallerCall(run, relation.symbol, target, sawDefinition, callTo)) {
+                progress.peerSeen = true;
+                progress.siteSeen = true;
+                return true;
+            }
+        }
+        return false;
     }
     if (Array.isArray(relation.sitePatterns) && relation.sitePatterns.length > 0) {
         progress.siteSeen ||= relation.sitePatterns.some((pattern) => matchesPattern(ownerText, pattern));
@@ -678,12 +871,68 @@ function earliestToolTimestamp(tools) {
     return minTs;
 }
 
-function classifyPostEvidenceTool(toolCall) {
+function extractReadCoverage(toolCall, repoRoot, sessionCwd = null) {
+    if (toolCall?.status === "error") return null;
+    const tool = String(toolCall?.tool ?? "");
+    if (!/(?:^|_|__)read(?:_file)?$/.test(tool)) return null;
+    const input = isRecord(toolCall?.input) ? toolCall.input : null;
+    const effectiveCwd = typeof toolCall?.cwd === "string" && toolCall.cwd.trim().length > 0
+        ? toolCall.cwd
+        : sessionCwd;
+    const parsedJson = tryParseJson(typeof toolCall?.output === "string" ? toolCall.output : "");
+    const rawTarget = input?.file ?? input?.filePath ?? input?.path
+        ?? parsedJson?.symbol?.file ?? parsedJson?.file ?? parsedJson?.path ?? null;
+    const file = formatCompactRepoPath(rawTarget, repoRoot, effectiveCwd);
+    if (!file) return null;
+
+    const symbolId = input?.open_symbol?.symbolId ?? parsedJson?.symbol?.symbolId ?? null;
+    let range = null;
+    if (Number.isFinite(input?.start_line) || Number.isFinite(input?.end_line)) {
+        const start = Number.isFinite(input.start_line) ? input.start_line : 1;
+        const end = Number.isFinite(input.end_line) ? input.end_line : Number.MAX_SAFE_INTEGER;
+        range = [start, end];
+    } else if (Number.isFinite(input?.offset) || Number.isFinite(input?.limit)) {
+        const start = Number.isFinite(input.offset) ? input.offset : 1;
+        const end = Number.isFinite(input.limit) ? start + Math.max(0, input.limit - 1) : Number.MAX_SAFE_INTEGER;
+        range = [start, end];
+    } else if (Number.isFinite(parsedJson?.startLine) && Number.isFinite(parsedJson?.endLine)) {
+        range = [parsedJson.startLine, parsedJson.endLine];
+    } else if (Number.isFinite(parsedJson?.symbol?.span?.startLine) && Number.isFinite(parsedJson?.symbol?.span?.endLine)) {
+        range = [parsedJson.symbol.span.startLine, parsedJson.symbol.span.endLine];
+    } else if (typeof toolCall?.output === "string") {
+        const header = /^# .+?:\s*(\d+)-(\d+)(?:\s*\||$)/m.exec(toolCall.output);
+        if (header) {
+            range = [Number.parseInt(header[1], 10), Number.parseInt(header[2], 10)];
+        }
+    }
+    return { file, symbolId, range };
+}
+
+function isRereadOfPriorCoverage(coverage, priorCoverages) {
+    if (!coverage || !Array.isArray(priorCoverages) || priorCoverages.length === 0) return false;
+    for (const prior of priorCoverages) {
+        if (prior.file !== coverage.file) continue;
+        if (coverage.symbolId && prior.symbolId && coverage.symbolId === prior.symbolId) return true;
+        if (prior.range === null || coverage.range === null) return true;
+        if (coverage.range[0] <= prior.range[1] && prior.range[0] <= coverage.range[1]) return true;
+    }
+    return false;
+}
+
+function classifyPostEvidenceTool(toolCall, priorCoverages = null, repoRoot = null, sessionCwd = null) {
     if (toolCall?.status === "error") return "schema_retry";
     const tool = String(toolCall?.tool ?? "");
     if (/(?:^|_|__)file_outline$/.test(tool)) return "outline_check";
     if (/(?:^|_|__)(?:call_graph|find_references)$/.test(tool)) return "relation_check";
-    if (/(?:^|_|__)read(?:_file)?$/.test(tool)) return "source_reread";
+    if (/(?:^|_|__)read(?:_file)?$/.test(tool)) {
+        if (Array.isArray(priorCoverages) && repoRoot) {
+            const coverage = extractReadCoverage(toolCall, repoRoot, sessionCwd);
+            return isRereadOfPriorCoverage(coverage, priorCoverages)
+                ? "source_reread"
+                : "post_evidence_read";
+        }
+        return "post_evidence_read";
+    }
     if (/(?:^|_|__)(?:search_codebase|grep|find|glob)$/.test(tool)) return "search_extra";
     return "other";
 }
@@ -715,7 +964,7 @@ function summarizePostEvidenceDetail(toolCall, repoRoot, sessionCwd = null) {
         repoRoot,
         effectiveCwd,
     );
-    if (category === "source_reread") {
+    if (category === "source_reread" || category === "post_evidence_read") {
         let range = "";
         if (Number.isFinite(input.start_line) || Number.isFinite(input.end_line)) {
             range = `:${input.start_line ?? ""}..${input.end_line ?? ""}`;
@@ -782,11 +1031,28 @@ export function scoreEvidenceTrajectory({
     let firstSufficientEvidenceCall = null;
     let decisiveToolIndex = null;
 
-    for (let idx = 0; idx < normalizedTools.length; idx += 1) {
-        const toolCall = normalizedTools[idx] ?? {};
-        const ordinal = Number.isSafeInteger(toolCall.index) && toolCall.index > 0
+    const orderedEntries = normalizedTools.map((toolCall, idx) => ({
+        toolCall: toolCall ?? {},
+        dispatchIdx: idx,
+        ordinal: Number.isSafeInteger(toolCall?.index) && toolCall.index > 0
             ? toolCall.index
-            : idx + 1;
+            : idx + 1,
+        visibleAtMs: parseTimestampMs(toolCall?.visibleAtMs),
+        dispatchedAtMs: parseTimestampMs(toolCall?.dispatchedAtMs),
+    }));
+    const allHaveVisibleTs = orderedEntries.length > 1
+        && orderedEntries.every((entry) => entry.visibleAtMs !== null);
+    if (allHaveVisibleTs) {
+        orderedEntries.sort((left, right) => (
+            left.visibleAtMs - right.visibleAtMs || left.dispatchIdx - right.dispatchIdx
+        ));
+    }
+    const reorderedByArrival = orderedEntries.some((entry, idx) => entry.dispatchIdx !== idx);
+
+    for (let idx = 0; idx < orderedEntries.length; idx += 1) {
+        const entry = orderedEntries[idx];
+        const toolCall = entry.toolCall;
+        const ordinal = reorderedByArrival ? idx + 1 : entry.ordinal;
         const ctx = evaluateCallContext(toolCall, canonicalRepo, fixtureRevision, sessionCwd);
         ctx.eligible &&= revisionMatches;
         const newlySatisfied = [];
@@ -806,7 +1072,7 @@ export function scoreEvidenceTrajectory({
                 }
                 ok = updateStatementProgress(ctx, requirement.spec, spec.ownerFile, canonicalRepo, progressState);
             } else {
-                const progress = relationProgressByKey.get(requirement.key) ?? { peerSeen: false, siteSeen: false };
+                const progress = relationProgressByKey.get(requirement.key) ?? { peerSeen: false, siteSeen: false, observedLines: new Map() };
                 relationProgressByKey.set(requirement.key, progress);
                 ok = callSatisfiesRelation(ctx, requirement.spec, canonicalRepo, spec.ownerFile, progress);
             }
@@ -830,7 +1096,8 @@ export function scoreEvidenceTrajectory({
         }
 
         perCallProgress.push({
-            index: ordinal,
+            index: entry.ordinal,
+            arrivalIndex: idx + 1,
             tool: toolCall.tool ?? null,
             newlySatisfied,
             cumulativeSatisfied: satisfiedByKey.size,
@@ -851,12 +1118,13 @@ export function scoreEvidenceTrajectory({
         }));
 
     const callsAfterSufficientEvidence = firstSufficientEvidenceCall !== null
-        ? Math.max(0, normalizedTools.length - (decisiveToolIndex + 1))
+        ? Math.max(0, orderedEntries.length - (decisiveToolIndex + 1))
         : null;
 
     const resolvedSessionStartMs = parseTimestampMs(sessionStartMs) ?? earliestToolTimestamp(normalizedTools);
-    const decisiveCall = decisiveToolIndex !== null ? normalizedTools[decisiveToolIndex] : null;
-    const decisiveVisibleAtMs = decisiveCall ? parseTimestampMs(decisiveCall.visibleAtMs) : null;
+    const decisiveEntry = decisiveToolIndex !== null ? orderedEntries[decisiveToolIndex] : null;
+    const decisiveCall = decisiveEntry?.toolCall ?? null;
+    const decisiveVisibleAtMs = decisiveEntry?.visibleAtMs ?? null;
     const firstSufficientEvidenceMs = (decisiveCall !== null
         && resolvedSessionStartMs !== null
         && decisiveVisibleAtMs !== null)
@@ -867,11 +1135,16 @@ export function scoreEvidenceTrajectory({
     let postEvidenceDispatchedCalls = null;
     let postEvidenceBreakdown = [];
     if (decisiveToolIndex !== null) {
-        const subsequentCalls = normalizedTools.slice(decisiveToolIndex + 1);
-        if (subsequentCalls.length === 0) {
+        const subsequentEntries = orderedEntries.slice(decisiveToolIndex + 1);
+        if (subsequentEntries.length === 0) {
             inFlightParallelCalls = 0;
             postEvidenceDispatchedCalls = 0;
         } else {
+            const priorReadCoverages = [];
+            for (let i = 0; i <= decisiveToolIndex; i += 1) {
+                const cov = extractReadCoverage(orderedEntries[i].toolCall, canonicalRepo, sessionCwd);
+                if (cov) priorReadCoverages.push(cov);
+            }
             const decisiveTurnIndex = Number.isSafeInteger(decisiveCall?.turnIndex)
                 ? decisiveCall.turnIndex
                 : null;
@@ -880,12 +1153,12 @@ export function scoreEvidenceTrajectory({
             const breakdown = [];
             let undetermined = false;
 
-            for (let offset = 0; offset < subsequentCalls.length; offset += 1) {
-                const call = subsequentCalls[offset] ?? {};
-                const arrayIdx = decisiveToolIndex + 1 + offset;
-                const callOrdinal = perCallProgress[arrayIdx]?.index ?? (arrayIdx + 1);
+            for (let offset = 0; offset < subsequentEntries.length; offset += 1) {
+                const entry = subsequentEntries[offset];
+                const call = entry.toolCall;
+                const callOrdinal = entry.ordinal;
                 const callTurnIndex = Number.isSafeInteger(call.turnIndex) ? call.turnIndex : null;
-                const callDispatchedAtMs = parseTimestampMs(call.dispatchedAtMs);
+                const callDispatchedAtMs = entry.dispatchedAtMs;
 
                 let classification = null;
                 if (decisiveTurnIndex !== null && callTurnIndex !== null) {
@@ -899,16 +1172,21 @@ export function scoreEvidenceTrajectory({
 
                 if (classification === "in_flight") {
                     inFlightCount += 1;
+                    const cov = extractReadCoverage(call, canonicalRepo, sessionCwd);
+                    if (cov) priorReadCoverages.push(cov);
                 } else {
                     postDispatchedCount += 1;
+                    const category = classifyPostEvidenceTool(call, priorReadCoverages, canonicalRepo, sessionCwd);
                     breakdown.push({
                         index: callOrdinal,
                         turnIndex: callTurnIndex,
                         tool: call.tool ?? null,
                         status: call.status ?? "completed",
-                        category: classifyPostEvidenceTool(call),
+                        category,
                         detail: summarizePostEvidenceDetail(call, canonicalRepo, sessionCwd),
                     });
+                    const cov = extractReadCoverage(call, canonicalRepo, sessionCwd);
+                    if (cov) priorReadCoverages.push(cov);
                 }
             }
 
@@ -1156,6 +1434,7 @@ function extractRunMetric(run, field) {
         return run.wallTimeMs ?? run.measurements?.taskWallTimeMs ?? null;
     }
     if (field === "firstSufficientEvidenceCall") {
+        if (run.fidelity?.matched === false || run.fidelityMatched === false) return null;
         if (run.trajectory && run.trajectory.fixtureRevisionVerified !== true) return null;
         return run.firstSufficientEvidenceCall
             ?? run.trajectory?.firstSufficientEvidenceCall
@@ -1163,6 +1442,7 @@ function extractRunMetric(run, field) {
             ?? null;
     }
     if (field === "firstSufficientEvidenceMs") {
+        if (run.fidelity?.matched === false || run.fidelityMatched === false) return null;
         if (run.trajectory && run.trajectory.fixtureRevisionVerified !== true) return null;
         return run.firstSufficientEvidenceMs
             ?? run.trajectory?.firstSufficientEvidenceMs
@@ -1178,8 +1458,10 @@ function extractRunMetric(run, field) {
 function summarizeArmRuns(runs) {
     const list = Array.isArray(runs) ? runs : [];
     const passedCount = list.filter((run) => extractRunMetric(run, "strictPassed") === true).length;
+    const fidelityOk = list.every((run) => run?.fidelity?.matched !== false && run?.fidelityMatched !== false);
     return {
         count: list.length,
+        fidelityOk,
         strictObserved: list.every((run) => typeof extractRunMetric(run, "strictPassed") === "boolean"),
         strictPassRate: list.length > 0 ? passedCount / list.length : 0,
         totalInputTokens: median(list.map((run) => extractRunMetric(run, "totalInputTokens"))),
@@ -1227,6 +1509,11 @@ export function evaluateErgonomicsGate({
     if (treatment.count === 0) failureReasons.push("empty_treatment_runs");
     if (requireUnscriptedFirstCall && scriptedFirstCall) {
         failureReasons.push("scripted_first_call_disallowed");
+    }
+
+    const fidelityOk = control.fidelityOk && treatment.fidelityOk;
+    if (!fidelityOk) {
+        failureReasons.push("transcript_fidelity_mismatch");
     }
 
     const strictPassRateDelta = treatment.strictPassRate - control.strictPassRate;
@@ -1311,6 +1598,7 @@ export function evaluateErgonomicsGate({
             visibleToolBytesRatio,
         },
         checks: {
+            fidelity: fidelityOk,
             strictPassRate: strictPassRateOk,
             totalInputTokens: totalInputTokensOk,
             wallTimeMs: wallTimeMsOk,
@@ -1568,6 +1856,8 @@ export function replayResultRecord({
                     input: call.input ?? null,
                     output: typeof call.output === "string" ? call.output : matchingHostOutput(call, hostCalls[idx]),
                     visibleBytes: call.visibleResultBytes ?? call.visibleBytes ?? null,
+                    dispatchedAtMs: call.dispatchedAtMs ?? call.startedAtMs ?? null,
+                    visibleAtMs: call.visibleAtMs ?? call.endedAtMs ?? null,
                 }))
                 : [];
 
@@ -1611,9 +1901,10 @@ export function replayResultRecord({
         expectedFixtureRevision: resolvedExpectedFixtureRevision,
         evidenceSpec,
         coldStartPhases: result.measurements?.coldStartPhases ?? null,
-        sessionStartMs: piExtracted?.sessionStartMs ?? null,
+        sessionStartMs: piExtracted?.sessionStartMs ?? result.harness?.sessionStartMs ?? null,
         sessionCwd: piExtracted?.sessionCwd ?? null,
     });
+    const fidelityFailed = fidelity?.matched === false;
     const strictGrade = isRecord(result.grade)
         ? result.grade
         : (typeof result.passed === "boolean"
@@ -1632,15 +1923,15 @@ export function replayResultRecord({
         runId: result.runId ?? null,
         taskId: result.taskId ?? resolvedTask?.id ?? null,
         arm: result.arm ?? null,
-        strictPassed: outcome.strictPassed,
+        strictPassed: fidelityFailed ? false : outcome.strictPassed,
         totalInputTokens: extractRunMetric(result, "totalInputTokens"),
         wallTimeMs: extractRunMetric(result, "wallTimeMs"),
         visibleToolBytes: extractRunMetric(result, "visibleToolBytes"),
-        firstSufficientEvidenceCall: trajectory.firstSufficientEvidenceCall,
-        firstSufficientEvidenceMs: trajectory.firstSufficientEvidenceMs,
-        inFlightParallelCalls: trajectory.inFlightParallelCalls,
-        postEvidenceDispatchedCalls: trajectory.postEvidenceDispatchedCalls,
-        postEvidenceBreakdown: trajectory.postEvidenceBreakdown,
+        firstSufficientEvidenceCall: fidelityFailed ? null : trajectory.firstSufficientEvidenceCall,
+        firstSufficientEvidenceMs: fidelityFailed ? null : trajectory.firstSufficientEvidenceMs,
+        inFlightParallelCalls: fidelityFailed ? null : trajectory.inFlightParallelCalls,
+        postEvidenceDispatchedCalls: fidelityFailed ? null : trajectory.postEvidenceDispatchedCalls,
+        postEvidenceBreakdown: fidelityFailed ? [] : trajectory.postEvidenceBreakdown,
         fidelity,
         trajectory,
         outcome,

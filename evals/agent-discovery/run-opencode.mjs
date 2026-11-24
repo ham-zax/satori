@@ -1443,9 +1443,10 @@ function recordDiscoveredFiles(
         ? path.resolve(trimmedBase)
         : path.resolve(repoRoot, trimmedBase);
     if (!allowedRoots.some((root) => isPathInside(root, toolBase))) return;
-    // Full repo-relative paths are already recorded above; only resolve paths
-    // that are relative to the searched directory (e.g. tools/read_file.ts).
-    for (const match of text.matchAll(/(?:^|[\s"'`[(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.ts)\b/gm)) {
+    // Full repo-relative paths are already recorded above; resolve paths
+    // relative to the searched directory (including bare filenames like
+    // read_file.ts returned by glob inside packages/mcp/src/tools).
+    for (const match of text.matchAll(/(?:^|[\s"'`[(])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.ts)\b/gm)) {
         const candidate = match[1];
         if (candidate.startsWith("packages/") || candidate.split("/").includes("..")) continue;
         const resolved = path.resolve(toolBase, candidate);
@@ -1520,6 +1521,24 @@ function validateSatoriToolSequence(tools, repoRoot, task, mode, firstCall = DEF
     return failures;
 }
 
+function isSatoriErrorOutput(output) {
+    if (typeof output !== "string") return true;
+    const trimmed = output.trim();
+    if (trimmed.length === 0 || /^Error:/i.test(trimmed)) return true;
+    if (trimmed.startsWith("{")) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (isRecord(parsed) && typeof parsed.status === "string"
+                && !["ok", "success"].includes(parsed.status)) {
+                return true;
+            }
+        } catch {
+            // Non-JSON or truncated text falls through.
+        }
+    }
+    return false;
+}
+
 function validateHybridToolSequence(
     tools,
     repoRoot,
@@ -1555,10 +1574,13 @@ function validateHybridToolSequence(
                 failures.push("native_test_evidence_visible");
             }
         } else {
-            recordDiscoveredFiles(discoveredFiles, tool.output, scopeProfile);
-            recordDiscoveredFiles(discoveredFiles, tool.input?.file, scopeProfile);
-            recordDiscoveredFiles(discoveredFiles, tool.input?.symbolRef?.file, scopeProfile);
-            recordDiscoveredFiles(discoveredFiles, tool.input?.path, scopeProfile);
+            const satoriFailed = tool.status === "error" || isSatoriErrorOutput(tool.output);
+            if (!satoriFailed) {
+                recordDiscoveredFiles(discoveredFiles, tool.output, scopeProfile);
+                recordDiscoveredFiles(discoveredFiles, tool.input?.file, scopeProfile);
+                recordDiscoveredFiles(discoveredFiles, tool.input?.symbolRef?.file, scopeProfile);
+                recordDiscoveredFiles(discoveredFiles, tool.input?.path, scopeProfile);
+            }
         }
     }
     const expectedFirstInput = {
@@ -1833,6 +1855,7 @@ async function runOpenCodeArm({
         grade,
         harness: {
             sessionId: aggregated.sessionId,
+            sessionStartMs: dispatchStartedAtMs,
             processExitCode: processResult.code,
             processSignal: processResult.signal,
             resultFile: `${prefix}.result.json`,
@@ -1851,6 +1874,8 @@ async function runOpenCodeArm({
                 rawResultBytes: tool.rawBytes,
                 visibleResultBytes: tool.visibleBytes,
                 truncated: tool.truncated,
+                dispatchedAtMs: tool.startedAtMs ?? null,
+                visibleAtMs: tool.endedAtMs ?? null,
             })),
         },
     };

@@ -107,36 +107,37 @@ On `unknown-freshness-reuse`, Satori opened the owner source **2.8× faster** (`
 
 ## Evidence-Aware Ergonomics Replay (24 November 2026)
 
-All 12 archived Nov 23 Pi transcripts (`/tmp/satori-rebench-claive/*/events.jsonl` + `/tmp/satori-rebench-results/summary.json`, fixture revision `1dca4466+nov23-pre-ergonomics`) were replayed through `evals/agent-discovery/ergonomics-scorer.mjs` (`extractPiToolCalls` + `replayResultRecord`, landed in `43d5c073`).
+All 12 archived Nov 23 Pi transcripts (`/tmp/satori-rebench-claive/*/events.jsonl` + `/tmp/satori-rebench-results/summary.json`, fixture revision `1dca4466+nov23-pre-ergonomics`) were replayed through `evals/agent-discovery/ergonomics-scorer.mjs` (`extractPiToolCalls` + `replayResultRecord`, landed in `43d5c073` and hardened with span-tied native caller attribution, arrival-order timing, fail-closed fidelity, and prior-read-coverage classification).
 
 - **Replay fidelity:** **12/12 exact match** (`allFidelityMatched: true`) on both extracted tool call counts and host-visible UTF-8 bytes against the recorded Nov 23 benchmark summary.
-- **Stop-reading hypothesis tested:** Separating same-turn `inFlightParallelCalls` from subsequent-turn `postEvidenceDispatchedCalls` shows **4/6 Satori runs had `0` post-evidence dispatched calls** (median `0`, with `1` in-flight parallel call on `known-r3-satori`, `unknown-r1-satori`, `unknown-r2-satori`, and `2` on `known-r2-satori`). Every post-evidence dispatched call across both arms was classified as `source_reread` (`known-r1-satori` +2, `unknown-r3-satori` +2; `known-r1-native` +2, `known-r2-native` +1, `known-r3-native` +1).
+- **Stop-reading hypothesis tested (provisional):** Separating same-turn `inFlightParallelCalls` from subsequent-turn `postEvidenceDispatchedCalls` shows **4/6 Satori runs had `0` post-evidence dispatched calls** (median `0`, with `1` in-flight parallel call on `known-r3-satori`, `unknown-r1-satori`, `unknown-r2-satori`, and `2` on `known-r2-satori`). Tracking prior read file/line coverage splits the 4 post-evidence dispatched Satori calls into **2 `post_evidence_read`** (first-time file/range reads of `search-request-coordinator.ts` on `known-r1-satori` call 6 and `unknown-r3-satori` call 7) and **2 `source_reread`** (overlapping range reads on `known-r1-satori` call 7 and `unknown-r3-satori` call 6).
+- **Caller-attribution caveat:** Under span-tied native caller attribution (requiring caller definition and call site within a contiguous witnessed body rather than file-level co-occurrence), `known-r1/r2/r3-native` do **not** reach sufficiency (`missing: caller:executeSearchAttempt`) because bounded 200-line native reads did not span the gap between line 940 and line 1470+ in `search-request-coordinator.ts`. Any stop-reading comparison against native remains provisional because native bounded-read windows cannot prove long-method callers without spanning the full method body, whereas structured `call_graph` provides a directed edge directly.
 
 ### Replay Medians by Task and Arm
 
 | Task | Arm | Sufficient Runs | First Sufficient Call (med) | First Sufficient Time (med) | In-Flight Parallel Calls (med) | Post-Evidence Dispatched Calls (med) | Zero Post-Evidence Runs |
 |---|---|---:|---:|---:|---:|---:|---:|
-| `known-exact-target` | Native | 3/3 | 12 | 47.0 s | 0 | 1 | 0/3 |
+| `known-exact-target` | Native | 0/3\* | — | — | — | — | — |
 | `known-exact-target` | **Satori (offline)** | **3/3** | **8** | **37.6 s** | 1 | **0** | **2/3** |
 | `unknown-freshness-reuse` | Native | 1/3\* | 18\* | 70.0 s\* | 1\* | 0\* | 1/1\* |
 | `unknown-freshness-reuse` | **Satori (offline)** | **3/3** | **4** | **38.0 s** | 1 | **0** | **2/3** |
-| **Combined (all 6 runs/arm)** | **Satori vs Native** | **6/6 vs 4/6** | **5 vs 12.5\*** | **37.8 s vs 50.6 s\*** | 1 vs 0\* | **0 vs 1\*** | **4/6 vs 1/4\*** |
+| **Combined (all 6 runs/arm)** | **Satori vs Native** | **6/6 vs 1/6\*** | **5 vs 18\*** | **37.8 s vs 70.0 s\*** | 1 vs 1\* | **0 vs 0\*** | **4/6 vs 1/1\*** |
 
-\* Native `unknown-freshness-reuse` reached sufficient evidence in only `1/3` runs (`r1`, call `18`, `70.0 s`; `r2` missed `8` requirements and `r3` missed `4` requirements before hitting the 24-call budget). Native medians for first-sufficient metrics are over sufficient runs only.
+\* Under span-tied native caller attribution, `known-r1/r2/r3-native` never witnessed a contiguous span linking `executeSearchAttempt` (line 940) to its `runExactRegistryFastPath` call (line 1470+), and `unknown-r2/r3-native` missed `8` and `4` requirements respectively before hitting the 24-call budget. Only `unknown-r1-native` reached sufficient evidence (call `18`, `70.0 s`, `1` in-flight, `0` post-evidence). Native medians for first-sufficient metrics are over sufficient runs only.
 
 ### Per-Run Replay Breakdown
 
 | Run | Strict v4 | Sufficient | Total Calls | First Suff Call | First Suff Time | In-Flight | Post-Dispatched | Post-Evidence Categories |
 |---|---|---|---:|---:|---:|---:|---:|---|
-| `known-r1-native` | FAIL | yes | 13 | 11 | 47.0 s | 0 | 2 | `source_reread` ×2 |
-| `known-r1-satori` | **PASS** | yes | 7 | 5 | 31.1 s | 0 | 2 | `source_reread` ×2 |
+| `known-r1-native` | FAIL | no (`caller:executeSearchAttempt`) | 13 | — | — | — | — | — |
+| `known-r1-satori` | **PASS** | yes | 7 | 5 | 31.1 s | 0 | 2 | `post_evidence_read` ×1, `source_reread` ×1 |
 | `known-r2-satori` | **PASS** | yes | 10 | 8 | 37.6 s | 2 | 0 | — |
-| `known-r2-native` | **PASS** | yes | 13 | 12 | 54.1 s | 0 | 1 | `source_reread` ×1 |
-| `known-r3-native` | **PASS** | yes | 14 | 13 | 41.8 s | 0 | 1 | `source_reread` ×1 |
+| `known-r2-native` | **PASS** | no (`caller:executeSearchAttempt`) | 13 | — | — | — | — | — |
+| `known-r3-native` | **PASS** | no (`caller:executeSearchAttempt`) | 14 | — | — | — | — | — |
 | `known-r3-satori` | **PASS** | yes | 9 | 8 | 39.2 s | 1 | 0 | — |
 | `unknown-r1-native` | FAIL | yes | 19 | 18 | 70.0 s | 1 | 0 | — |
 | `unknown-r1-satori` | **PASS** | yes | 5 | 4 | 38.0 s | 1 | 0 | — |
 | `unknown-r2-satori` | **PASS** | yes | 5 | 4 | 29.0 s | 1 | 0 | — |
 | `unknown-r2-native` | FAIL | no (8 missing) | 26 | — | — | — | — | — |
 | `unknown-r3-native` | FAIL | no (4 missing) | 25 | — | — | — | — | — |
-| `unknown-r3-satori` | **PASS** | yes | 7 | 5 | 41.1 s | 0 | 2 | `source_reread` ×2 |
+| `unknown-r3-satori` | **PASS** | yes | 7 | 5 | 41.1 s | 0 | 2 | `source_reread` ×1, `post_evidence_read` ×1 |

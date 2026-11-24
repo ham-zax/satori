@@ -1134,6 +1134,18 @@ test("Pi events.jsonl extraction and replay joins tool_execution_start + message
     assert.equal(mismatchReplay.fidelity.toolCallCountMatches, false);
     assert.equal(mismatchReplay.fidelity.visibleBytesMatches, false);
     assert.equal(mismatchReplay.fidelity.mismatches.length, 2);
+    assert.equal(mismatchReplay.strictPassed, false);
+    assert.equal(mismatchReplay.firstSufficientEvidenceCall, null);
+    assert.equal(mismatchReplay.firstSufficientEvidenceMs, null);
+
+    const fidelityGate = evaluateErgonomicsGate({
+        controlRuns: [replayed],
+        treatmentRuns: [mismatchReplay],
+        armPolicy: { arm: "satori", scriptedFirstCall: true },
+    });
+    assert.equal(fidelityGate.passed, false);
+    assert.equal(fidelityGate.checks.fidelity, false);
+    assert.ok(fidelityGate.failureReasons.includes("transcript_fidelity_mismatch"));
 });
 
 test("Turn-aware post-sufficiency breakdown separates in-flight parallel calls from later-turn dispatched categories", () => {
@@ -1364,8 +1376,8 @@ test("firstSufficientEvidenceMs gate passes, fails on regression, and fails clos
     assert.deepEqual(unobservedGate.failureReasons, ["sufficient_evidence_time_unobserved"]);
 });
 
-test("Pi native read and grep attribution supports repo-relative paths and context lines while rejecting wrong-root, signature-only, and cross-file lines", () => {
-    // 1. Repo-relative Pi read + unnumbered raw body + TS class method caller + Pi grep context lines
+test("Pi native read and grep attribution supports repo-relative paths and context lines while enforcing span-tied caller attribution", () => {
+    // 1. Repo-relative Pi read + contiguous/span-tied TS class method caller + Pi grep context lines
     const validPiTrajectory = scoreEvidenceTrajectory({
         repoRoot: "/repo",
         sessionCwd: "/repo",
@@ -1379,15 +1391,18 @@ test("Pi native read and grep attribution supports repo-relative paths and conte
             },
             {
                 index: 2,
-                tool: "read",
-                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", offset: 1470, limit: 50 },
-                output: "const exactFastPath = await runExactRegistryFastPath({",
+                tool: "grep",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", pattern: "executeSearchAttempt" },
+                output: [
+                    "packages/mcp/src/core/search-request-coordinator.ts/search-request-coordinator.ts-940-     private async executeSearchAttempt(ctx) {",
+                    "packages/mcp/src/core/search-request-coordinator.ts/search-request-coordinator.ts-941-         const prepared = true;",
+                ].join("\n"),
             },
             {
                 index: 3,
-                tool: "grep",
-                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", pattern: "executeSearchAttempt" },
-                output: "packages/mcp/src/core/search-request-coordinator.ts/search-request-coordinator.ts-940-     private async executeSearchAttempt(",
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", offset: 942, limit: 50 },
+                output: "         const exactFastPath = await runExactRegistryFastPath({\n         });\n     }",
             },
             {
                 index: 4,
@@ -1399,6 +1414,44 @@ test("Pi native read and grep attribution supports repo-relative paths and conte
     });
     assert.equal(validPiTrajectory.sufficient, true);
     assert.equal(validPiTrajectory.firstSufficientEvidenceCall, 4);
+
+    // 1b. Disjoint caller header + call site in another function (or across unread gap) must NOT credit caller
+    const disjointCallerTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        sessionCwd: "/repo",
+        task: KNOWN_TASK,
+        tools: [
+            {
+                index: 1,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-exact-fast-path.ts", offset: 227, limit: 200 },
+                output: KNOWN_FULL_OWNER_BODY,
+            },
+            {
+                index: 2,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", offset: 940, limit: 10 },
+                output: "private async executeSearchAttempt(ctx) {\n    return null;\n}",
+            },
+            {
+                index: 3,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search-request-coordinator.ts", offset: 1470, limit: 10 },
+                output: "private async unrelatedHelper() {\n    return runExactRegistryFastPath({});\n}",
+            },
+            {
+                index: 4,
+                tool: "read",
+                input: { path: "packages/mcp/src/core/search/exact-registry.ts", offset: 88, limit: 20 },
+                output: KNOWN_CALLEE_EVIDENCE,
+            },
+        ],
+    });
+    assert.equal(disjointCallerTrajectory.sufficient, false);
+    assert.deepEqual(
+        disjointCallerTrajectory.missingRequirements.map((req) => req.id),
+        ["caller:executeSearchAttempt"],
+    );
 
     // 2. Wrong sessionCwd rejects repo-relative reads even when full source matches
     const wrongCwdTrajectory = scoreEvidenceTrajectory({
@@ -1442,4 +1495,141 @@ test("Pi native read and grep attribution supports repo-relative paths and conte
         crossFileGrepTrajectory.deliveredRequirements.map((req) => req.id),
         ["owner_definition"],
     );
+});
+
+test("Parallel arrival-order timing, compact read_file source, OpenCode timestamps, and post_evidence_read vs source_reread", () => {
+    const baseMs = 1_700_000_000_000;
+    // Call 2 is dispatched first (turn 2) but finishes AFTER call 3 (turn 2).
+    // Call 3 satisfies the remaining requirements at baseMs + 400; call 2 finishes at baseMs + 600 and is in-flight.
+    // Call 4 (turn 3) reads a brand-new file (post_evidence_read); call 5 (turn 3) rereads overlapping lines (source_reread).
+    const trajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        sessionStartMs: baseMs,
+        tools: [
+            {
+                index: 1,
+                turnIndex: 1,
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", start_line: 230, end_line: 400 },
+                output: JSON.stringify({
+                    presentation: "compact",
+                    path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts",
+                    startLine: 230,
+                    endLine: 400,
+                    source: KNOWN_FULL_OWNER_BODY,
+                }),
+                dispatchedAtMs: baseMs + 50,
+                visibleAtMs: baseMs + 150,
+            },
+            {
+                index: 2,
+                turnIndex: 2,
+                tool: "mcp__satori__file_outline",
+                input: { path: "/repo", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                output: JSON.stringify({ status: "ok", outline: { symbols: [] } }),
+                dispatchedAtMs: baseMs + 200,
+                visibleAtMs: baseMs + 600,
+            },
+            {
+                index: 3,
+                turnIndex: 2,
+                tool: "mcp__satori__call_graph",
+                input: { path: "/repo" },
+                output: JSON.stringify({
+                    status: "ok",
+                    nodes: [
+                        { symbolId: "c", symbolLabel: "method executeSearchAttempt", file: "packages/mcp/src/core/search-request-coordinator.ts" },
+                        { symbolId: "o", symbolLabel: "function runExactRegistryFastPath", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                        { symbolId: "e", symbolLabel: "function findExactRegistryMatch", file: "packages/mcp/src/core/search/exact-registry.ts" },
+                    ],
+                    edges: [
+                        { srcSymbolId: "c", dstSymbolId: "o", kind: "call", site: { file: "packages/mcp/src/core/search-request-coordinator.ts", startLine: 148 } },
+                        { srcSymbolId: "o", dstSymbolId: "e", kind: "call", site: { file: "packages/mcp/src/core/search-exact-fast-path.ts", startLine: 260 } },
+                    ],
+                }),
+                dispatchedAtMs: baseMs + 210,
+                visibleAtMs: baseMs + 400,
+            },
+            {
+                index: 4,
+                turnIndex: 3,
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-request-coordinator.ts", start_line: 140, end_line: 180 },
+                output: KNOWN_CALLER_EVIDENCE,
+                dispatchedAtMs: baseMs + 700,
+                visibleAtMs: baseMs + 750,
+            },
+            {
+                index: 5,
+                turnIndex: 3,
+                tool: "mcp__satori__read_file",
+                input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", start_line: 250, end_line: 290 },
+                output: KNOWN_FULL_OWNER_BODY,
+                dispatchedAtMs: baseMs + 710,
+                visibleAtMs: baseMs + 760,
+            },
+        ],
+    });
+    assert.equal(trajectory.sufficient, true);
+    assert.equal(trajectory.firstSufficientEvidenceCall, 2);
+    assert.equal(trajectory.firstSufficientEvidenceMs, 400);
+    assert.equal(trajectory.inFlightParallelCalls, 1);
+    assert.equal(trajectory.postEvidenceDispatchedCalls, 2);
+    assert.deepEqual(
+        trajectory.postEvidenceBreakdown.map((entry) => ({ index: entry.index, category: entry.category })),
+        [
+            { index: 4, category: "post_evidence_read" },
+            { index: 5, category: "source_reread" },
+        ],
+    );
+
+    // OpenCode harness.toolCalls timestamps propagate through replayResultRecord
+    const opencodeReplayed = replayResultRecord({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        result: {
+            runId: "oc-ts-1",
+            taskId: "known-exact-target",
+            arm: "satori",
+            passed: true,
+            harness: {
+                sessionStartMs: baseMs,
+                toolCalls: [
+                    {
+                        operation: "satori_read_file",
+                        status: "completed",
+                        input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts" },
+                        output: KNOWN_FULL_OWNER_BODY,
+                        visibleResultBytes: 100,
+                        dispatchedAtMs: baseMs + 100,
+                        visibleAtMs: baseMs + 300,
+                    },
+                    {
+                        operation: "satori_call_graph",
+                        status: "completed",
+                        input: { path: "/repo" },
+                        output: JSON.stringify({
+                            status: "ok",
+                            nodes: [
+                                { symbolId: "c", symbolLabel: "method executeSearchAttempt", file: "packages/mcp/src/core/search-request-coordinator.ts" },
+                                { symbolId: "o", symbolLabel: "function runExactRegistryFastPath", file: "packages/mcp/src/core/search-exact-fast-path.ts" },
+                                { symbolId: "e", symbolLabel: "function findExactRegistryMatch", file: "packages/mcp/src/core/search/exact-registry.ts" },
+                            ],
+                            edges: [
+                                { srcSymbolId: "c", dstSymbolId: "o", kind: "call", site: { file: "packages/mcp/src/core/search-request-coordinator.ts", startLine: 148 } },
+                                { srcSymbolId: "o", dstSymbolId: "e", kind: "call", site: { file: "packages/mcp/src/core/search-exact-fast-path.ts", startLine: 260 } },
+                            ],
+                        }),
+                        visibleResultBytes: 200,
+                        dispatchedAtMs: baseMs + 350,
+                        visibleAtMs: baseMs + 850,
+                    },
+                ],
+            },
+            agentResult: { status: "success", answer: KNOWN_TASK.expected },
+        },
+    });
+    assert.equal(opencodeReplayed.firstSufficientEvidenceCall, 2);
+    assert.equal(opencodeReplayed.firstSufficientEvidenceMs, 850);
 });

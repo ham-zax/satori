@@ -514,6 +514,7 @@ test("guard uses a 24-call runaway ceiling while OpenCode has 26 model steps", a
     const hooks = createAgentDiscoveryGuard({
         SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
         SATORI_AGENT_DISCOVERY_REPO_ROOT: "/repo",
+        SATORI_AGENT_DISCOVERY_ARM: "native",
         SATORI_AGENT_DISCOVERY_TOOL_LEDGER: path.join(directory, "ledger.jsonl"),
         SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: path.join(directory, "definitions.jsonl"),
     });
@@ -557,6 +558,7 @@ test("guard records actual tool definitions and raw versus visible bytes", async
     const hooks = createAgentDiscoveryGuard({
         SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
         SATORI_AGENT_DISCOVERY_REPO_ROOT: "/repo",
+        SATORI_AGENT_DISCOVERY_ARM: "native",
         SATORI_AGENT_DISCOVERY_TOOL_LEDGER: ledger,
         SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: definitions,
     });
@@ -611,6 +613,7 @@ test("guard leaves MCP output untouched when OpenCode does not expose its body",
     const hooks = createAgentDiscoveryGuard({
         SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
         SATORI_AGENT_DISCOVERY_REPO_ROOT: "/repo",
+        SATORI_AGENT_DISCOVERY_ARM: "satori",
         SATORI_AGENT_DISCOVERY_TOOL_LEDGER: ledger,
         SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: path.join(directory, "definitions.jsonl"),
     });
@@ -1681,9 +1684,82 @@ test("guard enforces each arm's toolset from the OpenCode agent identity", async
             },
             nativeCall,
         ), /agent_discovery_forbidden_tool:grep/);
+
+        // Unknown session with no input.agent and no SATORI_AGENT_DISCOVERY_ARM must fail closed.
+        await assert.rejects(() => hooks["tool.execute.before"](
+            {
+                tool: "grep",
+                sessionID: "unknown-session",
+                callID: "unknown-1",
+            },
+            nativeCall,
+        ), /agent_discovery_unknown_arm/);
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }
+});
+
+test("discovery grading is symmetric: failed Satori outline does not credit guessed path; native subdir glob credits bare filename", () => {
+    const validAnswer = {
+        status: "success",
+        answer: {
+            ownerFile: knownTask.expected.ownerFile,
+            ownerSymbol: knownTask.expected.ownerSymbol,
+            ownerSpan: knownTask.expected.ownerSpan,
+            relatedSymbols: knownTask.expected.requiredRelations,
+            taskFacts: knownTask.expected.taskFacts,
+            behavioralConclusion: "Owner behavior.",
+        },
+    };
+    const hybridFailedOutline = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "hybrid",
+        mode: "natural",
+        firstCall: "unscripted",
+        repoRoot: "/repo",
+        tools: [
+            {
+                tool: "satori_file_outline",
+                status: "error",
+                input: { path: "/repo", file: "packages/mcp/src/core/guessed.ts" },
+                output: JSON.stringify({ status: "not_found", file: "packages/mcp/src/core/guessed.ts" }),
+                visibleBytes: 60,
+            },
+            {
+                tool: "read",
+                input: { filePath: "/repo/packages/mcp/src/core/guessed.ts", offset: 1, limit: 20 },
+                output: "body",
+                visibleBytes: 4,
+            },
+        ],
+    });
+    assert.equal(hybridFailedOutline.passed, false);
+    assert.ok(hybridFailedOutline.failureReasons.includes("native_read_before_discovery:packages/mcp/src/core/guessed.ts"));
+
+    const nativeBareGlob = gradeRun({
+        agentResult: validAnswer,
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+        firstCall: "unscripted",
+        repoRoot: "/repo",
+        tools: [
+            {
+                tool: "glob",
+                input: { path: "/repo/packages/mcp/src/tools", pattern: "*.ts" },
+                output: "read_file.ts\n",
+                visibleBytes: 13,
+            },
+            {
+                tool: "read",
+                input: { filePath: "/repo/packages/mcp/src/tools/read_file.ts", offset: 1, limit: 20 },
+                output: "body",
+                visibleBytes: 4,
+            },
+        ],
+    });
+    assert.equal(nativeBareGlob.passed, true, nativeBareGlob.failureReasons.join(", "));
 });
 
 test("reporting omits absent arms and their delta sections", () => {

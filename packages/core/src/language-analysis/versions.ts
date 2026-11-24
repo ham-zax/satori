@@ -48,9 +48,9 @@ export function composeLanguageParserVersion(versions: LanguageParserVersions): 
 // Read once during module initialization so every request observes one identity.
 export const LANGUAGE_PARSER_VERSION = `${composeLanguageParserVersion(readInstalledParserVersions())}+${cbmExtendedPackIdentity()}`;
 // Flow recovery, JSX/assigned-function/callback extraction, Python module and class lambda bindings,
-// Module-level bound object caller extraction, Python TYPE_CHECKING import flags, C/C++ macro-wrapped definition names,
+// Module-level bound object caller extraction, Python TYPE_CHECKING/globalRebind/overload flags, C/C++ macro-wrapped definition names,
 // recovered C++ namespace children, and definitionStatus change persisted symbols.
-export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v23+${LANGUAGE_PARSER_VERSION}`;
+export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v24+${LANGUAGE_PARSER_VERSION}`;
 
 /**
  * Provider revisions are owned by the providers. The aggregate references
@@ -61,7 +61,7 @@ export function composeRelationshipBuilderVersion(
     providers: RelationshipProviderVersions,
 ): string {
     return [
-        'relationship-v20',
+        'relationship-v21',
         'cbm-multilang-v1',
         'python-cross-module-constructors',
         providers.pythonProviderVersion,

@@ -26,7 +26,7 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v5');
     // Relationship identity is composed from provider-owned revisions, not copied literals.
     const relationshipComponents = RELATIONSHIP_BUILDER_VERSION.split('+');
-    assert.equal(relationshipComponents[0], 'relationship-v20');
+    assert.equal(relationshipComponents[0], 'relationship-v21');
     assert.ok(relationshipComponents.includes(NATIVE_PYTHON_PROVIDER_VERSION));
     assert.ok(relationshipComponents.includes(TYPESCRIPT_COMPILER_PROVIDER_VERSION));
     assert.equal(relationshipComponents[relationshipComponents.length - 1], 'python-reexports-exact-mro-v1');

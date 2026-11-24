@@ -1,9 +1,21 @@
 # CBM Upstream Sync, Language Expansion, Pipeline Improvements & Dart Span Fix Plan
 
-Date: 2026-11-25 (Revised after peer review)
-Status: Revised (ready for gated execution, Slice 0 + Slice 1A starting in isolated worktree)
+Date: 2026-11-25 (Implemented & verified)
+Status: Complete (Slices 0, 1A, 1B, 2B, 3A, 3B, 4 merged on `master`; Slice 2A Ruby deferred after `rack/rack` qualification)
 Repo: `/home/hamza/repo/satori` (base `dd27885c`)
-Upstream reference: `/home/hamza/repo/codebase-memory-mcp` (target pin `9a4da7a314833d8d965b74612e1f25fef5371861`)
+Upstream reference: `/home/hamza/repo/codebase-memory-mcp` (pinned at `9a4da7a314833d8d965b74612e1f25fef5371861`)
+
+## Completion Summary (25 November 2026)
+
+| Slice | Status | Outcome |
+|---|---|---|
+| **Slice 0** (`codebase-memory-mcp` → `9a4da7a3`) | Done | Local checkout fast-forwarded to `9a4da7a3`; `#2996` excluded as CBM-pipeline-only. |
+| **Slice 1A + 1B** (`third_party/cbm-semantic` sync) | Done (`4c3cc648`, merged `319ec460`) | Ported `835c806d` ($O(N)$ `CBMNameRows`/registry tail across all 7 resolvers) with zero-diff pre-1B qualification, plus Go/Java/C#/C++/PHP/Rust accuracy fixes (`12/12` in `cbm-slice1b-accuracy.test.ts`). Engine bumped to `cbm-9a4da7a3+satori-multilang-semantic-v3`; WASM size `17.30 → 17.36 MB` (`+59 KB`). |
+| **Slice 2A** (Ruby semantic resolver) | Deferred | Qualified on `rack/rack` (96 files, 758 lib symbols, `122.2 ms` median): resolved `293/294` occurrences all as `type_dispatch` (`0` `direct_call` → `0` published `CALLS` under `calls_v0`) at `+2.25 MB` WASM size. Removed from production WASM bundle until Ruby's direct/receiver-aware admission contract is defined. |
+| **Slice 2B** (Python precision) | Done (`c417d234`, merged `04538ac4`) | Constructor `ClassName()` → `__init__` (with MRO `constructorDependencyKeys`), `globalRebind`, and `@overload` stub filtering; bumped `SYMBOL_EXTRACTOR_VERSION` (`language-analysis-v24`) and `NATIVE_PYTHON_PROVIDER_VERSION` (`bounded-origin-v5`). |
+| **Slice 3A** (C/C++ header invalidation) | Done (`c417d234`, merged `04538ac4`) | Confirmed existing whole-language `'cpp'` delta already covers direct/transitive includes, header deletion, and newly resolvable headers without adding a sidecar field; pinned with `assertSyncMatchesFullIndex` regression test. |
+| **Slice 3B** (`trace_path` diagnostics) | Done (`c417d234`, `4ec3ea62`) | Added additive `diagnostics.recursion` (enforcing `CALLS`-only predecessor chains for cycles) and explicit `possibleOverrides` abstention (`no_override_evidence`). |
+| **Slice 4** (`cbm-extractor` `9a4da7a3` + Dart #4) | Done (`5f10a795`, merged `6674764c`) | Updated `satori_dart_def_end_node` in `scripts/cbm-extractor-sync.mjs`, rebuilt all 140 WASM modules, published 101 extended modules to `zokizuan/satori-cbm-extractors` commit `48027a01390d791af6f97f8f3daad46963af95fd`, pinned `CBM_EXTENDED_REVISION`, and verified combined C++ CRLF/GoogleTest definition-to-call binding. |
 
 ## Context & Current Pins
 

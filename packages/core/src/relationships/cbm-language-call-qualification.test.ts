@@ -850,3 +850,59 @@ test('Kotlin binds calls on typed class properties to the property type', async 
         ],
     );
 });
+
+test('combined C++ language analysis and semantic engine bind CRLF-spliced and GoogleTest calls end-to-end', async () => {
+    const sources: SourceInput[] = [
+        {
+            path: 'inc/util.h',
+            source: '#ifndef UTIL_H\n#define UTIL_H\nint helper(int x);\n#endif\n',
+        },
+        {
+            path: 'src/util.cpp',
+            source: '#include "../inc/util.h"\nint helper(int x) { return x + 1; }\n',
+        },
+        {
+            path: 'src/main.cpp',
+            source: '#include "../inc/util.h"\r\n#define MULTI "a\\\r\nb"\r\nint run_app() { return helper(1); }\r\n',
+        },
+        {
+            path: 'tests/math_test.cpp',
+            source: '#include "../inc/util.h"\n#define TEST(a, b) void TEST_##a##_##b()\nTEST(MathSuite, Adds) {\n  helper(2);\n}\n',
+        },
+    ];
+    const service = createLanguageAnalysisService();
+    const symbols: SymbolRecord[] = [];
+    for (const source of sources) {
+        const analysis = await service.analyze({ content: source.source, relativePath: source.path, language: 'cpp' });
+        symbols.push(...buildSymbolRecordsForFile({
+            relativePath: source.path,
+            language: 'cpp',
+            content: source.source,
+            fileHash: `hash-${source.path}`,
+            extractorVersion: 'cbm-language-qualification',
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        }));
+    }
+    const evidence = await analyze('cpp', sources, []);
+    const records = buildRelationshipsForRegistry({
+        registry: createRegistry('cpp', sources, symbols),
+        analysisByFile: new Map(sources.map((source) => [
+            source.path,
+            { moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [] },
+        ])),
+        semanticEvidenceByLanguage: new Map([['cpp', evidence]]),
+    });
+    const label = new Map(symbols.map((entry) => [entry.symbolKey, `${entry.file}#${entry.qualifiedName}`]));
+    const callPairs = records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [label.get(record.sourceKey), record.targetKey && label.get(record.targetKey)]);
+    assert.ok(
+        callPairs.some(([src, tgt]) => src === 'src/main.cpp#run_app' && tgt === 'src/util.cpp#helper'),
+        `CRLF-spliced C++ caller must bind to helper definition, got ${JSON.stringify(callPairs)}`,
+    );
+    const gtestOccurrences = (evidence.occurrencesByFile.get('tests/math_test.cpp') ?? []).filter(
+        (occurrence) => occurrence.decision === 'resolved' && occurrence.targetProvenance?.file === 'src/util.cpp' && occurrence.targetProvenance?.name === 'helper',
+    );
+    assert.equal(gtestOccurrences.length, 1, 'GoogleTest body must emit resolved semantic occurrence to helper');
+});

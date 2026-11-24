@@ -8,4 +8,4 @@
 /** Stable semantic configuration identity; publication generations are not part of it. */
 export const PYTHON_NATIVE_ENVIRONMENT_CONFIG_ID = 'python-native-resolution-v2';
 export const NATIVE_PYTHON_PROVIDER_ID = 'satori-native-python';
-export const NATIVE_PYTHON_PROVIDER_VERSION = 'bounded-origin-v4';
+export const NATIVE_PYTHON_PROVIDER_VERSION = 'bounded-origin-v5';

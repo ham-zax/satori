@@ -76,7 +76,7 @@ test('relationship identity composes the provider-owned revisions', () => {
 
     const components = RELATIONSHIP_BUILDER_VERSION.split('+');
     assert.deepEqual(components, [
-        'relationship-v20',
+        'relationship-v21',
         'cbm-multilang-v1',
         'python-cross-module-constructors',
         NATIVE_PYTHON_PROVIDER_VERSION,
@@ -116,7 +116,7 @@ test('installed parser versions drive parser and extractor identity', () => {
 
     assert.ok(LANGUAGE_PARSER_VERSION.startsWith(`${composedParser}+`));
     assert.match(LANGUAGE_PARSER_VERSION, /\+cbm-extended-(present|absent)$/);
-    assert.equal(SYMBOL_EXTRACTOR_VERSION, `language-analysis-v23+${LANGUAGE_PARSER_VERSION}`);
+    assert.equal(SYMBOL_EXTRACTOR_VERSION, `language-analysis-v24+${LANGUAGE_PARSER_VERSION}`);
 
     const components = LANGUAGE_PARSER_VERSION.split('+');
     assert.deepEqual(components.slice(0, -1), [
@@ -140,7 +140,7 @@ test('parser version changes drive parser and extractor identity without touchin
     });
 
     assert.notEqual(changedParser, baselineParser);
-    assert.notEqual(`language-analysis-v23+${changedParser}`, SYMBOL_EXTRACTOR_VERSION);
+    assert.notEqual(`language-analysis-v24+${changedParser}`, SYMBOL_EXTRACTOR_VERSION);
     assert.equal(
         RELATIONSHIP_BUILDER_VERSION,
         composeRelationshipBuilderVersion({

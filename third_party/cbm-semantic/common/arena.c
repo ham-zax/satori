@@ -14,11 +14,16 @@ void cbm_arena_init(CBMArena *a) {
     }
 }
 
+void cbm_arena_init_lazy(CBMArena *a, size_t block_size) {
+    memset(a, 0, sizeof(*a));
+    a->block_size = block_size > 0 ? block_size : CBM_ARENA_DEFAULT_BLOCK_SIZE;
+}
+
 static int arena_grow(CBMArena *a, size_t min_size) {
     if (a->nblocks >= CBM_ARENA_MAX_BLOCKS) {
         return 0;
     }
-    size_t new_size = CBM_ARENA_DEFAULT_BLOCK_SIZE;
+    size_t new_size = a->block_size > 0 ? a->block_size : CBM_ARENA_DEFAULT_BLOCK_SIZE;
     if (new_size < min_size) {
         new_size = min_size;
     }

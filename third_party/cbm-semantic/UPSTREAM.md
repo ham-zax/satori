@@ -6,7 +6,7 @@ This directory vendors a minimal, self-contained semantic analysis closure extra
 
 | Component | Upstream Repository | Pinned Commit / Version | License |
 |---|---|---|---|
-| CBM Core & Go/Java/C#/C++/Rust/Kotlin/PHP Resolvers | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | `11b662f9f7fba92012b872dd4fcaef7ee0c1300d` (resolvers; grammars, runtime, and stdlib data unchanged since `d150ebe4`) | MIT |
+| CBM Core & Go/Java/C#/C++/Rust/Kotlin/PHP Resolvers | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | `9a4da7a314833d8d965b74612e1f25fef5371861` (Slice 1A + 1B resolver sync; Ruby deferred after real-repo qualification) | MIT |
 | Tree-sitter C Runtime | [tree-sitter/tree-sitter](https://github.com/tree-sitter/tree-sitter) | `v0.24.4` (`64f26b5272a2e8c2534cece6e3f4d6d67ddf70dc`) | MIT |
 | Tree-sitter Go Grammar | [tree-sitter/tree-sitter-go](https://github.com/tree-sitter/tree-sitter-go) | `v0.23.4` (`a28f4c274719be1e2aa652eb6bd391c5dd97a3cf`) | MIT |
 | Tree-sitter Java Grammar | [tree-sitter/tree-sitter-java](https://github.com/tree-sitter/tree-sitter-java) | CBM snapshot `e10607b45ff7` | MIT |
@@ -84,7 +84,19 @@ Carry these forward on every upstream sync:
   (`rust_collect_cfg_test_gates`) and every resolved-call emission point
   drops sites inside a gate (`rust_site_in_cfg_test_gate`). Files stay
   eligible with unchanged definitions; only test-gated call sites are
-  suppressed.
+  suppressed. Also adapts `use` target resolution (`rust_resolve_use_target`,
+  `rust_use_is_external`) and `lsp_short_name_unique` crate-prefix matching
+  (`rust_crate_prefix_len`) to Satori's `@rust.<crate>` QNs so external `use`
+  imports and sibling crates never cross-bind.
+- `satori_semantic.c`, `helpers.h`, `minimal-compat/cbm_compat.h`: implements
+  `cbm_c_mask_crlf_splices`, `cbm_cpp_test_macro_name` (GoogleTest body caller
+  & definition naming), and pre-parse / pass-1+pass-2 masking for PHP inline
+  HTML and C/C++ CRLF line splices.
+- `languages/csharp/cs_lsp.c`: Step 7 defers registered project top-level types
+  (`rt->namespace_qn != NULL`) to Step 8b (`cs_resolve_by_declared_namespace`),
+  and `cs_top_level_namespace` recognizes Satori's `<namespace>.<ShortName>`
+  top-level QNs alongside `@local/...` module-scoped QNs so global-namespace
+  shadowing vs compilation-unit `using` directives follows C# lookup order.
 - Stdlib data files include their resolver header by local name.
 
 ## License Notices

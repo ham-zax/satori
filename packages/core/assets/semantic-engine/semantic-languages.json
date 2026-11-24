@@ -8,7 +8,7 @@
         ".go"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "go-v4",
+      "semanticRevision": "go-v5",
       "grammar": "tree-sitter-go",
       "auxiliaryFiles": [
         {
@@ -25,8 +25,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-go",
-      "providerVersion": "cbm-11b662f9+satori-go-semantic-v4",
-      "environmentConfigId": "cbm-go-semantic-v4"
+      "providerVersion": "cbm-9a4da7a3+satori-go-semantic-v5",
+      "environmentConfigId": "cbm-go-semantic-v5"
     },
     {
       "language": "java",
@@ -35,7 +35,7 @@
         ".java"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "java-v2",
+      "semanticRevision": "java-v3",
       "grammar": "tree-sitter-java",
       "auxiliaryFiles": [
         {
@@ -52,8 +52,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-java",
-      "providerVersion": "cbm-11b662f9+satori-java-semantic-v2",
-      "environmentConfigId": "cbm-java-semantic-v2"
+      "providerVersion": "cbm-9a4da7a3+satori-java-semantic-v3",
+      "environmentConfigId": "cbm-java-semantic-v3"
     },
     {
       "language": "csharp",
@@ -62,7 +62,7 @@
         ".cs"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "csharp-v2",
+      "semanticRevision": "csharp-v3",
       "grammar": "tree-sitter-c-sharp",
       "auxiliaryFiles": [
         {
@@ -71,8 +71,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-csharp",
-      "providerVersion": "cbm-11b662f9+satori-csharp-semantic-v2",
-      "environmentConfigId": "cbm-csharp-semantic-v2"
+      "providerVersion": "cbm-9a4da7a3+satori-csharp-semantic-v3",
+      "environmentConfigId": "cbm-csharp-semantic-v3"
     },
     {
       "language": "cpp",
@@ -91,12 +91,12 @@
         ".ixx"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "cpp-v3",
+      "semanticRevision": "cpp-v4",
       "grammar": "tree-sitter-cpp",
       "auxiliaryFiles": [],
       "providerId": "satori-cbm-semantic-cpp",
-      "providerVersion": "cbm-11b662f9+satori-cpp-semantic-v3",
-      "environmentConfigId": "cbm-cpp-semantic-v3"
+      "providerVersion": "cbm-9a4da7a3+satori-cpp-semantic-v4",
+      "environmentConfigId": "cbm-cpp-semantic-v4"
     },
     {
       "language": "rust",
@@ -105,7 +105,7 @@
         ".rs"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "rust-v4",
+      "semanticRevision": "rust-v5",
       "grammar": "tree-sitter-rust",
       "auxiliaryFiles": [
         {
@@ -118,8 +118,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-rust",
-      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v4",
-      "environmentConfigId": "cbm-rust-semantic-v4"
+      "providerVersion": "cbm-9a4da7a3+satori-rust-semantic-v5",
+      "environmentConfigId": "cbm-rust-semantic-v5"
     },
     {
       "language": "kotlin",
@@ -146,7 +146,7 @@
         }
       ],
       "providerId": "satori-cbm-semantic-kotlin",
-      "providerVersion": "cbm-11b662f9+satori-kotlin-semantic-v2",
+      "providerVersion": "cbm-9a4da7a3+satori-kotlin-semantic-v2",
       "environmentConfigId": "cbm-kotlin-semantic-v2"
     },
     {
@@ -156,7 +156,7 @@
         ".php"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "php-v2",
+      "semanticRevision": "php-v3",
       "grammar": "tree-sitter-php",
       "auxiliaryFiles": [
         {
@@ -165,8 +165,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-php",
-      "providerVersion": "cbm-11b662f9+satori-php-semantic-v2",
-      "environmentConfigId": "cbm-php-semantic-v2"
+      "providerVersion": "cbm-9a4da7a3+satori-php-semantic-v3",
+      "environmentConfigId": "cbm-php-semantic-v3"
     }
   ]
 }

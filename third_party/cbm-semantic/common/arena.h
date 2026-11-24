@@ -26,6 +26,9 @@ typedef struct {
 // Initialize an arena with the default block size.
 void cbm_arena_init(CBMArena *a);
 
+// Initialize an arena without allocating block 0 until the first allocation.
+void cbm_arena_init_lazy(CBMArena *a, size_t block_size);
+
 // Allocate n bytes from the arena. Returns NULL on OOM or block exhaustion.
 // All returned pointers are 8-byte aligned.
 void *cbm_arena_alloc(CBMArena *a, size_t n);

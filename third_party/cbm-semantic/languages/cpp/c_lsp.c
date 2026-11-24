@@ -994,11 +994,15 @@ static const CBMType *c_resolve_name_to_type(CLSPContext *ctx, const char *name)
     }
 
     // Module scope
-    if (ctx->module_qn) {
+    if (ctx->module_qn && ctx->module_qn[0]) {
         const char *qn = cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn, name);
         const CBMRegisteredType *rt = cbm_registry_lookup_type(ctx->registry, qn);
         if (rt)
             return cbm_type_named(ctx->arena, qn);
+    } else {
+        const CBMRegisteredType *rt = cbm_registry_lookup_type(ctx->registry, name);
+        if (rt)
+            return cbm_type_named(ctx->arena, name);
     }
 
     // Using namespaces
@@ -1018,7 +1022,7 @@ static const CBMType *c_resolve_name_to_type(CLSPContext *ctx, const char *name)
     }
 
     // Unresolved — return named with module prefix
-    if (ctx->module_qn) {
+    if (ctx->module_qn && ctx->module_qn[0]) {
         return cbm_type_named(ctx->arena,
                               cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn, name));
     }
@@ -4833,8 +4837,11 @@ static void c_process_function(CLSPContext *ctx, TSNode func_node) {
     if (!func_name || !func_name[0])
         return;
 
+    // GoogleTest `TEST(Suite, Case)`: name the caller like its definition (#3048).
+    const char *test_name = cbm_cpp_test_macro_name(ctx->arena, ctx->test_macro_names,
+                                                    func_name, func_node, ctx->source);
     // Build enclosing function QN
-    const char *func_qn = c_build_qn(ctx, func_name);
+    const char *func_qn = c_build_qn(ctx, test_name ? test_name : func_name);
     // For a method defined INLINE inside its class body, func_name is a bare
     // identifier ("compute") and enclosing_class_qn was inherited from
     // c_process_class (saved_class_qn == enclosing_class_qn). The textual
@@ -6040,6 +6047,7 @@ void cbm_run_c_lsp_cross_with_registry(CBMArena *arena, const char *source, int 
                                        CBMResolvedCallArray *out) {
     if (!source || source_len == 0 || !out || !reg)
         return;
+    source = cbm_c_mask_crlf_splices(arena, source, source_len);
 
     TSParser *parser = NULL;
     TSTree *tree = cached_tree;
@@ -6061,6 +6069,7 @@ void cbm_run_c_lsp_cross_with_registry(CBMArena *arena, const char *source, int 
     CLSPContext ctx;
     c_lsp_init(&ctx, arena, source, source_len, reg, module_qn, cpp_mode, out);
     ctx.registry_shared = true; /* Tier-2 shared registry: read-only, see flag doc */
+    ctx.test_macro_names = cpp_mode;
     for (int i = 0; i < include_count; i++) {
         c_lsp_add_include(&ctx, include_paths[i], include_ns_qns[i]);
     }
@@ -6078,6 +6087,7 @@ void cbm_run_c_lsp_cross(CBMArena *arena, const char *source, int source_len, co
 
     if (!source || source_len == 0 || !out)
         return;
+    source = cbm_c_mask_crlf_splices(arena, source, source_len);
 
     CBMTypeRegistry reg;
     cbm_registry_init(&reg, arena);
@@ -6117,6 +6127,7 @@ void cbm_run_c_lsp_cross(CBMArena *arena, const char *source, int source_len, co
     // Initialize context and run
     CLSPContext ctx;
     c_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, cpp_mode, out);
+    ctx.test_macro_names = cpp_mode;
 
     // Add include mappings
     for (int i = 0; i < include_count; i++) {

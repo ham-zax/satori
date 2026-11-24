@@ -1,4 +1,5 @@
 #include "type_registry.h"
+#include "lsp_work.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -56,17 +57,32 @@ static void build_qn_index(CBMTypeRegistry *reg, CBMArena *idx_arena, bool for_f
     for (int i = 0; i < bucket_count; i++)
         buckets[i] = -1;
 
-    for (int i = 0; i < count; i++) {
-        const char *qn = for_funcs ? reg->funcs[i].qualified_name : reg->types[i].qualified_name;
-        if (!qn)
-            continue;
-        uint64_t h = fnv1a(qn);
-        int slot = (int)(h & (uint64_t)(bucket_count - 1));
-        entries[i].hash = h;
-        entries[i].payload_index = i;
-        entries[i].next_index = buckets[slot];
-        entries[i].slot = slot;
-        buckets[slot] = i;
+    if (reg->index_first_registered) {
+        for (int i = count - 1; i >= 0; i--) {
+            const char *qn = for_funcs ? reg->funcs[i].qualified_name : reg->types[i].qualified_name;
+            if (!qn)
+                continue;
+            uint64_t h = fnv1a(qn);
+            int slot = (int)(h & (uint64_t)(bucket_count - 1));
+            entries[i].hash = h;
+            entries[i].payload_index = i;
+            entries[i].next_index = buckets[slot];
+            entries[i].slot = slot;
+            buckets[slot] = i;
+        }
+    } else {
+        for (int i = 0; i < count; i++) {
+            const char *qn = for_funcs ? reg->funcs[i].qualified_name : reg->types[i].qualified_name;
+            if (!qn)
+                continue;
+            uint64_t h = fnv1a(qn);
+            int slot = (int)(h & (uint64_t)(bucket_count - 1));
+            entries[i].hash = h;
+            entries[i].payload_index = i;
+            entries[i].next_index = buckets[slot];
+            entries[i].slot = slot;
+            buckets[slot] = i;
+        }
     }
     if (for_funcs) {
         reg->func_qn_buckets = buckets;
@@ -342,6 +358,91 @@ static const CBMRegisteredType *lookup_type_self(const CBMTypeRegistry *reg,
                                                  const char *qualified_name);
 static const CBMRegisteredFunc *lookup_func_self(const CBMTypeRegistry *reg,
                                                  const char *qualified_name);
+
+/* A tail this short is scanned; it is not worth a memo. */
+enum { CBM_REGISTRY_TAIL_SCAN = 64 };
+
+/* The first row from `from` on that registered the name, or -1. The memo answers
+ * for the rows it holds, and the rows behind it are scanned. */
+static int tail_first_func(const CBMTypeRegistry *reg, int from, const char *qualified_name) {
+    const CBMRegistryTail *tail = &reg->func_tail;
+    if (tail->start == from && tail->synced > from) {
+        CBM_LSP_WORK(1);
+        int row = cbm_idxmemo_get(&tail->first, qualified_name);
+        if (row >= 0)
+            return row;
+        from = tail->synced;
+    }
+    for (int i = from; i < reg->func_count; i++) {
+        CBM_LSP_WORK(1);
+        if (reg->funcs[i].qualified_name &&
+            strcmp(reg->funcs[i].qualified_name, qualified_name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static int tail_first_type(const CBMTypeRegistry *reg, int from, const char *qualified_name) {
+    const CBMRegistryTail *tail = &reg->type_tail;
+    if (tail->start == from && tail->synced > from) {
+        CBM_LSP_WORK(1);
+        int row = cbm_idxmemo_get(&tail->first, qualified_name);
+        if (row >= 0)
+            return row;
+        from = tail->synced;
+    }
+    for (int i = from; i < reg->type_count; i++) {
+        CBM_LSP_WORK(1);
+        if (reg->types[i].qualified_name &&
+            strcmp(reg->types[i].qualified_name, qualified_name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/* Brings a long tail's memo up to date. An index built since starts it over, and a
+ * row the memo could not take stays behind `synced`, where lookups scan for it. */
+static void tail_sync_funcs(CBMTypeRegistry *reg) {
+    CBMRegistryTail *tail = &reg->func_tail;
+    int from = reg->func_qn_buckets && reg->func_qn_bucket_count > 0 ? reg->func_qn_entry_count : 0;
+    if (!reg->tail_arena || reg->func_count - from < CBM_REGISTRY_TAIL_SCAN)
+        return;
+    if (tail->start != from) {
+        memset(&tail->first, 0, sizeof(tail->first));
+        tail->start = from;
+        tail->synced = from;
+    }
+    for (; tail->synced < reg->func_count; tail->synced++) {
+        const char *qn = reg->funcs[tail->synced].qualified_name;
+        if (!qn)
+            continue;
+        CBM_LSP_WORK(1);
+        cbm_idxmemo_put_if_absent(&tail->first, reg->tail_arena, qn, tail->synced);
+        if (cbm_idxmemo_get(&tail->first, qn) < 0)
+            return;
+    }
+}
+
+static void tail_sync_types(CBMTypeRegistry *reg) {
+    CBMRegistryTail *tail = &reg->type_tail;
+    int from = reg->type_qn_buckets && reg->type_qn_bucket_count > 0 ? reg->type_qn_entry_count : 0;
+    if (!reg->tail_arena || reg->type_count - from < CBM_REGISTRY_TAIL_SCAN)
+        return;
+    if (tail->start != from) {
+        memset(&tail->first, 0, sizeof(tail->first));
+        tail->start = from;
+        tail->synced = from;
+    }
+    for (; tail->synced < reg->type_count; tail->synced++) {
+        const char *qn = reg->types[tail->synced].qualified_name;
+        if (!qn)
+            continue;
+        CBM_LSP_WORK(1);
+        cbm_idxmemo_put_if_absent(&tail->first, reg->tail_arena, qn, tail->synced);
+        if (cbm_idxmemo_get(&tail->first, qn) < 0)
+            return;
+    }
+}
 
 /* A base entry is shadowed when the head holds an entry with the same QN. */
 static bool type_shadowed(const CBMTypeRegistry *shadow, const CBMTypeRegistry *reg, int i) {
@@ -677,8 +778,23 @@ CBMRegisteredType *cbm_registry_type_for_update(CBMTypeRegistry *head, const cha
     for (const CBMTypeRegistry *r = head->fallback; r; r = r->fallback) {
         const CBMRegisteredType *base = lookup_type_self(r, qualified_name);
         if (base) {
+            CBMRegisteredType copy = *base;
+            if (base->field_types) {
+                size_t count = 0;
+                while (base->field_names ? base->field_names[count] != NULL
+                                         : base->field_types[count] != NULL) {
+                    count++;
+                }
+                const CBMType **field_types = (const CBMType **)cbm_arena_alloc(
+                    head->arena, (count + 1) * sizeof(*field_types));
+                if (!field_types) {
+                    return NULL;
+                }
+                memcpy(field_types, base->field_types, (count + 1) * sizeof(*field_types));
+                copy.field_types = field_types;
+            }
             int before = head->type_count;
-            cbm_registry_add_type(head, *base);
+            cbm_registry_add_type(head, copy);
             if (head->type_count == before + 1) {
                 return &head->types[before];
             }
@@ -697,6 +813,66 @@ void cbm_registry_finalize_into(CBMTypeRegistry *reg, CBMArena *idx_arena) {
     build_type_embed_index(reg, idx_arena);
     build_ffunc_short_index(reg, idx_arena);
     build_type_short_index(reg, idx_arena);
+}
+
+void cbm_registry_index_types_into(CBMTypeRegistry *reg, CBMArena *idx_arena) {
+    if (!reg || !idx_arena)
+        return;
+    bool first = reg->index_first_registered;
+    reg->index_first_registered = true;
+    build_qn_index(reg, idx_arena, /*for_funcs=*/false);
+    build_type_short_index(reg, idx_arena);
+    reg->index_first_registered = first;
+}
+
+CBMRegisteredFunc *cbm_registry_first_own_func(CBMTypeRegistry *reg, const char *qualified_name) {
+    if (!reg || !qualified_name) {
+        return NULL;
+    }
+    int indexed = 0, lowest = -1;
+    if (reg->func_qn_buckets && reg->func_qn_bucket_count > 0) {
+        indexed = reg->func_qn_entry_count;
+        uint64_t h = fnv1a(qualified_name);
+        int slot = (int)(h & (uint64_t)(reg->func_qn_bucket_count - 1));
+        for (int idx = reg->func_qn_buckets[slot]; idx >= 0;
+             idx = reg->func_qn_entries[idx].next_index) {
+            CBM_LSP_WORK(1);
+            int p = reg->func_qn_entries[idx].payload_index;
+            if (reg->func_qn_entries[idx].hash == h && reg->funcs[p].qualified_name &&
+                strcmp(reg->funcs[p].qualified_name, qualified_name) == 0 &&
+                (lowest < 0 || p < lowest)) {
+                lowest = p;
+            }
+        }
+    }
+    if (lowest < 0)
+        lowest = tail_first_func(reg, indexed, qualified_name);
+    return lowest >= 0 ? &reg->funcs[lowest] : NULL;
+}
+
+CBMRegisteredType *cbm_registry_first_own_type(CBMTypeRegistry *reg, const char *qualified_name) {
+    if (!reg || !qualified_name) {
+        return NULL;
+    }
+    int indexed = 0, lowest = -1;
+    if (reg->type_qn_buckets && reg->type_qn_bucket_count > 0) {
+        indexed = reg->type_qn_entry_count;
+        uint64_t h = fnv1a(qualified_name);
+        int slot = (int)(h & (uint64_t)(reg->type_qn_bucket_count - 1));
+        for (int idx = reg->type_qn_buckets[slot]; idx >= 0;
+             idx = reg->type_qn_entries[idx].next_index) {
+            CBM_LSP_WORK(1);
+            int p = reg->type_qn_entries[idx].payload_index;
+            if (reg->type_qn_entries[idx].hash == h && reg->types[p].qualified_name &&
+                strcmp(reg->types[p].qualified_name, qualified_name) == 0 &&
+                (lowest < 0 || p < lowest)) {
+                lowest = p;
+            }
+        }
+    }
+    if (lowest < 0)
+        lowest = tail_first_type(reg, indexed, qualified_name);
+    return lowest >= 0 ? &reg->types[lowest] : NULL;
 }
 
 void cbm_registry_finalize(CBMTypeRegistry *reg) {
@@ -728,6 +904,7 @@ void cbm_registry_add_func(CBMTypeRegistry *reg, CBMRegisteredFunc func) {
         reg->func_cap = new_cap;
     }
     reg->funcs[reg->func_count++] = func;
+    tail_sync_funcs(reg);
 }
 
 void cbm_registry_add_type(CBMTypeRegistry *reg, CBMRegisteredType type) {
@@ -748,6 +925,7 @@ void cbm_registry_add_type(CBMTypeRegistry *reg, CBMRegisteredType type) {
         reg->type_cap = new_cap;
     }
     reg->types[reg->type_count++] = type;
+    tail_sync_types(reg);
 }
 
 static const CBMRegisteredFunc *lookup_method_self(const CBMTypeRegistry *reg,
@@ -818,21 +996,12 @@ static const CBMRegisteredType *lookup_type_self(const CBMTypeRegistry *reg,
             }
         }
         /* Tail-scan types added after finalize (see lookup_method_self). */
-        for (int i = reg->type_qn_entry_count; i < reg->type_count; i++) {
-            if (reg->types[i].qualified_name &&
-                strcmp(reg->types[i].qualified_name, qualified_name) == 0) {
-                return &reg->types[i];
-            }
-        }
-        return NULL;
+        int tail_row = tail_first_type(reg, reg->type_qn_entry_count, qualified_name);
+        return tail_row >= 0 ? &reg->types[tail_row] : NULL;
     }
 
-    for (int i = 0; i < reg->type_count; i++) {
-        if (strcmp(reg->types[i].qualified_name, qualified_name) == 0) {
-            return &reg->types[i];
-        }
-    }
-    return NULL;
+    int row = tail_first_type(reg, 0, qualified_name);
+    return row >= 0 ? &reg->types[row] : NULL;
 }
 
 const CBMRegisteredType *cbm_registry_lookup_type(const CBMTypeRegistry *reg,
@@ -862,21 +1031,12 @@ static const CBMRegisteredFunc *lookup_func_self(const CBMTypeRegistry *reg,
             }
         }
         /* Tail-scan funcs added after finalize (see lookup_method_self). */
-        for (int i = reg->func_qn_entry_count; i < reg->func_count; i++) {
-            if (reg->funcs[i].qualified_name &&
-                strcmp(reg->funcs[i].qualified_name, qualified_name) == 0) {
-                return &reg->funcs[i];
-            }
-        }
-        return NULL;
+        int tail_row = tail_first_func(reg, reg->func_qn_entry_count, qualified_name);
+        return tail_row >= 0 ? &reg->funcs[tail_row] : NULL;
     }
 
-    for (int i = 0; i < reg->func_count; i++) {
-        if (strcmp(reg->funcs[i].qualified_name, qualified_name) == 0) {
-            return &reg->funcs[i];
-        }
-    }
-    return NULL;
+    int row = tail_first_func(reg, 0, qualified_name);
+    return row >= 0 ? &reg->funcs[row] : NULL;
 }
 
 const CBMRegisteredFunc *cbm_registry_lookup_func(const CBMTypeRegistry *reg,
@@ -1489,4 +1649,249 @@ const CBMType *cbm_registry_lookup_index_signature(const CBMTypeRegistry *reg, c
             return rt->index_value_type;
     }
     return NULL;
+}
+
+/* ── QN prefix / sorted order queries (9a4da7a3) ─────────────────── */
+
+static int registry_qn_entry_cmp(const void *left, const void *right) {
+    const CBMRegistryQNEntry *a = left;
+    const CBMRegistryQNEntry *b = right;
+    int cmp = strcmp(a->qualified_name, b->qualified_name);
+    return cmp ? cmp : (a->func_index > b->func_index) - (a->func_index < b->func_index);
+}
+
+void cbm_registry_build_func_qn_order(CBMTypeRegistry *reg, CBMArena *arena) {
+    if (!reg || !arena || reg->read_only)
+        return;
+    reg->func_qn_sorted = NULL;
+    reg->func_qn_sorted_count = 0;
+    reg->func_qn_sorted_upto = 0;
+    if (reg->func_count <= 0 ||
+        (size_t)reg->func_count > (SIZE_MAX - 7) / sizeof(CBMRegistryQNEntry))
+        return;
+    CBMRegistryQNEntry *sorted = cbm_arena_alloc(arena, (size_t)reg->func_count * sizeof(*sorted));
+    if (!sorted)
+        return;
+    int count = 0;
+    for (int i = 0; i < reg->func_count; i++) {
+        if (reg->funcs[i].qualified_name) {
+            sorted[count].qualified_name = reg->funcs[i].qualified_name;
+            sorted[count].func_index = i;
+            count++;
+        }
+    }
+    qsort(sorted, (size_t)count, sizeof(*sorted), registry_qn_entry_cmp);
+    reg->func_qn_sorted = sorted;
+    reg->func_qn_sorted_count = count;
+    reg->func_qn_sorted_upto = reg->func_count;
+}
+
+static bool registry_link_has_func_qn_prefix(const CBMTypeRegistry *reg, const char *prefix,
+                                             size_t length, uint64_t *visits) {
+    int scan_from = 0;
+    if (reg->func_qn_sorted && reg->func_qn_sorted_upto <= reg->func_count) {
+        int lo = 0, hi = reg->func_qn_sorted_count;
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (visits)
+                (*visits)++;
+            if (strcmp(reg->func_qn_sorted[mid].qualified_name, prefix) < 0)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo < reg->func_qn_sorted_count) {
+            if (visits)
+                (*visits)++;
+            if (strncmp(reg->func_qn_sorted[lo].qualified_name, prefix, length) == 0)
+                return true;
+        }
+        scan_from = reg->func_qn_sorted_upto;
+    }
+    for (int i = scan_from; i < reg->func_count; i++) {
+        if (visits)
+            (*visits)++;
+        const char *qn = reg->funcs[i].qualified_name;
+        if (qn && strncmp(qn, prefix, length) == 0)
+            return true;
+    }
+    return false;
+}
+
+bool cbm_registry_has_func_qn_prefix(const CBMTypeRegistry *reg, const char *prefix,
+                                     uint64_t *visits) {
+    if (!prefix)
+        return false;
+    size_t length = strlen(prefix);
+    for (const CBMTypeRegistry *link = reg; link; link = link->fallback) {
+        if (registry_link_has_func_qn_prefix(link, prefix, length, visits))
+            return true;
+    }
+    return false;
+}
+
+static int registry_type_qn_entry_cmp(const void *left, const void *right) {
+    const CBMRegistryTypeQNEntry *a = left;
+    const CBMRegistryTypeQNEntry *b = right;
+    int cmp = strcmp(a->qualified_name, b->qualified_name);
+    return cmp ? cmp : (a->type_index > b->type_index) - (a->type_index < b->type_index);
+}
+
+void cbm_registry_build_type_qn_order(CBMTypeRegistry *reg, CBMArena *arena) {
+    if (!reg || !arena || reg->read_only)
+        return;
+    reg->type_qn_sorted = NULL;
+    reg->type_qn_sorted_count = 0;
+    reg->type_qn_sorted_upto = 0;
+    if (!reg->types || reg->type_count <= 0 ||
+        (size_t)reg->type_count > (SIZE_MAX - 7) / sizeof(CBMRegistryTypeQNEntry))
+        return;
+    CBMRegistryTypeQNEntry *sorted =
+        cbm_arena_alloc(arena, (size_t)reg->type_count * sizeof(*sorted));
+    if (!sorted)
+        return;
+    int count = 0;
+    for (int i = 0; i < reg->type_count; i++) {
+        if (reg->types[i].qualified_name) {
+            sorted[count].qualified_name = reg->types[i].qualified_name;
+            sorted[count].type_index = i;
+            count++;
+        }
+    }
+    qsort(sorted, (size_t)count, sizeof(*sorted), registry_type_qn_entry_cmp);
+    reg->type_qn_sorted = sorted;
+    reg->type_qn_sorted_count = count;
+    reg->type_qn_sorted_upto = reg->type_count;
+}
+
+static const char *registry_prefix_sorted_qn(const CBMQNPrefixIter *it, int index) {
+    return it->types ? it->reg->type_qn_sorted[index].qualified_name
+                     : it->reg->func_qn_sorted[index].qualified_name;
+}
+
+static int registry_prefix_sorted_index(const CBMQNPrefixIter *it, int index) {
+    return it->types ? it->reg->type_qn_sorted[index].type_index
+                     : it->reg->func_qn_sorted[index].func_index;
+}
+
+static int registry_prefix_index_cmp(const void *left, const void *right) {
+    int a = *(const int *)left, b = *(const int *)right;
+    return (a > b) - (a < b);
+}
+
+static int registry_prefix_collect(CBMQNPrefixIter *it, int start, int sorted_count, int covered,
+                                   int *indices, int capacity) {
+    int count = 0;
+    for (int pos = start; pos < sorted_count;) {
+        const char *qn = registry_prefix_sorted_qn(it, pos);
+        it->visits++;
+        if (!qn)
+            return -1;
+        if (strncmp(qn, it->prefix, it->prefix_len) != 0)
+            break;
+        const char *dot = it->direct_only ? strchr(qn + it->prefix_len, '.') : NULL;
+        if (dot) {
+            size_t subtree_len = (size_t)(dot - qn) + 1;
+            int lo = pos + 1, hi = sorted_count;
+            while (lo < hi) {
+                int mid = lo + (hi - lo) / 2;
+                const char *candidate = registry_prefix_sorted_qn(it, mid);
+                it->visits++;
+                if (!candidate)
+                    return -1;
+                if (strncmp(candidate, qn, subtree_len) <= 0)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+            pos = lo;
+            continue;
+        }
+        int index = registry_prefix_sorted_index(it, pos++);
+        if (index < 0 || index >= covered || (indices && count >= capacity))
+            return -1;
+        if (indices)
+            indices[count] = index;
+        count++;
+    }
+    return count;
+}
+
+static bool registry_prefix_open(const CBMTypeRegistry *reg, const char *prefix, bool direct_only,
+                                 bool types, CBMArena *scratch, CBMQNPrefixIter *out) {
+    if (!out)
+        return false;
+    memset(out, 0, sizeof(*out));
+    out->reg = reg;
+    out->prefix = prefix;
+    out->types = types;
+    out->direct_only = direct_only;
+    if (!reg || !prefix || (types ? !reg->types : !reg->funcs))
+        return true;
+    out->prefix_len = strlen(prefix);
+    int total = types ? reg->type_count : reg->func_count;
+    out->tail_end = total > 0 ? total : 0;
+    int covered = types ? reg->type_qn_sorted_upto : reg->func_qn_sorted_upto;
+    int sorted_count = types ? reg->type_qn_sorted_count : reg->func_qn_sorted_count;
+    bool has_order = types ? reg->type_qn_sorted != NULL : reg->func_qn_sorted != NULL;
+    if (!has_order || covered < 0 || covered > total || sorted_count < 0 || sorted_count > covered)
+        return true;
+
+    int lo = 0, hi = sorted_count;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        const char *qn = registry_prefix_sorted_qn(out, mid);
+        out->visits++;
+        if (!qn)
+            return true;
+        if (strcmp(qn, prefix) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    int count = registry_prefix_collect(out, lo, sorted_count, covered, NULL, 0);
+    if (count < 0)
+        return true;
+    if (count == 0) {
+        out->tail_i = covered;
+        return true;
+    }
+    if (!scratch || (size_t)count > (SIZE_MAX - 7) / sizeof(int))
+        return true;
+    int *indices = cbm_arena_alloc(scratch, (size_t)count * sizeof(*indices));
+    if (!indices ||
+        registry_prefix_collect(out, lo, sorted_count, covered, indices, count) != count)
+        return true;
+    qsort(indices, (size_t)count, sizeof(*indices), registry_prefix_index_cmp);
+    out->indices = indices;
+    out->count = count;
+    out->tail_i = covered;
+    return true;
+}
+
+bool cbm_registry_types_with_qn_prefix(const CBMTypeRegistry *reg, const char *prefix,
+                                       bool direct_only, CBMArena *scratch, CBMQNPrefixIter *out) {
+    return registry_prefix_open(reg, prefix, direct_only, true, scratch, out);
+}
+
+bool cbm_registry_funcs_with_qn_prefix(const CBMTypeRegistry *reg, const char *prefix,
+                                       bool direct_only, CBMArena *scratch, CBMQNPrefixIter *out) {
+    return registry_prefix_open(reg, prefix, direct_only, false, scratch, out);
+}
+
+int cbm_qn_prefix_iter_next(CBMQNPrefixIter *it) {
+    if (!it || !it->reg || !it->prefix)
+        return -1;
+    if (it->pos < it->count)
+        return it->indices[it->pos++];
+    while (it->tail_i < it->tail_end) {
+        int index = it->tail_i++;
+        const char *qn =
+            it->types ? it->reg->types[index].qualified_name : it->reg->funcs[index].qualified_name;
+        it->visits++;
+        if (qn && strncmp(qn, it->prefix, it->prefix_len) == 0 &&
+            (!it->direct_only || !strchr(qn + it->prefix_len, '.')))
+            return index;
+    }
+    return -1;
 }

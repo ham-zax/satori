@@ -19,11 +19,11 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.ok(desc);
     assert.equal(desc.language, 'go');
     assert.equal(desc.strategy, 'cbm_semantic');
-    assert.equal(desc.semanticRevision, 'go-v4');
+    assert.equal(desc.semanticRevision, 'go-v5');
     assert.equal(desc.grammar, 'tree-sitter-go');
     assert.equal(desc.providerId, 'satori-cbm-semantic-go');
-    assert.equal(desc.providerVersion, 'cbm-11b662f9+satori-go-semantic-v4');
-    assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v4');
+    assert.equal(desc.providerVersion, 'cbm-9a4da7a3+satori-go-semantic-v5');
+    assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v5');
     // Relationship identity is composed from provider-owned revisions, not copied literals.
     const relationshipComponents = RELATIONSHIP_BUILDER_VERSION.split('+');
     assert.equal(relationshipComponents[0], 'relationship-v20');

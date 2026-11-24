@@ -235,4 +235,9 @@ const CBMType* cbm_type_resolve_alias(const CBMType* t);
 const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
     const char** type_params, const CBMType** type_args);
 
+typedef struct cbm_type_scope_index cbm_type_scope_index_t;
+const cbm_type_scope_index_t *cbm_type_scope_index(CBMArena *a, const char *scope);
+const char *cbm_type_scope_find(const cbm_type_scope_index_t *ix, const char *name,
+                                size_t name_len);
+
 #endif // CBM_LSP_TYPE_REP_H

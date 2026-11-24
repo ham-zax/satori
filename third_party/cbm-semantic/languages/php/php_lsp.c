@@ -182,8 +182,21 @@ void php_lsp_add_use(PHPLSPContext *ctx, const char *local_name, const char *tar
     ctx->use_count++;
 }
 
+/* The registry's free functions of this short name, in registration order, through
+ * its short-name index and the rows behind it. An indexed registry whose short-name
+ * index could not be built is walked in full, as the scan this replaces was. */
+static void php_free_funcs_by_name(const CBMTypeRegistry *reg, const char *name,
+                                   CBMFreeFuncIter *it) {
+    cbm_registry_free_funcs_by_short_name(reg, name, it);
+    if (it->chain_idx < 0 && !reg->ffunc_short_buckets)
+        it->tail_i = 0;
+}
+
 static const char *find_use(PHPLSPContext *ctx, const char *local_name, int kind) {
-    for (int i = 0; i < ctx->use_count; i++) {
+    for (int i = cbm_name_rows_first(&ctx->use_rows, ctx->arena, ctx->use_local_names,
+                                     ctx->use_count, local_name);
+         i >= 0; i = cbm_name_rows_next(&ctx->use_rows, ctx->use_local_names, ctx->use_count,
+                                        local_name, i)) {
         if ((int)ctx->use_kinds[i] != kind)
             continue;
         if (strcmp(ctx->use_local_names[i], local_name) == 0)
@@ -308,7 +321,11 @@ static const CBMRegisteredType *lookup_type_with_project(PHPLSPContext *ctx, con
 
     const CBMRegisteredType *best = NULL;
     int best_score = -1;
-    for (int i = 0; ctx->registry && i < ctx->registry->type_count; i++) {
+    CBMTypeShortIter named = {0};
+    if (ctx->registry)
+        cbm_registry_types_by_short_name(ctx->registry, short_name, &named);
+    for (int i = -1; ctx->registry && (i = cbm_type_short_iter_next(&named)) >= 0;) {
+        CBM_LSP_WORK(1);
         const CBMRegisteredType *cand = &ctx->registry->types[i];
         if (!cand->short_name || strcmp(cand->short_name, short_name) != 0)
             continue;
@@ -1185,7 +1202,10 @@ static const CBMType *eval_function_call_type(PHPLSPContext *ctx, TSNode call_no
     }
     if (!f && ctx->registry) {
         /* Walk the symbol table by short_name as a last resort. */
-        for (int i = 0; i < ctx->registry->func_count; i++) {
+        CBMFreeFuncIter named;
+        php_free_funcs_by_name(ctx->registry, name, &named);
+        for (int i = -1; (i = cbm_free_func_iter_next(&named)) >= 0;) {
+            CBM_LSP_WORK(1);
             const CBMRegisteredFunc *cand = &ctx->registry->funcs[i];
             if (cand->receiver_type)
                 continue;
@@ -1686,7 +1706,11 @@ static void resolve_function_call(PHPLSPContext *ctx, TSNode call, CBMResolvedKi
      * file's project (i.e. with the longest module-prefix overlap). */
     const CBMRegisteredFunc *best = NULL;
     int best_score = -1;
-    for (int i = 0; ctx->registry && i < ctx->registry->func_count; i++) {
+    CBMFreeFuncIter named = {0};
+    if (ctx->registry)
+        php_free_funcs_by_name(ctx->registry, name, &named);
+    for (int i = -1; ctx->registry && (i = cbm_free_func_iter_next(&named)) >= 0;) {
+        CBM_LSP_WORK(1);
         const CBMRegisteredFunc *cand = &ctx->registry->funcs[i];
         if (cand->receiver_type)
             continue;
@@ -3918,6 +3942,20 @@ static void process_trait_use(PHPLSPContext *ctx, CBMTypeRegistry *reg, const ch
     }
 }
 
+/* Where a scan for the first function of reg itself with this receiver and name
+ * can start: the lowest row the method iterator yields (reg's own rows only). */
+static int php_first_method_row(const CBMTypeRegistry *reg, const char *receiver,
+                                const char *name) {
+    CBMMethodIter it;
+    cbm_registry_methods(reg, receiver, name, &it);
+    int lowest = reg->func_count;
+    for (int row = cbm_method_iter_next(&it); row >= 0; row = cbm_method_iter_next(&it)) {
+        if (row < lowest)
+            lowest = row;
+    }
+    return lowest;
+}
+
 static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg, TSNode class_node,
                                      php_class_field_table_t *tab) {
     const char *cqn = class_qn_for_node(ctx, class_node);
@@ -4099,7 +4137,8 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg, T
                 ctx->enclosing_class_qn = saved_class;
                 ctx->enclosing_parent_qn = saved_parent;
                 if (parsed && parsed->kind != CBM_TYPE_UNKNOWN) {
-                    for (int fi = 0; fi < reg->func_count; fi++) {
+                    CBM_LSP_WORK(1);
+                    for (int fi = php_first_method_row(reg, cqn, mn); fi < reg->func_count; fi++) {
                         CBMRegisteredFunc *rf = &reg->funcs[fi];
                         if (!rf->receiver_type || !rf->short_name)
                             continue;
@@ -4176,7 +4215,9 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg, T
                         if (ret_t && ret_t->kind != CBM_TYPE_UNKNOWN) {
                             /* Find the registered method by receiver_type=cqn,
                              * short_name=mn and patch its signature. */
-                            for (int fi = 0; fi < reg->func_count; fi++) {
+                            CBM_LSP_WORK(1);
+                            for (int fi = php_first_method_row(reg, cqn, mn); fi < reg->func_count;
+                                 fi++) {
                                 CBMRegisteredFunc *rf = &reg->funcs[fi];
                                 if (!rf->receiver_type || !rf->short_name)
                                     continue;
@@ -4399,6 +4440,7 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
         /* Reset namespace/use state — process_file will re-collect. */
         ctx.current_namespace_qn = "";
         ctx.use_count = 0;
+        ctx.use_rows = (CBMNameRows){0};
     }
 
     php_lsp_process_file(&ctx, root);
@@ -4564,6 +4606,7 @@ void cbm_run_php_lsp_cross(CBMArena *arena, const char *source, int source_len,
                            TSTree *cached_tree, CBMResolvedCallArray *out) {
     if (!arena || !source || source_len <= 0 || !out)
         return;
+    source = cbm_php_mask_inline_html(arena, source, source_len);
 
     TSParser *parser = NULL;
     TSTree *tree = cached_tree;
@@ -4627,6 +4670,7 @@ void cbm_run_php_lsp_cross(CBMArena *arena, const char *source, int source_len,
         ctx.current_namespace_qn = "";
         /* Reset to caller-supplied uses only — process_file re-adds AST uses. */
         ctx.use_count = import_count;
+        ctx.use_rows = (CBMNameRows){0};
     }
 
     php_lsp_process_file(&ctx, root);

@@ -312,12 +312,9 @@ static const char *rust_resolve_use(RustLSPContext *ctx, const char *local_name)
     if (!ctx || !local_name) {
         return NULL;
     }
-    for (int i = 0; i < ctx->use_count; i++) {
-        if (strcmp(ctx->use_local_names[i], local_name) == 0) {
-            return ctx->use_module_paths[i];
-        }
-    }
-    return NULL;
+    int i = cbm_name_rows_first(&ctx->use_rows, ctx->arena, ctx->use_local_names, ctx->use_count,
+                                local_name);
+    return i >= 0 ? ctx->use_module_paths[i] : NULL;
 }
 
 /* The Rust prelude is auto-imported into every module. We map each name
@@ -614,6 +611,119 @@ static const char *rust_registered_relative_path(RustLSPContext *ctx, const char
  *
  * The returned string is arena-owned; in case (6) we return the input
  * with `::` already converted to `.`. */
+static const char *rust_crate_root_qn(CBMArena *arena, const char *module_qn) {
+    if (!arena || !module_qn) {
+        return NULL;
+    }
+    const char *p = module_qn;
+    int dots = 0;
+    const char *second_dot = NULL;
+    for (; *p; p++) {
+        if (*p == '.') {
+            if (++dots == 2) {
+                second_dot = p;
+                break;
+            }
+        }
+    }
+    size_t crate_len = second_dot ? (size_t)(second_dot - module_qn) : strlen(module_qn);
+    return cbm_arena_strndup(arena, module_qn, crate_len);
+}
+
+static size_t rust_crate_prefix_len(const char *module_qn) {
+    if (!module_qn) {
+        return 0;
+    }
+    if (strncmp(module_qn, "@rust.", 6) == 0) {
+        const char *second_dot = strchr(module_qn + 6, '.');
+        return second_dot ? (size_t)(second_dot - module_qn) : strlen(module_qn);
+    }
+    const char *first_dot = strchr(module_qn, '.');
+    return first_dot ? (size_t)(first_dot - module_qn) : strlen(module_qn);
+}
+
+static const char *rust_resolve_use_target(RustLSPContext *ctx, const char *use_path) {
+    if (!ctx || !use_path || !use_path[0]) {
+        return use_path;
+    }
+    if (strncmp(use_path, "crate::", 7) == 0 && ctx->module_qn) {
+        const char *crate_root = rust_crate_root_qn(ctx->arena, ctx->module_qn);
+        return cbm_arena_sprintf(ctx->arena, "%s.%s", crate_root ? crate_root : ctx->module_qn,
+                                 convert_path_to_qn(ctx->arena, use_path + 7));
+    }
+    if (strncmp(use_path, "self::", 6) == 0 && ctx->module_qn) {
+        return cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn,
+                                 convert_path_to_qn(ctx->arena, use_path + 6));
+    }
+    if (strncmp(use_path, "super::", 7) == 0 && ctx->module_qn) {
+        const char *base = ctx->module_qn;
+        const char *rest = use_path;
+        size_t min_len = rust_crate_prefix_len(ctx->module_qn);
+        while (strncmp(rest, "super::", 7) == 0) {
+            const char *dot = strrchr(base, '.');
+            if (!dot || (size_t)(dot - base) < min_len) {
+                return convert_path_to_qn(ctx->arena, use_path);
+            }
+            base = cbm_arena_strndup(ctx->arena, base, (size_t)(dot - base));
+            rest += 7;
+        }
+        return cbm_arena_sprintf(ctx->arena, "%s.%s", base, convert_path_to_qn(ctx->arena, rest));
+    }
+    const char *sep = strstr(use_path, "::");
+    if (sep && ctx->module_qn) {
+        char *head = cbm_arena_strndup(ctx->arena, use_path, (size_t)(sep - use_path));
+        if (head && ctx->registry) {
+            const char *child_qn = cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn,
+                                                     convert_path_to_qn(ctx->arena, use_path));
+            if (cbm_registry_lookup_func(ctx->registry, child_qn) ||
+                cbm_registry_lookup_type(ctx->registry, child_qn)) {
+                return child_qn;
+            }
+        }
+        if (head && ctx->cargo_manifest) {
+            const CBMCargoManifest *m = (const CBMCargoManifest *)ctx->cargo_manifest;
+            if (cbm_cargo_find_member(m, head)) {
+                return cbm_arena_sprintf(ctx->arena, "@rust.%s.%s", head,
+                                         convert_path_to_qn(ctx->arena, sep + 2));
+            }
+        }
+    }
+    return convert_path_to_qn(ctx->arena, use_path);
+}
+
+static bool rust_use_is_external(RustLSPContext *ctx, const char *use_path) {
+    if (!ctx || !use_path || !use_path[0]) {
+        return false;
+    }
+    if (strncmp(use_path, "crate::", 7) == 0 || strncmp(use_path, "self::", 6) == 0 ||
+        strncmp(use_path, "super::", 7) == 0) {
+        return false;
+    }
+    const char *sep = strstr(use_path, "::");
+    if (!sep) {
+        return false;
+    }
+    char *head = cbm_arena_strndup(ctx->arena, use_path, (size_t)(sep - use_path));
+    if (!head) {
+        return false;
+    }
+    if (ctx->module_qn && ctx->registry) {
+        const char *child_qn = cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn,
+                                                 convert_path_to_qn(ctx->arena, use_path));
+        if (cbm_registry_lookup_func(ctx->registry, child_qn) ||
+            cbm_registry_lookup_type(ctx->registry, child_qn)) {
+            return false;
+        }
+    }
+    if (ctx->cargo_manifest) {
+        const CBMCargoManifest *m = (const CBMCargoManifest *)ctx->cargo_manifest;
+        if (cbm_cargo_find_member(m, head)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static const char *rust_resolve_path_expr(RustLSPContext *ctx, const char *path) {
     if (!ctx || !path || !path[0]) {
         return path;
@@ -633,20 +743,7 @@ static const char *rust_resolve_path_expr(RustLSPContext *ctx, const char *path)
      * forms `module_qn` as `<project>.<crate>.<rel-path-segments>`, so
      * the first two segments are project + crate root. */
     if (strncmp(path, "crate::", 7) == 0 && ctx->module_qn) {
-        const char *p = ctx->module_qn;
-        int dots = 0;
-        const char *second_dot = NULL;
-        for (; *p; p++) {
-            if (*p == '.') {
-                if (++dots == 2) {
-                    second_dot = p;
-                    break;
-                }
-            }
-        }
-        size_t crate_len =
-            second_dot ? (size_t)(second_dot - ctx->module_qn) : strlen(ctx->module_qn);
-        char *crate_buf = cbm_arena_strndup(ctx->arena, ctx->module_qn, crate_len);
+        const char *crate_buf = rust_crate_root_qn(ctx->arena, ctx->module_qn);
         return cbm_arena_sprintf(ctx->arena, "%s.%s", crate_buf,
                                  convert_path_to_qn(ctx->arena, path + 7));
     }
@@ -667,7 +764,7 @@ static const char *rust_resolve_path_expr(RustLSPContext *ctx, const char *path)
     if (!sep) {
         const char *full = rust_resolve_use(ctx, path);
         if (full) {
-            return convert_path_to_qn(ctx->arena, full);
+            return rust_resolve_use_target(ctx, full);
         }
         /* Prelude name (e.g. `String`, `Vec`)? */
         const char *prelude = rust_lookup_prelude(path);
@@ -688,7 +785,7 @@ static const char *rust_resolve_path_expr(RustLSPContext *ctx, const char *path)
     if (full) {
         /* The use-map's full path already includes `head` as the last
          * segment; concat its parent with the rest. */
-        const char *full_dotted = convert_path_to_qn(ctx->arena, full);
+        const char *full_dotted = rust_resolve_use_target(ctx, full);
         const char *tail_dotted = convert_path_to_qn(ctx->arena, tail);
         return cbm_arena_sprintf(ctx->arena, "%s.%s", full_dotted, tail_dotted);
     }
@@ -2632,6 +2729,7 @@ static const CBMRegisteredFunc *rust_lookup_method_in_trait(RustLSPContext *ctx,
     if (reg->fallback) {
         RustLSPContext fallback_ctx = *ctx;
         fallback_ctx.registry = reg->fallback;
+        fallback_ctx.use_rows = (CBMNameRows){0}; /* the copy must not grow ctx's chains */
         return rust_lookup_method_in_trait(&fallback_ctx, trait_qn, method_name, allow_abstract);
     }
     return NULL;
@@ -4693,6 +4791,14 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
          * fallbacks below never bind it (see rust_path_qualifier_is_type). */
         const bool assoc_call = rust_path_qualifier_is_type(path, tail);
 
+        /* External `use` (e.g. `use serde_json::json;`) never binds a project
+         * function via cross-crate or short-name fallback (ad435fd0). */
+        const char *head_sep = strstr(path, "::");
+        const char *use_lookup_key =
+            head_sep ? cbm_arena_strndup(ctx->arena, path, (size_t)(head_sep - path)) : path;
+        const char *used_path = use_lookup_key ? rust_resolve_use(ctx, use_lookup_key) : NULL;
+        const bool external_use = used_path && rust_use_is_external(ctx, used_path);
+
         /* Cross-crate workspace-member resolution (#56): when the call
          * path's head is a declared Cargo workspace member (e.g.
          * `crate_a::helper` from inside crate_b) we cannot rely on the
@@ -4702,8 +4808,7 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
          * MEMBER crate by matching the registered QN's `.<member>.`
          * path segment plus the call tail. Requires a parsed manifest
          * (threaded through pass_lsp_cross.c); NULL manifest skips this. */
-        if (!assoc_call && ctx->cargo_manifest && tail && *tail) {
-            const char *head_sep = strstr(path, "::");
+        if (!external_use && !assoc_call && ctx->cargo_manifest && tail && *tail) {
             if (head_sep && head_sep > path) {
                 char *head = cbm_arena_strndup(ctx->arena, path, (size_t)(head_sep - path));
                 const CBMCargoManifest *m = (const CBMCargoManifest *)ctx->cargo_manifest;
@@ -4746,13 +4851,8 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
          * foo; use foo::bar; bar()` a chance to resolve when the
          * intermediate module wasn't tracked through an explicit
          * use-map entry. */
-        if (!assoc_call && tail && *tail && ctx->module_qn) {
-            /* Crate prefix is the first dotted segment of module_qn after
-             * the project name, but for simplicity we just match on
-             * "starts with first dot-segment". */
-            const char *first_dot = strchr(ctx->module_qn, '.');
-            size_t crate_len =
-                first_dot ? (size_t)(first_dot - ctx->module_qn) : strlen(ctx->module_qn);
+        if (!external_use && !assoc_call && tail && *tail && ctx->module_qn) {
+            size_t crate_len = rust_crate_prefix_len(ctx->module_qn);
             const CBMRegisteredFunc *unique = NULL;
             int matches = 0;
             /* Iterate only free funcs whose short_name == tail via the index; the
@@ -4767,8 +4867,9 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
                     continue; /* free functions only */
                 if (strcmp(f->short_name, tail) != 0)
                     continue;
-                /* Crate-scoped: QN must start with the same prefix. */
-                if (strncmp(f->qualified_name, ctx->module_qn, crate_len) != 0)
+                /* Crate-scoped: QN must match the same crate prefix at a dot boundary. */
+                if (strncmp(f->qualified_name, ctx->module_qn, crate_len) != 0 ||
+                    (f->qualified_name[crate_len] != '.' && f->qualified_name[crate_len] != '\0'))
                     continue;
                 matches++;
                 if (matches == 1)
@@ -5590,15 +5691,25 @@ static void rust_collect_uses(RustLSPContext *ctx, TSNode root) {
             continue;
         const char *k = ts_node_type(n);
         if (strcmp(k, "use_declaration") == 0) {
-            char *full = rust_node_text(ctx, n);
+            TSNode arg = ts_node_child_by_field_name(n, "argument", 8);
+            char *full = ts_node_is_null(arg) ? rust_node_text(ctx, n) : rust_node_text(ctx, arg);
             if (full) {
-                if (strncmp(full, "use ", 4) == 0)
-                    full += 4;
-                size_t len = strlen(full);
-                if (len > 0 && full[len - 1] == ';')
-                    full[len - 1] = '\0';
+                if (ts_node_is_null(arg)) {
+                    while (*full && (unsigned char)*full <= ' ')
+                        full++;
+                    if (strncmp(full, "pub", 3) == 0 && (full[3] == ' ' || full[3] == '(')) {
+                        const char *u = strstr(full, "use ");
+                        if (u)
+                            full = (char *)u;
+                    }
+                    if (strncmp(full, "use ", 4) == 0)
+                        full += 4;
+                    size_t len = strlen(full);
+                    if (len > 0 && full[len - 1] == ';')
+                        full[len - 1] = '\0';
+                }
                 /* Trim leading whitespace. */
-                while (*full == ' ')
+                while (*full && (unsigned char)*full <= ' ')
                     full++;
                 /* Detect glob. */
                 size_t flen = strlen(full);

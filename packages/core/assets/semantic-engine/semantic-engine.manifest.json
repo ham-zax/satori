@@ -1,30 +1,30 @@
 {
   "abiVersion": 1,
-  "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
+  "upstreamCommit": "9a4da7a314833d8d965b74612e1f25fef5371861",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "8529eb8e676de704c821800f170d3a2fbee1e947518d964843a411279710d91a",
-  "buildRecipeDigest": "b084d18fb99fd281907976666aff8158adf59b1b3a90f754f6591c83e35c3439",
+  "semanticSourceDigest": "b0c24bda3c74e1d830f2cb728a91791f3360f00c039cb65bafd34bc8e32c5d4b",
+  "buildRecipeDigest": "5de71238f132ba46caca61b7331c55fd2b2a46141a96bf83778fd1d5feb1844c",
   "jsSha256": "2def74d7edcd1545d662151ad71129fce793bd2411079f0e9d74e98aea3cbe66",
-  "wasmSha256": "46fd320c7aca03b9f6feab9fa9c5cf9640501265cca4954a23db90c0b500ce87",
+  "wasmSha256": "8575fff8f944bd0895a7f888a248904e1cab6933d823c8a8e6f16a373361efb2",
   "languages": {
     "go": {
-      "semanticRevision": "go-v4",
+      "semanticRevision": "go-v5",
       "grammar": "tree-sitter-go"
     },
     "java": {
-      "semanticRevision": "java-v2",
+      "semanticRevision": "java-v3",
       "grammar": "tree-sitter-java"
     },
     "csharp": {
-      "semanticRevision": "csharp-v2",
+      "semanticRevision": "csharp-v3",
       "grammar": "tree-sitter-c-sharp"
     },
     "cpp": {
-      "semanticRevision": "cpp-v3",
+      "semanticRevision": "cpp-v4",
       "grammar": "tree-sitter-cpp"
     },
     "rust": {
-      "semanticRevision": "rust-v4",
+      "semanticRevision": "rust-v5",
       "grammar": "tree-sitter-rust"
     },
     "kotlin": {
@@ -32,7 +32,7 @@
       "grammar": "tree-sitter-kotlin"
     },
     "php": {
-      "semanticRevision": "php-v2",
+      "semanticRevision": "php-v3",
       "grammar": "tree-sitter-php"
     }
   }

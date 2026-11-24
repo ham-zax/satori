@@ -1313,3 +1313,53 @@ test('resolvePythonRelationships resolves @overload implementations and fails cl
         ['pkg/use.py', 11, 'pkg/resp.py', 'Response.opts'],
     ]);
 });
+
+test('resolvePythonRelationships keeps the class target when custom __new__ or metaclass makes __init__ uncertain', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/factory.py': [
+            'class Redirecting:',
+            '    def __new__(cls):',
+            '        return 42',
+            '    def __init__(self):',
+            '        pass',
+            'class BaseWithNew:',
+            '    def __new__(cls):',
+            '        return object.__new__(cls)',
+            'class ChildInheritsNew(BaseWithNew):',
+            '    def __init__(self):',
+            '        pass',
+            'class Meta(type):',
+            '    def __call__(cls):',
+            '        return None',
+            'class MetaManaged(metaclass=Meta):',
+            '    def __init__(self):',
+            '        pass',
+            'class Plain:',
+            '    def __init__(self):',
+            '        pass',
+        ].join('\n'),
+        'pkg/use.py': [
+            'from pkg.factory import Redirecting, ChildInheritsNew, MetaManaged, Plain',
+            'def run():',
+            '    Redirecting()',
+            '    ChildInheritsNew()',
+            '    MetaManaged()',
+            '    Plain()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const calls = result.records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [
+            record.span?.startLine,
+            symbolsById.get(record.targetInstanceId ?? '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId ?? '')?.kind,
+        ]);
+    assert.deepEqual(calls, [
+        [3, 'Redirecting', 'class'],
+        [4, 'ChildInheritsNew', 'class'],
+        [5, 'MetaManaged', 'class'],
+        [6, 'Plain.__init__', 'method'],
+    ]);
+});

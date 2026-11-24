@@ -571,3 +571,105 @@ test('Slice 1B Rust: use paths resolve inside importing crate and external impor
         `crate_b bare helper() must never cross-bind to crate_a, got ${JSON.stringify(bMain)}`,
     );
 });
+
+test('Slice 1B Go: multi-identifier struct field declaration allocates exact capacity and resolves all fields', async () => {
+    const res = await analyzer.analyze({
+        language: 'go',
+        auxiliaryFiles: [aux('manifest', 'go.mod', 'module example.com/multi\n\ngo 1.22\n')],
+        sourceFiles: [
+            src('pkg/ops.go', 'package pkg\ntype Ops struct{}\nfunc (o *Ops) Run() int { return 1 }\n'),
+            src(
+                'pkg/holder.go',
+                [
+                    'package pkg',
+                    'type Holder struct {',
+                    '  a, b, c, d, e, f, g, h *Ops',
+                    '}',
+                    'func Use(x *Holder) int {',
+                    '  return x.a.Run() + x.h.Run()',
+                    '}',
+                ].join('\n') + '\n',
+            ),
+        ],
+    });
+    const occs = res.occurrencesByFile.get('pkg/holder.go') ?? [];
+    const hits = occs.filter(
+        (o) =>
+            o.decision === 'resolved' &&
+            o.targetProvenance?.file === 'pkg/ops.go' &&
+            o.targetProvenance?.name === 'Run',
+    );
+    assert.equal(hits.length, 2, `both first and 8th multi-id fields must resolve Run(), got ${JSON.stringify(occs)}`);
+});
+
+test('Slice 1B C++/PHP: masked sources without trailing newline edit virtual newline safely', async () => {
+    const cppRes = await analyzer.analyze({
+        language: 'cpp',
+        auxiliaryFiles: [],
+        sourceFiles: [
+            src('inc/u.h', 'int helper(int x);\n'),
+            src('src/u.cpp', '#include "../inc/u.h"\nint helper(int x) { return x + 1; }\n'),
+            // No trailing newline + CRLF splice -> masked arena copy + virtual_newline edit
+            src('src/no_nl.cpp', '#include "../inc/u.h"\r\n#define S "a\\\r\nb"\r\nint run() { return helper(7); }'),
+        ],
+    });
+    const cppOccs = cppRes.occurrencesByFile.get('src/no_nl.cpp') ?? [];
+    assert.ok(
+        cppOccs.some(
+            (o) =>
+                o.decision === 'resolved' &&
+                o.targetProvenance?.file === 'src/u.cpp' &&
+                o.targetProvenance?.name === 'helper',
+        ),
+        `CRLF-masked C++ file without trailing newline must resolve helper(), got ${JSON.stringify(cppOccs)}`,
+    );
+
+    const phpRes = await analyzer.analyze({
+        language: 'php',
+        auxiliaryFiles: [aux('manifest', 'composer.json', '{}')],
+        sourceFiles: [
+            src('src/target.php', '<?php\nnamespace App;\nfunction ping(): int { return 1; }\n'),
+            // No trailing newline + inline HTML -> masked arena copy + virtual_newline edit
+            src('src/view.php', '<?php\nnamespace App;\n?>\n<div>x</div>\n<?php\nfunction render(): int { return ping(); }'),
+        ],
+    });
+    const phpOccs = phpRes.occurrencesByFile.get('src/view.php') ?? [];
+    assert.ok(
+        phpOccs.some(
+            (o) =>
+                o.decision === 'resolved' &&
+                o.targetProvenance?.file === 'src/target.php' &&
+                o.targetProvenance?.name === 'ping',
+        ),
+        `HTML-masked PHP file without trailing newline must resolve ping(), got ${JSON.stringify(phpOccs)}`,
+    );
+});
+
+test('Slice 1B Go: indexed population resolves many structs and type aliases without quadratic scan', async () => {
+    const count = 250;
+    const structs = Array.from(
+        { length: count },
+        (_, i) => `type S${i} struct { Base }\ntype Alias${i} = S${i}`,
+    ).join('\n');
+    const res = await analyzer.analyze({
+        language: 'go',
+        auxiliaryFiles: [aux('manifest', 'go.mod', 'module example.com/many\n\ngo 1.22\n')],
+        sourceFiles: [
+            src('pkg/base.go', 'package pkg\ntype Base struct{}\nfunc (b Base) Ping() int { return 1 }\n'),
+            src(
+                'pkg/many.go',
+                `package pkg\n${structs}\nfunc Run(a Alias${count - 1}) int { return a.Ping() }\n`,
+            ),
+        ],
+    });
+    const occs = res.occurrencesByFile.get('pkg/many.go') ?? [];
+    assert.ok(
+        occs.some(
+            (o) =>
+                o.decision === 'resolved' &&
+                o.targetProvenance?.file === 'pkg/base.go' &&
+                o.targetProvenance?.name === 'Ping',
+        ),
+        `alias to 250th struct must resolve embedded Ping(), got ${JSON.stringify(occs)}`,
+    );
+});

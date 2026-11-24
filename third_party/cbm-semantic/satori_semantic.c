@@ -244,7 +244,6 @@ static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf)
     SatoriStringInput input = {source, source_len, source_len > 0 && source[source_len - 1] != '\n'};
     TSInput ts_input = {&input, satori_string_read, TSInputEncodingUTF8};
     TSTree *tree = ts_parser_parse(parser, NULL, ts_input);
-    cbm_arena_destroy(&mask_arena);
     if (tree && input.virtual_newline) {
         TSPoint end = satori_source_end_point(source, source_len);
         TSInputEdit drop_virtual_newline = {
@@ -257,6 +256,7 @@ static TSTree *satori_parse_source(TSParser *parser, const SatoriSourceFile *sf)
         };
         ts_tree_edit(tree, &drop_virtual_newline);
     }
+    cbm_arena_destroy(&mask_arena);
     uint64_t bytes = (uint64_t)sf->path_len + sf->source_len;
     if (!entry && empty_slot != UINT32_MAX) entry = &s_tree_cache[empty_slot];
     uint64_t old_bytes = entry && entry->tree
@@ -1371,6 +1371,9 @@ static int extract_ast_imports(GoLSPContext *ctx, TSNode root, const char *sourc
 
 static CBMRegisteredType *go_find_mutable_type(CBMTypeRegistry *reg, const char *qn) {
     if (!reg || !qn) return NULL;
+    if (reg->type_qn_buckets && reg->type_qn_bucket_count > 0) {
+        return cbm_registry_type_for_update(reg, qn);
+    }
     for (int i = reg->type_count - 1; i >= 0; i--) {
         if (reg->types[i].qualified_name && strcmp(reg->types[i].qualified_name, qn) == 0) {
             return &reg->types[i];
@@ -1440,11 +1443,41 @@ static int go_populate_file_types_and_values(CBMArena *arena, CBMTypeRegistry *r
                 if (ts_node_is_null(field_list)) continue;
                 uint32_t fl_nc = ts_node_named_child_count(field_list);
                 if (fl_nc == 0) continue;
-                const char **embeds = (const char **)cbm_arena_alloc(arena, (fl_nc + 1) * sizeof(const char *));
-                const char **fnames = (const char **)cbm_arena_alloc(arena, (fl_nc * 2 + 1) * sizeof(const char *));
-                const CBMType **ftypes = (const CBMType **)cbm_arena_alloc(arena, (fl_nc * 2 + 1) * sizeof(const CBMType *));
-                if (!embeds || !fnames || !ftypes) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
-                int ecount = 0, fcount = 0;
+                size_t max_embeds = 0;
+                size_t max_fields = 0;
+                for (uint32_t f = 0; f < fl_nc; f++) {
+                    TSNode fdecl = ts_node_named_child(field_list, f);
+                    if (ts_node_is_null(fdecl) || strcmp(ts_node_type(fdecl), "field_declaration") != 0) continue;
+                    TSNode ftype_node = ts_node_child_by_field_name(fdecl, "type", 4);
+                    if (ts_node_is_null(ftype_node)) continue;
+                    TSNode fname_node = ts_node_child_by_field_name(fdecl, "name", 4);
+                    if (ts_node_is_null(fname_node)) {
+                        max_embeds++;
+                        max_fields++;
+                    } else {
+                        uint32_t dnc = ts_node_child_count(fdecl);
+                        for (uint32_t fc = 0; fc < dnc; fc++) {
+                            const char *fn = ts_node_field_name_for_child(fdecl, fc);
+                            if (fn && strcmp(fn, "name") == 0) {
+                                max_fields++;
+                            }
+                        }
+                    }
+                }
+                if (max_embeds == 0 && max_fields == 0) continue;
+                const char **embeds = max_embeds > 0
+                    ? (const char **)cbm_arena_alloc(arena, (max_embeds + 1) * sizeof(const char *))
+                    : NULL;
+                const char **fnames = max_fields > 0
+                    ? (const char **)cbm_arena_alloc(arena, (max_fields + 1) * sizeof(const char *))
+                    : NULL;
+                const CBMType **ftypes = max_fields > 0
+                    ? (const CBMType **)cbm_arena_alloc(arena, (max_fields + 1) * sizeof(const CBMType *))
+                    : NULL;
+                if ((max_embeds > 0 && !embeds) || (max_fields > 0 && (!fnames || !ftypes))) {
+                    return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                }
+                size_t ecount = 0, fcount = 0;
 
                 for (uint32_t f = 0; f < fl_nc; f++) {
                     TSNode fdecl = ts_node_named_child(field_list, f);
@@ -1458,11 +1491,15 @@ static int go_populate_file_types_and_values(CBMArena *arena, CBMTypeRegistry *r
                         while (base && base->kind == CBM_TYPE_POINTER) base = base->data.pointer.elem;
                         if (base && base->kind == CBM_TYPE_NAMED && base->data.named.qualified_name) {
                             const char *eq = base->data.named.qualified_name;
-                            embeds[ecount++] = eq;
-                            const char *dot = strrchr(eq, '.');
-                            fnames[fcount] = dot ? dot + 1 : eq;
-                            ftypes[fcount] = ft;
-                            fcount++;
+                            if (ecount < max_embeds) {
+                                embeds[ecount++] = eq;
+                            }
+                            if (fcount < max_fields) {
+                                const char *dot = strrchr(eq, '.');
+                                fnames[fcount] = dot ? dot + 1 : eq;
+                                ftypes[fcount] = ft;
+                                fcount++;
+                            }
                         }
                     } else {
                         uint32_t dnc = ts_node_child_count(fdecl);
@@ -1470,7 +1507,8 @@ static int go_populate_file_types_and_values(CBMArena *arena, CBMTypeRegistry *r
                             const char *fn = ts_node_field_name_for_child(fdecl, fc);
                             if (fn && strcmp(fn, "name") == 0) {
                                 char *field_id = cbm_node_text(arena, ts_node_child(fdecl, fc), source);
-                                if (field_id && field_id[0]) {
+                                if (!field_id) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                                if (field_id[0] && fcount < max_fields) {
                                     fnames[fcount] = field_id;
                                     ftypes[fcount] = ft;
                                     fcount++;
@@ -4387,11 +4425,18 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
         }
     }
 
+    /* Index Go type QNs before populating struct fields, embeds, and aliases so
+     * go_find_mutable_type and go_parse_type_node stay O(1) instead of Θ(N²). */
+    CBMArena go_type_idx_arena;
+    cbm_arena_init_lazy(&go_type_idx_arena, 4096);
+    cbm_registry_index_types_into(&reg, &go_type_idx_arena);
+
     for (uint32_t i = 0; i < s->source_count; i++) {
         if (!source_meta[i].definitions_eligible) continue;
         SatoriSourceFile *sf = &s->sources[i];
         bool had_tree = trees[i] != NULL;
         if (!satori_retained_or_parsed_tree(parser, &trees[i], sf)) {
+            cbm_arena_destroy(&go_type_idx_arena);
             set_session_error(s, "Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
             goto cleanup;
@@ -4404,10 +4449,21 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
             trees[i] = NULL;
         }
         if (status != SATORI_SEMANTIC_OK) {
+            cbm_arena_destroy(&go_type_idx_arena);
             set_session_error(s, "Out of memory populating Go struct embeds and values");
             goto cleanup;
         }
     }
+
+    reg.type_qn_buckets = NULL;
+    reg.type_qn_entries = NULL;
+    reg.type_qn_bucket_count = 0;
+    reg.type_qn_entry_count = 0;
+    reg.type_short_buckets = NULL;
+    reg.type_short_entries = NULL;
+    reg.type_short_bucket_count = 0;
+    reg.type_short_entry_count = 0;
+    cbm_arena_destroy(&go_type_idx_arena);
 
     cbm_registry_finalize(&reg);
 

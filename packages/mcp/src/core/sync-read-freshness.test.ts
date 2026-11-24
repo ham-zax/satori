@@ -953,3 +953,168 @@ test("fullSourceComparison rechecks differingComparison and snapshots fresh epoc
     assert.equal(fullComparisonCalls, 2);
     assert.deepEqual(reported[2], ["src/a.ts", "src/b.ts"]);
 });
+
+test("fullSourceComparison never caches or shares a scan that began during a watcher coverage gap", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let manager!: SyncManager;
+    let internal!: {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+        setWatcherCoverage(root: string, coverage: string): void;
+    };
+    let comparisonCalls = 0;
+    let firstStarted!: () => void;
+    const firstInFlight = new Promise<void>((resolve) => { firstStarted = resolve; });
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let currentPaths = ["src/before-gap.ts"];
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            const callNumber = comparisonCalls;
+            if (callNumber === 1) {
+                firstStarted();
+                await gate;
+                return { status: "differs", changedPaths: ["src/before-gap.ts"] };
+            }
+            return { status: "differs", changedPaths: currentPaths };
+        },
+    };
+    manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    internal = manager as unknown as typeof internal;
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "starting");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 0,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map(),
+        coverage: "starting",
+        coverageEpoch: 0,
+        coverageGapSinceEpoch: 0,
+    });
+
+    const reported: string[][] = [];
+    const run = () => manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+        onSourceChangedPaths: (paths) => reported.push([...paths]),
+    });
+
+    // Request 1 begins while watcher coverage is still 'starting' (coverage gap).
+    const firstPromise = run();
+    await firstInFlight;
+
+    // Watcher transitions to 'ready' mid-scan while a new file changed during the gap.
+    currentPaths = ["src/before-gap.ts", "src/changed-during-gap.ts"];
+    internal.setWatcherCoverage(root, "ready");
+
+    // Request 2 arrives while Request 1 is still in flight; it must NOT share Request 1's gap scan.
+    const secondResult = await run();
+    releaseFirst();
+    await firstPromise;
+    assert.equal(comparisonCalls, 2, "ready read must not share a scan started during a coverage gap");
+    assert.deepEqual(secondResult.sourceFreshness, { state: "changed", reason: "full_source_comparison" });
+    assert.deepEqual(reported[0], ["src/before-gap.ts", "src/changed-during-gap.ts"]);
+
+    // Request 3 runs after Request 1 finishes: Request 1 must NOT have overwritten the ready cache
+    // with its incomplete gap-scan file list.
+    await run();
+    assert.equal(comparisonCalls, 2, "ready cache from Request 2 remains authoritative");
+    assert.deepEqual(reported[2], ["src/before-gap.ts", "src/changed-during-gap.ts"]);
+});
+
+test("fullSourceComparison does not cache a scan if watcher coverage left ready and returned mid-scan", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let manager!: SyncManager;
+    let internal!: {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+        setWatcherCoverage(root: string, coverage: string): void;
+    };
+    let comparisonCalls = 0;
+    let currentPaths = ["src/first.ts"];
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            if (comparisonCalls === 1) {
+                // Coverage drops and recovers during the scan without bumping observedEventEpoch.
+                internal.setWatcherCoverage(root, "starting");
+                internal.setWatcherCoverage(root, "ready");
+                return { status: "differs", changedPaths: ["src/first.ts"] };
+            }
+            return { status: "differs", changedPaths: currentPaths };
+        },
+    };
+    manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    internal = manager as unknown as typeof internal;
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+        coverageEpoch: 1,
+    });
+
+    const reported: string[][] = [];
+    const run = () => manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+        onSourceChangedPaths: (paths) => reported.push([...paths]),
+    });
+
+    await run();
+    currentPaths = ["src/first.ts", "src/missed-during-restart.ts"];
+    await run();
+    assert.equal(comparisonCalls, 2, "coverage bounce mid-scan must prevent caching the first result");
+    assert.deepEqual(reported[1], ["src/first.ts", "src/missed-during-restart.ts"]);
+});

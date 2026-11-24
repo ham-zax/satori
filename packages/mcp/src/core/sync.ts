@@ -333,16 +333,29 @@ interface RootWatcherObservation {
     latestEpochByReason: Map<WatcherEventReason, number>;
     lastEventAt?: number;
     coverage: WatcherObservationCoverage;
+    /** Monotonic counter bumped on every coverage transition so scans across a gap never cache or share. */
+    coverageEpoch?: number;
     coverageGapSinceEpoch?: number;
     lastWatcherError?: string;
     // A complete source comparison found differences against this checkpoint at
-    // this event epoch. Valid only while coverage stays ready: a restart can miss events.
+    // this event epoch. Valid only while coverage stays continuously ready in the
+    // same watcher generation and coverage epoch: a gap or restart can miss events.
     differingComparison?: {
         publicationId: string;
         comparedEventEpoch: number;
+        watcherGeneration: number;
+        coverageEpoch: number;
         changedPaths?: readonly string[];
     };
 }
+
+type ComparisonStartSnapshot = Readonly<{
+    observation: RootWatcherObservation | undefined;
+    coverage: WatcherObservationCoverage | undefined;
+    coverageEpoch: number;
+    watcherGeneration: number;
+    observedEventEpoch: number | undefined;
+}>;
 
 interface EnsureFreshnessOptions {
     reason?: 'default' | 'ignore_change';
@@ -544,6 +557,7 @@ export class SyncManager {
             comparedThroughEventEpoch: 0,
             latestEpochByReason: new Map(),
             coverage,
+            coverageEpoch: 0,
             ...(coverage === 'ready' ? {} : { coverageGapSinceEpoch: 0 }),
         };
         this.watcherObservations.set(root, observation);
@@ -557,6 +571,9 @@ export class SyncManager {
     ): void {
         const root = this.canonicalWatcherRoot(codebasePath);
         const observation = this.ensureWatcherObservation(root, coverage);
+        if (observation.coverage !== coverage) {
+            observation.coverageEpoch = (observation.coverageEpoch ?? 0) + 1;
+        }
         observation.coverage = coverage;
         if (coverage === 'starting' || coverage === 'failed' || coverage === 'stopped' || coverage === 'disabled') {
             observation.coverageGapSinceEpoch ??= observation.observedEventEpoch;
@@ -909,18 +926,38 @@ export class SyncManager {
         return undefined;
     }
 
+    private captureComparisonStartSnapshot(codebasePath: string): ComparisonStartSnapshot {
+        const observation = this.watcherObservations.get(codebasePath);
+        return {
+            observation,
+            coverage: observation?.coverage,
+            coverageEpoch: observation?.coverageEpoch ?? 0,
+            watcherGeneration: this.watcherGenerations.get(codebasePath) ?? 0,
+            observedEventEpoch: observation?.observedEventEpoch,
+        };
+    }
+
     private runCoalescedWholeTreeComparison(
         codebasePath: string,
         publicationId: string | undefined,
-        flightEpoch: number | undefined,
-        coverage: WatcherObservationCoverage | undefined,
+        start: ComparisonStartSnapshot,
         comparator: (
             codebasePath: string,
             publication?: PublicationRef,
         ) => Promise<WholeTreeSourceComparisonResult>,
         sourcePublication: PublicationRef | undefined,
     ): Promise<WholeTreeSourceComparisonResult> {
-        const key = `${codebasePath}\0${publicationId ?? ''}\0${flightEpoch ?? 'none'}\0${coverage ?? 'none'}`;
+        // Only share an in-flight scan when coverage is continuously ready: during a
+        // coverage gap ('starting', etc.), file edits do not bump observedEventEpoch,
+        // so sharing a scan started earlier could return a stale file list.
+        if (start.coverage !== 'ready' || start.observedEventEpoch === undefined) {
+            return Promise.resolve().then(() => comparator.call(
+                this.context,
+                codebasePath,
+                sourcePublication,
+            ));
+        }
+        const key = `${codebasePath}\0${publicationId ?? ''}\0${start.watcherGeneration}\0${start.coverageEpoch}\0${start.observedEventEpoch}`;
         const existing = this.activeSourceComparisons.get(key);
         if (existing) {
             return existing;
@@ -942,24 +979,31 @@ export class SyncManager {
 
     private recordDifferingComparison(
         codebasePath: string,
-        observation: RootWatcherObservation | undefined,
+        start: ComparisonStartSnapshot,
         comparedPublicationId: string | undefined,
-        flightEpoch: number | undefined,
         changedPaths?: readonly string[],
     ): void {
-        // Record only when no watcher event arrived during the comparison and
-        // coverage remained ready (so future mutations will bump observedEventEpoch).
+        const observation = start.observation;
+        // Record only when the comparison both started and finished under continuous
+        // 'ready' coverage of the same watcher generation, coverage epoch, and event
+        // epoch. A scan that began during a coverage gap may have missed edits before
+        // 'ready' was emitted.
         if (
             observation !== undefined
-            && flightEpoch !== undefined
+            && start.coverage === 'ready'
+            && start.observedEventEpoch !== undefined
             && this.watcherObservations.get(codebasePath) === observation
             && observation.coverage === 'ready'
-            && observation.observedEventEpoch === flightEpoch
+            && (observation.coverageEpoch ?? 0) === start.coverageEpoch
+            && (this.watcherGenerations.get(codebasePath) ?? 0) === start.watcherGeneration
+            && observation.observedEventEpoch === start.observedEventEpoch
             && comparedPublicationId !== undefined
         ) {
             observation.differingComparison = {
                 publicationId: comparedPublicationId,
-                comparedEventEpoch: flightEpoch,
+                comparedEventEpoch: start.observedEventEpoch,
+                watcherGeneration: start.watcherGeneration,
+                coverageEpoch: start.coverageEpoch,
                 ...(changedPaths ? { changedPaths: [...changedPaths] } : {}),
             };
         }
@@ -1070,11 +1114,14 @@ export class SyncManager {
         // invalidate any previously cached differing comparison before reuse.
         const getCurrentDifferingComparison = (): RootWatcherObservation['differingComparison'] | undefined => {
             const currentObservation = this.watcherObservations.get(codebasePath);
+            const currentGeneration = this.watcherGenerations.get(codebasePath) ?? 0;
             if (
                 currentObservation?.coverage !== 'ready'
                 || comparedPublicationId === undefined
                 || currentObservation.differingComparison?.publicationId !== comparedPublicationId
                 || currentObservation.differingComparison.comparedEventEpoch !== currentObservation.observedEventEpoch
+                || currentObservation.differingComparison.watcherGeneration !== currentGeneration
+                || currentObservation.differingComparison.coverageEpoch !== (currentObservation.coverageEpoch ?? 0)
             ) {
                 return undefined;
             }
@@ -1087,16 +1134,14 @@ export class SyncManager {
         ) {
             const compareSourceObservation = this.context.compareSourceObservationToFreshnessCheckpoint;
             if (typeof compareSourceObservation === 'function') {
-                const comparisonObservation = this.watcherObservations.get(codebasePath);
-                const comparisonEpoch = this.captureWatcherFlightEpoch(codebasePath);
-                if (comparisonEpoch !== undefined) {
+                const start = this.captureComparisonStartSnapshot(codebasePath);
+                if (start.observedEventEpoch !== undefined) {
                     try {
                         const observationComparisonStartedAt = Date.now();
                         const comparison = await this.runCoalescedWholeTreeComparison(
                             codebasePath,
                             comparedPublicationId,
-                            comparisonEpoch,
-                            comparisonObservation?.coverage,
+                            start,
                             compareSourceObservation,
                             sourcePublication,
                         );
@@ -1107,14 +1152,13 @@ export class SyncManager {
                         if (comparison.status === 'matches') {
                             // Cover only watcher events captured before this complete source
                             // observation. Later events remain pending and still invalidate reads.
-                            this.coverWatcherObservation(codebasePath, comparisonEpoch);
+                            this.coverWatcherObservation(codebasePath, start.observedEventEpoch);
                         }
                         if (comparison.status === 'differs') {
                             this.recordDifferingComparison(
                                 codebasePath,
-                                comparisonObservation,
+                                start,
                                 comparedPublicationId,
-                                comparisonEpoch,
                                 comparison.changedPaths,
                             );
                         }
@@ -1194,13 +1238,11 @@ export class SyncManager {
             }
             try {
                 const fullComparisonStartedAt = Date.now();
-                const comparisonObservation = this.watcherObservations.get(codebasePath);
-                const comparisonEpoch = this.captureWatcherFlightEpoch(codebasePath);
+                const start = this.captureComparisonStartSnapshot(codebasePath);
                 const comparison = await this.runCoalescedWholeTreeComparison(
                     codebasePath,
                     comparedPublicationId,
-                    comparisonEpoch,
-                    comparisonObservation?.coverage,
+                    start,
                     compareFullSource,
                     sourcePublication,
                 );
@@ -1211,9 +1253,8 @@ export class SyncManager {
                 if (comparison.status === 'differs') {
                     this.recordDifferingComparison(
                         codebasePath,
-                        comparisonObservation,
+                        start,
                         comparedPublicationId,
-                        comparisonEpoch,
                         comparison.changedPaths,
                     );
                     if (comparison.changedPaths) options.onSourceChangedPaths?.(comparison.changedPaths);
@@ -1235,7 +1276,7 @@ export class SyncManager {
                     });
                 }
                 fullMatched = true;
-                this.coverWatcherObservation(codebasePath, comparisonEpoch);
+                this.coverWatcherObservation(codebasePath, start.observedEventEpoch);
                 // A whole-tree match proves what a no-op sync would; without this
                 // the first periodic pass after a restart republishes unchanged source.
                 this.lastSyncTimes.set(codebasePath, checkedAtMs);

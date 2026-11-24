@@ -1213,6 +1213,20 @@ function pythonMroClasses(
     return [classTarget, ...merged];
 }
 
+function hasCustomPythonNewInMro(
+    context: PythonFlowContext,
+    mro: readonly SymbolRecord[],
+): boolean {
+    const newCandidates = context.targetIndex.get('__new__') ?? [];
+    if (newCandidates.length === 0) return false;
+    const mroIds = new Set(mro.map((cls) => cls.symbolInstanceId));
+    return newCandidates.some((candidate) => {
+        if (candidate.kind !== 'method') return false;
+        const owner = enclosingClassForSymbol(candidate, context.classesByFile);
+        return owner !== undefined && mroIds.has(owner.symbolInstanceId);
+    });
+}
+
 function exactPythonMethodTarget(
     context: PythonFlowContext,
     runtimeTypeName: string,
@@ -2768,9 +2782,15 @@ export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInp
                 && resolvedTarget?.kind === 'class'
                 ? pythonMroClasses(flowContext, resolvedTarget)
                 : undefined;
+            // Redirect ClassName(...) to __init__ only when the entire MRO is resolved
+            // (no unknown external base or custom metaclass) and no class in that MRO
+            // overrides __new__, which can return a different instance and skip __init__.
+            const constructorPathDeterministic = constructorMro !== undefined
+                && !hasCustomPythonNewInMro(flowContext, constructorMro);
             const constructorResolution = source.language === 'python'
                 && !flowResolution
                 && resolvedTarget?.kind === 'class'
+                && constructorPathDeterministic
                 ? pythonMethodTargetsForRuntimeTypes(
                     flowContext,
                     [resolvedTarget.name],

@@ -211,6 +211,7 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
             'valueKind',
             'constructorTypeName',
             'calleeName',
+            'globalRebind',
             'span',
             'contextSpan',
         ])
@@ -220,6 +221,7 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
             && PYTHON_FLOW_VALUE_KINDS.has(value.valueKind)
             && isOptionalNonEmptyString(value.constructorTypeName)
             && isOptionalNonEmptyString(value.calleeName)
+            && (value.globalRebind === undefined || typeof value.globalRebind === 'boolean')
             && isSourceSpan(value.span)
             && isSourceSpan(value.contextSpan);
     }
@@ -247,6 +249,7 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
             'parameterNames',
             'positionalExact',
             'decorated',
+            'overload',
             'span',
             'contextSpan',
         ])
@@ -255,6 +258,7 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
             && value.parameterNames.every(isNonEmptyString)
             && typeof value.positionalExact === 'boolean'
             && typeof value.decorated === 'boolean'
+            && (value.overload === undefined || typeof value.overload === 'boolean')
             && isSourceSpan(value.span)
             && isSourceSpan(value.contextSpan);
     }

@@ -181,3 +181,89 @@ test('scoped path results do not disclose unrelated sidecar warnings', async () 
     assert.equal(result.status, 'ok');
     if (result.status === 'ok') assert.deepEqual(result.warnings, []);
 });
+
+test('trace path qualifies additive recursion diagnostics and abstains on possibleOverrides without changing path or budgets', async () => {
+    const [a, b, c, d] = [
+        symbol('a', 'foo/a.ts'),
+        symbol('b', 'foo/b.ts'),
+        symbol('c', 'foo/c.ts'),
+        symbol('d', 'foo/d.ts'),
+    ];
+    // 1. Self-recursive source & target + cycle during CALLS traversal
+    const cyclic = fixture([a, b, c, d], [
+        edge(a, a, 'CALLS', 1),
+        edge(a, b, 'CALLS', 2),
+        edge(b, a, 'CALLS', 3),
+        edge(b, c, 'CALLS', 4),
+        edge(a, d, 'EXTENDS', 5),
+    ]);
+    const cyclicResult = await traceRelationshipPath(request(cyclic.navigationStore, {
+        sourceSymbolId: 'a',
+        targetSymbolId: 'd',
+        allowedTypes: ['CALLS'],
+        maxDepth: 4,
+    }));
+    assert.equal(cyclicResult.status, 'ok');
+    if (cyclicResult.status !== 'ok') return;
+    assert.equal(cyclicResult.path, null);
+    assert.equal(cyclicResult.coverage.visitedNodes, 3);
+    assert.equal(cyclicResult.coverage.traversedEdges, 4);
+    assert.deepEqual(cyclicResult.diagnostics, {
+        recursion: {
+            state: 'confirmed',
+            sourceSelfRecursive: true,
+            targetSelfRecursive: false,
+            cycleObserved: true,
+        },
+        possibleOverrides: {
+            status: 'unavailable',
+            reason: 'no_override_evidence',
+            targets: [],
+        },
+    });
+
+    // 2. DAG diamond does not misclassify shared target as a cycle
+    const diamond = fixture([a, b, c, d], [
+        edge(a, b, 'CALLS', 1),
+        edge(a, c, 'CALLS', 2),
+        edge(b, d, 'CALLS', 3),
+        edge(c, d, 'CALLS', 4),
+    ]);
+    const diamondResult = await traceRelationshipPath(request(diamond.navigationStore, {
+        sourceSymbolId: 'a',
+        targetSymbolId: 'd',
+        allowedTypes: ['CALLS'],
+        maxDepth: 4,
+    }));
+    assert.equal(diamondResult.status, 'ok');
+    if (diamondResult.status !== 'ok') return;
+    assert.deepEqual(diamondResult.path?.nodes.map((node) => node.symbolInstanceId), ['a', 'b', 'd']);
+    assert.deepEqual(diamondResult.diagnostics.recursion, {
+        state: 'not_observed',
+        sourceSelfRecursive: false,
+        targetSelfRecursive: false,
+        cycleObserved: false,
+    });
+
+    // 3. Non-CALLS traversal reports unknown recursion state without touching possibleOverrides abstention
+    const importsOnly = await traceRelationshipPath(request(fixture([a, d], [edge(a, d, 'IMPORTS')]).navigationStore, {
+        sourceSymbolId: 'a',
+        targetSymbolId: 'd',
+        allowedTypes: ['IMPORTS'],
+    }));
+    assert.equal(importsOnly.status, 'ok');
+    if (importsOnly.status !== 'ok') return;
+    assert.deepEqual(importsOnly.diagnostics, {
+        recursion: {
+            state: 'unknown',
+            sourceSelfRecursive: null,
+            targetSelfRecursive: null,
+            cycleObserved: null,
+        },
+        possibleOverrides: {
+            status: 'unavailable',
+            reason: 'no_override_evidence',
+            targets: [],
+        },
+    });
+});

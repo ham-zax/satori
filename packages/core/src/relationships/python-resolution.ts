@@ -447,6 +447,18 @@ function pythonImportBindingVisibleToSource(input: {
         && input.binding.span.endByte <= input.atSpan.startByte;
 }
 
+function hasPythonGlobalRebind(
+    evidence: PythonResolutionAnalysisInput | undefined,
+    name: string | undefined,
+): boolean {
+    if (!evidence || !name) return false;
+    return (evidence.pythonFlowFacts ?? []).some((fact) => (
+        fact.kind === 'assignment_origin'
+        && fact.globalRebind === true
+        && fact.targetText === name
+    ));
+}
+
 function resolvePythonClassReference(input: {
     classReference: string;
     source: SymbolRecord;
@@ -458,9 +470,12 @@ function resolvePythonClassReference(input: {
     includeTypeOnly?: boolean;
     context: PythonFlowContext;
 }): SymbolRecord | undefined {
+    const fileSymbols = input.registry.symbolsByFile.get(input.source.file) ?? [];
+    const globalRebound = hasPythonGlobalRebind(input.evidence, input.classReference);
     const classCandidatesById = new Map<string, SymbolRecord>();
     for (const candidate of input.classesByName.get(input.classReference) ?? []) {
         if (candidate.file === input.source.file) {
+            if (globalRebound && candidate.parentQualifiedNamePath.length === 0) continue;
             classCandidatesById.set(candidate.symbolInstanceId, candidate);
         }
     }
@@ -480,6 +495,8 @@ function resolvePythonClassReference(input: {
         ) {
             continue;
         }
+        const bindingOwner = ownerForCall(fileSymbols, { span: binding.span });
+        if (!bindingOwner && globalRebound) continue;
         const importedFile = resolvePythonModulePath(
             input.source.file,
             binding.moduleSpecifier,
@@ -517,6 +534,9 @@ function resolvePythonModuleMember(
             candidate.kind !== 'file' && candidate.name === name
             && candidate.parentQualifiedNamePath.length === 0
         ));
+        const effectiveDefinitions = definitions.some((candidate) => isOverloadStubPythonCallable(context, candidate))
+            ? definitions.filter((candidate) => !isOverloadStubPythonCallable(context, candidate))
+            : definitions;
         const bindings = (evidence?.moduleBindings ?? []).filter((binding) => (
             (binding.kind === 'import' || binding.kind === 'reexport')
             && (!binding.typeOnly || includeTypeOnly)
@@ -529,10 +549,13 @@ function resolvePythonModuleMember(
         if (bindings.some((binding) => binding.span.startColumn !== 0)
             || (evidence?.pythonFlowFacts ?? []).some((fact) => fact.kind === 'assignment_origin'
                 && fact.targetText === name
-                && !fileSymbols.some((symbol) => symbol.kind !== 'file'
-                    && spanContainsSpan(symbol.span as SourceSpan, fact.span)))) return undefined;
+                && (fact.globalRebind === true
+                    || !fileSymbols.some((symbol) => symbol.kind !== 'file'
+                        && spanContainsSpan(symbol.span as SourceSpan, fact.span))))) return undefined;
         if (definitions.length > 0) {
-            return definitions.length === 1 && bindings.length === 0 ? definitions[0] : undefined;
+            return effectiveDefinitions.length === 1 && bindings.length === 0
+                ? effectiveDefinitions[0]
+                : undefined;
         }
         if (bindings.length !== 1 || hops === MAX_PYTHON_REEXPORT_HOPS) return undefined;
         const [binding] = bindings;
@@ -573,11 +596,13 @@ function sameModulePythonConstructorShadowed(input: {
         }
     }
 
-    // A local assignment rebinding the class name before the call shadows
-    // the class for this call site.
+    // A local assignment or global rebinding shadows the class for this call site.
     for (const fact of input.evidence.pythonFlowFacts ?? []) {
         if (fact.kind !== 'assignment_origin' || fact.targetText !== name) {
             continue;
+        }
+        if (fact.globalRebind === true) {
+            return true;
         }
         if (fact.span.endByte > input.call.span.startByte) {
             continue;
@@ -630,6 +655,8 @@ function resolvePythonDirectTarget(input: {
         );
     }
 
+    const fileSymbols = input.registry.symbolsByFile.get(input.source.file) ?? [];
+    const globalReboundCallee = hasPythonGlobalRebind(input.evidence, input.call.calleeName);
     const eligible = input.candidates.filter((candidate) => isEligibleCallTarget(input.call, candidate));
     const importedBindings = input.evidence.moduleBindings.filter((binding) => (
         (binding.kind === 'import' || binding.kind === 'reexport')
@@ -642,6 +669,7 @@ function resolvePythonDirectTarget(input: {
             registry: input.registry,
             atSpan: input.call.span,
         })
+        && !(globalReboundCallee && !ownerForCall(fileSymbols, { span: binding.span }))
     ));
     if (importedBindings.length > 0) {
         const importedTargets = new Map<string, SymbolRecord>();
@@ -663,15 +691,20 @@ function resolvePythonDirectTarget(input: {
         return targets.length === 1 ? targets[0] : undefined;
     }
 
-    const sameFile = eligible.filter((candidate) => (
+    const sameFileAll = eligible.filter((candidate) => (
         candidate.file === input.source.file
-        && !isDecoratedPythonCallable(input.context, candidate)
+        && !(globalReboundCallee && candidate.parentQualifiedNamePath.length === 0)
     ));
-    if (sameFile.length === 1) return sameFile[0];
+    const sameFileNonOverload = sameFileAll.some((candidate) => isOverloadStubPythonCallable(input.context, candidate))
+        ? sameFileAll.filter((candidate) => !isOverloadStubPythonCallable(input.context, candidate))
+        : sameFileAll;
+    if (sameFileNonOverload.length === 1 && !isDecoratedPythonCallable(input.context, sameFileNonOverload[0])) {
+        return sameFileNonOverload[0];
+    }
 
     // A same-module bare constructor call resolves to the exact class only
     // when the name is unique in this file and no local binding shadows it.
-    if (sameFile.length === 0 && input.source.language === 'python' && input.call.kind === 'direct') {
+    if (sameFileNonOverload.length === 0 && input.source.language === 'python' && input.call.kind === 'direct') {
         const sameFileClasses = input.candidates.filter((candidate) => (
             candidate.kind === 'class'
             && candidate.file === input.source.file
@@ -708,6 +741,8 @@ function resolvePythonModuleQualifiedTarget(input: {
         return undefined;
     }
     const receiver = input.call.receiverText.trim();
+    const fileSymbols = input.registry.symbolsByFile.get(input.source.file) ?? [];
+    const globalReboundReceiver = hasPythonGlobalRebind(input.evidence, receiver);
     const moduleSpecifiers = new Set<string>();
     for (const binding of input.evidence.moduleBindings) {
         if (
@@ -719,6 +754,7 @@ function resolvePythonModuleQualifiedTarget(input: {
                 registry: input.registry,
                 atSpan: input.call.span,
             })
+            || (globalReboundReceiver && !ownerForCall(fileSymbols, { span: binding.span }))
         ) {
             continue;
         }
@@ -1024,6 +1060,13 @@ function isDecoratedPythonCallable(
     return context.callableSignaturesById.get(target.symbolInstanceId)?.decorated === true;
 }
 
+function isOverloadStubPythonCallable(
+    context: PythonFlowContext,
+    target: SymbolRecord,
+): boolean {
+    return context.callableSignaturesById.get(target.symbolInstanceId)?.overload === true;
+}
+
 function normalizePythonExpression(value: string): string {
     return value.replace(/\s+/g, ' ').trim().replace(/^\((.*)\)$/, '$1').trim();
 }
@@ -1194,9 +1237,12 @@ function exactPythonMethodTargetForClass(
         candidate.kind === 'method'
         && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId === classTarget.symbolInstanceId
     ));
-    if (ownMembers.length > 1) return undefined;
-    if (ownMembers.length === 1) {
-        return isDecoratedPythonCallable(context, ownMembers[0]) ? undefined : ownMembers[0];
+    const effectiveOwnMembers = ownMembers.some((candidate) => isOverloadStubPythonCallable(context, candidate))
+        ? ownMembers.filter((candidate) => !isOverloadStubPythonCallable(context, candidate))
+        : ownMembers;
+    if (ownMembers.length > 0) {
+        if (effectiveOwnMembers.length !== 1) return undefined;
+        return isDecoratedPythonCallable(context, effectiveOwnMembers[0]) ? undefined : effectiveOwnMembers[0];
     }
     const mro = pythonMroClasses(context, classTarget);
     if (!mro) return undefined;
@@ -1206,9 +1252,12 @@ function exactPythonMethodTargetForClass(
             && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId
                 === base.symbolInstanceId
         ));
-        if (declaredMembers.length > 1) return undefined;
-        if (declaredMembers.length === 1) {
-            return isDecoratedPythonCallable(context, declaredMembers[0]) ? undefined : declaredMembers[0];
+        const effectiveDeclaredMembers = declaredMembers.some((candidate) => isOverloadStubPythonCallable(context, candidate))
+            ? declaredMembers.filter((candidate) => !isOverloadStubPythonCallable(context, candidate))
+            : declaredMembers;
+        if (declaredMembers.length > 0) {
+            if (effectiveDeclaredMembers.length !== 1) return undefined;
+            return isDecoratedPythonCallable(context, effectiveDeclaredMembers[0]) ? undefined : effectiveDeclaredMembers[0];
         }
     }
     return undefined;
@@ -1344,7 +1393,8 @@ function exactPythonCallableTargets(
     if (!simpleName) return [];
     const evidence = getEvidence(context.analysisByFile, file);
     if (!evidence) return [];
-
+    const fileSymbols = context.registry.symbolsByFile.get(file) ?? [];
+    const globalRebound = hasPythonGlobalRebind(evidence, simpleName);
     const imported = evidence.moduleBindings.filter((binding) => (
         (binding.kind === 'import' || binding.kind === 'reexport')
         && binding.localName === simpleName
@@ -1356,6 +1406,7 @@ function exactPythonCallableTargets(
             registry: context.registry,
             atSpan,
         })
+        && !(globalRebound && !ownerForCall(fileSymbols, { span: binding.span }))
     ));
     if (imported.length > 0) {
         const importedTargets = new Map<string, SymbolRecord>();
@@ -1376,12 +1427,17 @@ function exactPythonCallableTargets(
         return importedTargets.size === 1 ? [...importedTargets.values()] : [];
     }
 
-    const sameFile = (context.registry.symbolsByFile.get(file) ?? []).filter((candidate) => (
+    const sameFileAll = fileSymbols.filter((candidate) => (
         candidate.name === simpleName
         && pythonDirectCandidateVisibleAt(context, owner, candidate, atSpan)
-        && !isDecoratedPythonCallable(context, candidate)
+        && !(globalRebound && candidate.parentQualifiedNamePath.length === 0)
     ));
-    return sameFile.length === 1 ? sameFile : [];
+    const sameFileNonOverload = sameFileAll.some((candidate) => isOverloadStubPythonCallable(context, candidate))
+        ? sameFileAll.filter((candidate) => !isOverloadStubPythonCallable(context, candidate))
+        : sameFileAll;
+    return sameFileNonOverload.length === 1 && !isDecoratedPythonCallable(context, sameFileNonOverload[0])
+        ? sameFileNonOverload
+        : [];
 }
 
 function positionalArgumentIndexForParameter(
@@ -2325,10 +2381,11 @@ function pythonFallbackProofSteps(input: {
         ), firstBinding);
         const localImport = ownerForCall(fileSymbols, { span: binding.span })?.symbolInstanceId
             === input.source.symbolInstanceId;
-        // An import cannot prove a name that was subsequently rebound.
+        // An import cannot prove a name that was subsequently rebound or bound via `global`.
         if ((input.evidence.pythonFlowFacts ?? []).some((fact) => {
-            if (fact.kind !== 'assignment_origin' || fact.targetText !== name
-                || fact.span.startByte < binding.span.endByte
+            if (fact.kind !== 'assignment_origin' || fact.targetText !== name) return false;
+            if (fact.globalRebind === true) return !localImport;
+            if (fact.span.startByte < binding.span.endByte
                 || fact.span.endByte > input.call.span.startByte) return false;
             const owner = ownerForCall(fileSymbols, { span: fact.span });
             // Module assignments do not rebind a function-local import.
@@ -2706,18 +2763,53 @@ export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInp
                     target: resolvedTarget,
                 })
                 : [];
+            const constructorMro = source.language === 'python'
+                && !flowResolution
+                && resolvedTarget?.kind === 'class'
+                ? pythonMroClasses(flowContext, resolvedTarget)
+                : undefined;
+            const constructorResolution = source.language === 'python'
+                && !flowResolution
+                && resolvedTarget?.kind === 'class'
+                ? pythonMethodTargetsForRuntimeTypes(
+                    flowContext,
+                    [resolvedTarget.name],
+                    '__init__',
+                    [resolvedTarget.symbolInstanceId],
+                )
+                : undefined;
+            const constructorTarget = constructorResolution && constructorResolution.targets.length === 1
+                ? constructorResolution.targets[0]
+                : undefined;
+            const effectiveResolvedTarget = constructorTarget ?? resolvedTarget;
             // A Python target that cannot carry exact binding/import/local proof
             // is evidence only. Do not publish the old candidate-set guess.
             const target = source.language === 'python'
-                && resolvedTarget
+                && effectiveResolvedTarget
                 && !flowResolution
                 && fallbackProof.length === 0
                 ? undefined
-                : resolvedTarget;
+                : effectiveResolvedTarget;
+            const constructorDependencyKeys = source.language === 'python'
+                && !flowResolution
+                && resolvedTarget?.kind === 'class'
+                ? (constructorMro ?? [resolvedTarget]).map((mroClass) => flowDependencyKey(
+                    mroClass.file,
+                    mroClass.span as SourceSpan,
+                    mroClass.qualifiedName,
+                ))
+                : [];
             const resolution = flowResolution
                 ?? (target
-                    ? { decision: 'resolved' as const, proofSteps: fallbackProof, flowHops: 0, dependencyKeys: [] }
-                    : resolvedTarget
+                    ? {
+                        decision: 'resolved' as const,
+                        proofSteps: constructorTarget
+                            ? [...fallbackProof, ...(constructorResolution?.proofSteps ?? [])]
+                            : fallbackProof,
+                        flowHops: 0,
+                        dependencyKeys: constructorDependencyKeys,
+                    }
+                    : effectiveResolvedTarget
                         ? {
                             decision: 'unresolved' as const,
                             proofSteps: [{
@@ -2735,7 +2827,7 @@ export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInp
                                 span: call.span,
                                 receiverText: call.receiverText,
                                 calleeName: call.calleeName,
-                            })],
+                            }), ...constructorDependencyKeys],
                         }
                     : {
                         decision: (candidates && candidates.length > 1 ? 'ambiguous' : 'unresolved') as 'ambiguous' | 'unresolved',

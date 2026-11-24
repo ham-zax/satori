@@ -454,6 +454,7 @@ function canonicalizePythonFlowFact(fact: PythonFlowFact): PythonFlowFact {
             valueKind: fact.valueKind,
             ...(fact.constructorTypeName === undefined ? {} : { constructorTypeName: fact.constructorTypeName }),
             ...(fact.calleeName === undefined ? {} : { calleeName: fact.calleeName }),
+            ...(fact.globalRebind === undefined ? {} : { globalRebind: fact.globalRebind }),
             span: canonicalizeSourceSpan(fact.span),
             contextSpan: canonicalizeSourceSpan(fact.contextSpan),
         };
@@ -476,6 +477,7 @@ function canonicalizePythonFlowFact(fact: PythonFlowFact): PythonFlowFact {
             parameterNames: [...fact.parameterNames],
             positionalExact: fact.positionalExact,
             decorated: fact.decorated,
+            ...(fact.overload === undefined ? {} : { overload: fact.overload }),
             span: canonicalizeSourceSpan(fact.span),
             contextSpan: canonicalizeSourceSpan(fact.contextSpan),
         };

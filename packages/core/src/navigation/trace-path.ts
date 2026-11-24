@@ -22,6 +22,20 @@ export interface TraceRelationshipPathInput {
     navigationStore?: NavigationReader;
 }
 
+export interface TracePathDiagnostics {
+    recursion: {
+        state: 'confirmed' | 'not_observed' | 'unknown';
+        sourceSelfRecursive: boolean | null;
+        targetSelfRecursive: boolean | null;
+        cycleObserved: boolean | null;
+    };
+    possibleOverrides: {
+        status: 'unavailable';
+        reason: 'no_override_evidence';
+        targets: [];
+    };
+}
+
 export type TraceRelationshipPathResult =
     | {
         status: 'ok';
@@ -32,6 +46,7 @@ export type TraceRelationshipPathResult =
             truncated: boolean;
             truncatedBy: Array<'maxDepth' | 'maxVisitedNodes' | 'maxTraversedEdges'>;
         };
+        diagnostics: TracePathDiagnostics;
         warnings: string[];
     }
     | { status: 'missing_symbol'; symbol: 'source' | 'target' }
@@ -66,6 +81,19 @@ function compareEdges(left: RelationshipRecord, right: RelationshipRecord): numb
 
 function bounded(value: number, maximum: number): number {
     return Number.isInteger(value) ? Math.max(1, Math.min(value, maximum)) : 1;
+}
+
+function isAncestorInPredecessorChain(
+    predecessor: ReadonlyMap<string, { from: string; edge: RelationshipRecord }>,
+    nodeId: string,
+    candidateAncestorId: string,
+): boolean {
+    let cursor: string | undefined = nodeId;
+    while (cursor !== undefined) {
+        if (cursor === candidateAncestorId) return true;
+        cursor = predecessor.get(cursor)?.from;
+    }
+    return false;
 }
 
 /** One shortest path over resolved, directed relationship facts from one Publication. */
@@ -127,6 +155,18 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
     const predecessor = new Map<string, { from: string; edge: RelationshipRecord }>();
     const queue: Array<{ id: string; depth: number }> = [{ id: source.symbolInstanceId, depth: 0 }];
     const truncatedBy = new Set<'maxDepth' | 'maxVisitedNodes' | 'maxTraversedEdges'>();
+    const callsEnabled = allowedTypes.has('CALLS');
+    const sourceSelfRecursive = callsEnabled
+        ? (outgoing.get(source.symbolInstanceId) ?? []).some((record) => (
+            record.type === 'CALLS' && record.targetInstanceId === source.symbolInstanceId
+        ))
+        : null;
+    const targetSelfRecursive = callsEnabled
+        ? (outgoing.get(target.symbolInstanceId) ?? []).some((record) => (
+            record.type === 'CALLS' && record.targetInstanceId === target.symbolInstanceId
+        ))
+        : null;
+    let cycleObserved = false;
     let traversedEdges = 0;
     let found = source.symbolInstanceId === target.symbolInstanceId;
 
@@ -144,7 +184,15 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
             }
             traversedEdges += 1;
             const peer = record.targetInstanceId!;
-            if (visited.has(peer)) continue;
+            if (visited.has(peer)) {
+                if (callsEnabled
+                    && record.type === 'CALLS'
+                    && !cycleObserved
+                    && isAncestorInPredecessorChain(predecessor, current.id, peer)) {
+                    cycleObserved = true;
+                }
+                continue;
+            }
             if (visited.size >= maxVisitedNodes) {
                 truncatedBy.add('maxVisitedNodes');
                 break search;
@@ -173,6 +221,11 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
     }
 
     const reasons = [...truncatedBy].sort(compareContractStrings);
+    const recursionState: TracePathDiagnostics['recursion']['state'] = !callsEnabled
+        ? 'unknown'
+        : sourceSelfRecursive || targetSelfRecursive || cycleObserved
+            ? 'confirmed'
+            : 'not_observed';
     return {
         status: 'ok',
         path,
@@ -181,6 +234,20 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
             traversedEdges,
             truncated: reasons.length > 0,
             truncatedBy: reasons,
+        },
+        diagnostics: {
+            recursion: {
+                state: recursionState,
+                sourceSelfRecursive,
+                targetSelfRecursive,
+                cycleObserved: callsEnabled ? cycleObserved : null,
+            },
+            // Satori navigation sidecars do not persist method OVERRIDE edges; abstain rather than guess.
+            possibleOverrides: {
+                status: 'unavailable',
+                reason: 'no_override_evidence',
+                targets: [],
+            },
         },
         // Sidecar warnings can name files outside a requested subtree.
         warnings: input.scopeSubtree

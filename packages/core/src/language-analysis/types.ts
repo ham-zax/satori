@@ -66,6 +66,7 @@ export type PythonFlowFact =
         readonly valueKind: 'constructor' | 'call' | 'member' | 'identifier' | 'unknown';
         readonly constructorTypeName?: string;
         readonly calleeName?: string;
+        readonly globalRebind?: boolean;
         readonly span: SourceSpan;
         /** Nearest lexical statement block; callable ownership is inferred by containment. */
         readonly contextSpan: SourceSpan;
@@ -88,6 +89,7 @@ export type PythonFlowFact =
         readonly positionalExact: boolean;
         /** True when decoration is not one of the bounded descriptor forms whose body identity remains mechanically known. */
         readonly decorated: boolean;
+        readonly overload?: boolean;
         readonly span: SourceSpan;
         readonly contextSpan: SourceSpan;
     }

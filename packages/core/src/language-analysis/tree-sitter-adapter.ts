@@ -1438,7 +1438,347 @@ function pythonParameterName(node: Node): string | undefined {
     return nameNode?.type === 'identifier' ? nameNode.text.trim() || undefined : undefined;
 }
 
-function pythonCallableSignature(functionNode: Node, sourceMap: Utf8SourceMap): PythonFlowFact | undefined {
+const PYTHON_NESTED_SCOPE_EXPRESSION_TYPES = new Set([
+    'lambda',
+    'list_comprehension',
+    'set_comprehension',
+    'dictionary_comprehension',
+    'generator_expression',
+]);
+
+function collectPythonTargetIdentifiers(node: Node | null | undefined, out: Array<{ name: string; node: Node }>): void {
+    if (!node) return;
+    if (node.type === 'identifier') {
+        const name = node.text.trim();
+        if (name) out.push({ name, node });
+        return;
+    }
+    if (
+        node.type === 'pattern_list'
+        || node.type === 'tuple_pattern'
+        || node.type === 'list_pattern'
+        || node.type === 'parenthesized_expression'
+        || node.type === 'list_splat_pattern'
+        || node.type === 'dictionary_splat_pattern'
+        || node.type === 'as_pattern_target'
+    ) {
+        for (const child of node.namedChildren) {
+            collectPythonTargetIdentifiers(child, out);
+        }
+    }
+}
+
+function collectPythonScopeNonImportBindings(
+    node: Node,
+    scopeNodeId: number,
+    out: Array<{ name: string; node: Node }>,
+): void {
+    if (node.id !== scopeNodeId && (node.type === 'function_definition' || node.type === 'class_definition')) {
+        const nameNode = node.childForFieldName('name');
+        const name = nameNode?.text.trim();
+        if (name && nameNode) out.push({ name, node: nameNode });
+        return;
+    }
+    if (PYTHON_NESTED_SCOPE_EXPRESSION_TYPES.has(node.type)) {
+        return;
+    }
+    if (node.type === 'assignment') {
+        collectPythonTargetIdentifiers(node.childForFieldName('left'), out);
+        const right = node.childForFieldName('right');
+        if (right) collectPythonScopeNonImportBindings(right, scopeNodeId, out);
+        return;
+    }
+    if (node.type === 'augmented_assignment') {
+        collectPythonTargetIdentifiers(node.childForFieldName('left'), out);
+        const right = node.childForFieldName('right');
+        if (right) collectPythonScopeNonImportBindings(right, scopeNodeId, out);
+        return;
+    }
+    if (node.type === 'named_expression') {
+        collectPythonTargetIdentifiers(node.childForFieldName('name'), out);
+        const value = node.childForFieldName('value');
+        if (value) collectPythonScopeNonImportBindings(value, scopeNodeId, out);
+        return;
+    }
+    if (node.type === 'for_statement') {
+        collectPythonTargetIdentifiers(node.childForFieldName('left'), out);
+    } else if (node.type === 'with_statement') {
+        for (const clause of node.namedChildren) {
+            if (clause.type !== 'with_clause') continue;
+            for (const item of clause.namedChildren) {
+                if (item.type !== 'with_item') continue;
+                for (const child of item.namedChildren) {
+                    if (child.type === 'as_pattern') {
+                        collectPythonTargetIdentifiers(child.childForFieldName('alias'), out);
+                    }
+                }
+            }
+        }
+    } else if (node.type === 'except_clause') {
+        for (const child of node.namedChildren) {
+            if (child.type === 'as_pattern') {
+                collectPythonTargetIdentifiers(child.childForFieldName('alias'), out);
+            }
+        }
+    } else if (node.type === 'delete_statement') {
+        for (const child of node.namedChildren) {
+            collectPythonTargetIdentifiers(child, out);
+        }
+        return;
+    }
+    for (const child of node.namedChildren) {
+        collectPythonScopeNonImportBindings(child, scopeNodeId, out);
+    }
+}
+
+function collectPythonScopeImportNodes(
+    node: Node,
+    scopeNodeId: number,
+    out: Node[],
+): void {
+    if (node.id !== scopeNodeId && (node.type === 'function_definition' || node.type === 'class_definition')) {
+        return;
+    }
+    if (PYTHON_NESTED_SCOPE_EXPRESSION_TYPES.has(node.type)) {
+        return;
+    }
+    if (node.type === 'import_from_statement' || node.type === 'import_statement') {
+        out.push(node);
+        return;
+    }
+    for (const child of node.namedChildren) {
+        collectPythonScopeImportNodes(child, scopeNodeId, out);
+    }
+}
+
+function pythonImportBoundIdentifiers(importNode: Node): Array<{ name: string; node: Node }> {
+    const out: Array<{ name: string; node: Node }> = [];
+    if (importNode.type === 'import_from_statement') {
+        for (const imported of importNode.childrenForFieldName('name')) {
+            if (imported.type === 'aliased_import') {
+                const aliasNode = imported.childForFieldName('alias');
+                const alias = aliasNode?.text.trim();
+                if (alias && aliasNode) out.push({ name: alias, node: aliasNode });
+            } else {
+                const name = imported.text.trim();
+                if (name) out.push({ name, node: imported });
+            }
+        }
+        return out;
+    }
+    if (importNode.type === 'import_statement') {
+        for (const child of importNode.namedChildren) {
+            if (child.type === 'aliased_import') {
+                const aliasNode = child.childForFieldName('alias');
+                const alias = aliasNode?.text.trim();
+                if (alias && aliasNode) out.push({ name: alias, node: aliasNode });
+            } else if (child.type === 'dotted_name') {
+                const firstIdentifier = child.namedChildren[0] ?? child;
+                const name = firstIdentifier.text.trim();
+                if (name) out.push({ name, node: firstIdentifier });
+            }
+        }
+    }
+    return out;
+}
+
+function collectPythonGlobalRebinds(
+    root: Node,
+    sourceMap: Utf8SourceMap,
+): { facts: PythonFlowFact[]; globalReboundNames: Set<string> } {
+    const facts: PythonFlowFact[] = [];
+    const globalReboundNames = new Set<string>();
+    const rootSpan = nodeSpan(root, sourceMap);
+    const scopes = [
+        ...root.descendantsOfType('function_definition'),
+        ...root.descendantsOfType('class_definition'),
+    ];
+    for (const scopeNode of scopes) {
+        const declaredGlobals = new Set<string>();
+        for (const globalStmt of scopeNode.descendantsOfType('global_statement')) {
+            const nearestScope = enclosingPythonFunction(globalStmt) ?? enclosingPythonClass(globalStmt);
+            // Global inside a class body has nearestScope === classNode unless inside a method inside classNode.
+            let ownerScope: Node | undefined = globalStmt.parent ?? undefined;
+            while (ownerScope && ownerScope.type !== 'function_definition' && ownerScope.type !== 'class_definition') {
+                ownerScope = ownerScope.parent ?? undefined;
+            }
+            if ((ownerScope?.id ?? nearestScope?.id) !== scopeNode.id) continue;
+            for (const child of globalStmt.namedChildren) {
+                if (child.type === 'identifier') {
+                    const name = child.text.trim();
+                    if (name) declaredGlobals.add(name);
+                }
+            }
+        }
+        if (declaredGlobals.size === 0) continue;
+        const body = scopeNode.childForFieldName('body') ?? scopeNode;
+        const bindings: Array<{ name: string; node: Node }> = [];
+        collectPythonScopeNonImportBindings(body, scopeNode.id, bindings);
+        const importNodes: Node[] = [];
+        collectPythonScopeImportNodes(body, scopeNode.id, importNodes);
+        for (const importNode of importNodes) {
+            bindings.push(...pythonImportBoundIdentifiers(importNode));
+        }
+        const seenSite = new Set<string>();
+        for (const { name, node } of bindings) {
+            if (!declaredGlobals.has(name)) continue;
+            const span = nodeSpan(node, sourceMap);
+            const key = `${name}:${span.startByte}:${span.endByte}`;
+            if (seenSite.has(key)) continue;
+            seenSite.add(key);
+            globalReboundNames.add(name);
+            facts.push({
+                kind: 'assignment_origin',
+                targetText: name,
+                valueText: 'global',
+                valueKind: 'unknown',
+                globalRebind: true,
+                span,
+                contextSpan: rootSpan,
+            });
+        }
+    }
+    return { facts, globalReboundNames };
+}
+
+interface PythonOverloadResolutionContext {
+    overloadLocalNames: ReadonlySet<string>;
+    typingModuleAliases: ReadonlySet<string>;
+}
+
+function collectPythonOverloadContext(
+    root: Node,
+    globalReboundNames: ReadonlySet<string>,
+): PythonOverloadResolutionContext {
+    const importTargetsByLocalName = new Map<string, Set<string>>();
+    const addImportTarget = (localName: string, target: string): void => {
+        if (!localName) return;
+        const set = importTargetsByLocalName.get(localName);
+        if (set) {
+            set.add(target);
+        } else {
+            importTargetsByLocalName.set(localName, new Set([target]));
+        }
+    };
+    const moduleImportNodes: Node[] = [];
+    collectPythonScopeImportNodes(root, root.id, moduleImportNodes);
+    for (const node of moduleImportNodes) {
+        if (node.type === 'import_from_statement') {
+            const moduleName = node.childForFieldName('module_name')?.text.trim() ?? '';
+            for (const imported of node.childrenForFieldName('name')) {
+                const importedNameNode = imported.type === 'aliased_import'
+                    ? imported.childForFieldName('name')
+                    : imported;
+                const aliasNode = imported.type === 'aliased_import'
+                    ? imported.childForFieldName('alias')
+                    : undefined;
+                const importedName = importedNameNode?.text.trim() ?? '';
+                const localName = aliasNode?.text.trim() || importedName;
+                if (!importedName || !localName) continue;
+                const isTypingOverload = (moduleName === 'typing' || moduleName === 'typing_extensions')
+                    && importedName === 'overload';
+                addImportTarget(localName, isTypingOverload ? 'typing.overload' : `other:${moduleName}:${importedName}`);
+            }
+            continue;
+        }
+        if (node.type === 'import_statement') {
+            for (const child of node.namedChildren) {
+                if (child.type === 'aliased_import') {
+                    const moduleName = child.childForFieldName('name')?.text.trim() ?? '';
+                    const alias = child.childForFieldName('alias')?.text.trim() ?? '';
+                    if (!moduleName || !alias) continue;
+                    const isTypingModule = moduleName === 'typing' || moduleName === 'typing_extensions';
+                    addImportTarget(alias, isTypingModule ? 'typing_module' : `other:${moduleName}`);
+                } else if (child.type === 'dotted_name') {
+                    const moduleSpecifier = child.text.trim();
+                    const rootName = moduleSpecifier.split('.')[0]?.trim() ?? '';
+                    if (!moduleSpecifier || !rootName) continue;
+                    const isTypingModule = rootName === 'typing' || rootName === 'typing_extensions';
+                    addImportTarget(rootName, isTypingModule ? 'typing_module' : `other:${moduleSpecifier}`);
+                }
+            }
+        }
+    }
+
+    const moduleBindings: Array<{ name: string; node: Node }> = [];
+    collectPythonScopeNonImportBindings(root, root.id, moduleBindings);
+    const moduleNonImportNames = new Set(moduleBindings.map((item) => item.name));
+
+    const overloadLocalNames = new Set<string>();
+    const typingModuleAliases = new Set<string>();
+    for (const [localName, targets] of importTargetsByLocalName.entries()) {
+        if (moduleNonImportNames.has(localName) || globalReboundNames.has(localName)) continue;
+        if (targets.size === 1 && targets.has('typing.overload')) {
+            overloadLocalNames.add(localName);
+        } else if (targets.size === 1 && targets.has('typing_module')) {
+            typingModuleAliases.add(localName);
+        }
+    }
+    return { overloadLocalNames, typingModuleAliases };
+}
+
+function enclosingPythonBoundNames(decoratedDefinition: Node): Set<string> {
+    const names = new Set<string>();
+    let current = decoratedDefinition.parent;
+    while (current) {
+        if (current.type === 'function_definition' || current.type === 'class_definition') {
+            if (current.type === 'function_definition') {
+                const params = current.childForFieldName('parameters');
+                if (params) {
+                    for (const param of params.namedChildren) {
+                        const paramName = pythonParameterName(param);
+                        if (paramName) names.add(paramName);
+                    }
+                }
+            }
+            const body = current.childForFieldName('body') ?? current;
+            const localBindings: Array<{ name: string; node: Node }> = [];
+            collectPythonScopeNonImportBindings(body, current.id, localBindings);
+            for (const binding of localBindings) names.add(binding.name);
+            const importNodes: Node[] = [];
+            collectPythonScopeImportNodes(body, current.id, importNodes);
+            for (const importNode of importNodes) {
+                for (const binding of pythonImportBoundIdentifiers(importNode)) {
+                    names.add(binding.name);
+                }
+            }
+        }
+        current = current.parent;
+    }
+    return names;
+}
+
+function isPythonOverloadDecorator(
+    decorator: Node,
+    overloadContext: PythonOverloadResolutionContext,
+    enclosingShadowedNames: ReadonlySet<string>,
+): boolean {
+    let expr = decorator.namedChildren[0];
+    while (expr?.type === 'parenthesized_expression') {
+        expr = expr.namedChildren[0];
+    }
+    if (!expr) return false;
+    if (expr.type === 'identifier') {
+        const name = expr.text.trim();
+        return overloadContext.overloadLocalNames.has(name) && !enclosingShadowedNames.has(name);
+    }
+    if (expr.type === 'attribute') {
+        const object = expr.childForFieldName('object');
+        const attribute = expr.childForFieldName('attribute');
+        if (object?.type !== 'identifier' || attribute?.type !== 'identifier') return false;
+        const alias = object.text.trim();
+        return attribute.text.trim() === 'overload'
+            && overloadContext.typingModuleAliases.has(alias)
+            && !enclosingShadowedNames.has(alias);
+    }
+    return false;
+}
+
+function pythonCallableSignature(
+    functionNode: Node,
+    sourceMap: Utf8SourceMap,
+    overloadContext: PythonOverloadResolutionContext,
+): PythonFlowFact | undefined {
     const callableName = functionNode.childForFieldName('name')?.text.trim();
     const parameters = functionNode.childForFieldName('parameters');
     if (!callableName || !parameters) return undefined;
@@ -1463,7 +1803,13 @@ function pythonCallableSignature(functionNode: Node, sourceMap: Utf8SourceMap): 
         ? functionNode.parent
         : undefined;
     const decorators = decoratedDefinition?.namedChildren.filter((child) => child.type === 'decorator') ?? [];
-    const decorated = decorators.some((decorator) => {
+    const enclosingShadowedNames = decoratedDefinition && decorators.length > 0
+        ? enclosingPythonBoundNames(decoratedDefinition)
+        : new Set<string>();
+    const overload = decorators.some((decorator) => (
+        isPythonOverloadDecorator(decorator, overloadContext, enclosingShadowedNames)
+    ));
+    const decorated = overload || decorators.some((decorator) => {
         const name = decorator.text.trim().replace(/^@/, '').trim();
         return name !== 'classmethod' && name !== 'staticmethod';
     });
@@ -1473,6 +1819,7 @@ function pythonCallableSignature(functionNode: Node, sourceMap: Utf8SourceMap): 
         parameterNames,
         positionalExact,
         decorated,
+        ...(overload ? { overload: true } : {}),
         span: nodeSpan(decoratedDefinition ?? functionNode, sourceMap),
         contextSpan: nodeSpan(functionNode, sourceMap),
     };
@@ -1482,11 +1829,14 @@ function extractPythonFlowFacts(
     root: Node,
     sourceMap: Utf8SourceMap,
 ): PythonFlowFact[] {
+    const { facts: globalRebindFacts, globalReboundNames } = collectPythonGlobalRebinds(root, sourceMap);
+    const overloadContext = collectPythonOverloadContext(root, globalReboundNames);
     const facts: PythonFlowFact[] = [];
     for (const functionNode of root.descendantsOfType('function_definition')) {
-        const signature = pythonCallableSignature(functionNode, sourceMap);
+        const signature = pythonCallableSignature(functionNode, sourceMap, overloadContext);
         if (signature) facts.push(signature);
     }
+    facts.push(...globalRebindFacts);
     for (const assignment of root.descendantsOfType('assignment')) {
         const target = assignment.childForFieldName('left');
         const value = assignment.childForFieldName('right');

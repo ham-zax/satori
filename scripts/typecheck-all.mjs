@@ -11,34 +11,46 @@ const packages = [
   "@satori-code/cli",
 ];
 
+const targets = [
+  ...packages.map((name) => ({
+    name,
+    command: "pnpm",
+    args: ["--filter", name, "run", "typecheck"],
+  })),
+  {
+    name: "scripts & evals (tsconfig.scripts.json)",
+    command: process.execPath,
+    args: ["node_modules/typescript7/bin/tsc", "-p", "tsconfig.scripts.json", "--noEmit"],
+  },
+];
+
 let exitCode = 0;
 const failed = [];
-const isTTY = Boolean(process.stdout.isTTY && !process.env.CI);
 
-console.log("\x1b[36m◆\x1b[0m Typechecking workspace packages...");
+console.log("\x1b[36m◆\x1b[0m Typechecking workspace packages and scripts...");
 
-for (const name of packages) {
-  const result = spawnSync("pnpm", ["--filter", name, "run", "typecheck"], {
+for (const target of targets) {
+  const result = spawnSync(target.command, target.args, {
     encoding: "utf8",
     shell: false,
   });
   const status = result.status ?? 1;
   if (status === 0) {
-    console.log(`  \x1b[32m✔\x1b[0m \x1b[1m${name}\x1b[0m`);
+    console.log(`  \x1b[32m✔\x1b[0m \x1b[1m${target.name}\x1b[0m`);
   } else {
     exitCode = status;
-    failed.push({ name, output: (result.stdout || "") + (result.stderr || "") });
-    console.log(`  \x1b[31m✖\x1b[0m \x1b[1m${name}\x1b[0m`);
+    failed.push({ name: target.name, output: (result.stdout || "") + (result.stderr || "") });
+    console.log(`  \x1b[31m✖\x1b[0m \x1b[1m${target.name}\x1b[0m`);
   }
 }
 
 if (failed.length > 0) {
-  console.error(`\n\x1b[31m✖ Typecheck failed in ${failed.length} package(s):\x1b[0m\n`);
+  console.error(`\n\x1b[31m✖ Typecheck failed in ${failed.length} target(s):\x1b[0m\n`);
   for (const f of failed) {
     console.error(`\x1b[31m--- ${f.name} ---\x1b[0m\n${f.output.trim()}\n`);
   }
 } else {
-  console.log(`\x1b[32m✔ All ${packages.length} packages passed typecheck.\x1b[0m\n`);
+  console.log(`\x1b[32m✔ All ${targets.length} typecheck targets passed.\x1b[0m\n`);
 }
 
 process.exit(exitCode);

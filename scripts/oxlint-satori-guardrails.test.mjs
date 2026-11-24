@@ -36,6 +36,12 @@ test('satori-guardrails rejects raw git exec in production files but allows test
         'import { execFileSync } from "node:child_process";\nexport const out = execFileSync("git", ["status"]);\n',
     );
     assert.equal(allowedInTest.status, 0, allowedInTest.stdout + allowedInTest.stderr);
+
+    const allowedInScript = lintFixture(
+        'scripts/tool.ts',
+        'import { execFileSync } from "node:child_process";\nexport const out = execFileSync("git", ["status"]);\n',
+    );
+    assert.equal(allowedInScript.status, 0, allowedInScript.stdout + allowedInScript.stderr);
 });
 
 test('satori-guardrails rejects shell: true in production files', () => {

@@ -434,7 +434,7 @@ async function main(): Promise<void> {
     };
     const scenarios: Scenario[] = [];
     let activeSessions: CliMcpSession[] = [];
-    let mutationOutcome: Awaited<ReturnType<typeof syncFixture>> | null = null;
+    let mutationOutcome: Awaited<ReturnType<typeof syncFixture>>;
 
     try {
         const setup = await connect(launcherPath, clientEnv);

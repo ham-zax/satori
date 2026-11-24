@@ -810,7 +810,7 @@ async function resolveOpenCodeConfig(opencodeCommand, repoRoot) {
     try {
         return JSON.parse(result.stdout);
     } catch (error) {
-        throw new Error(`OpenCode returned invalid resolved config JSON: ${error.message}`);
+        throw new Error(`OpenCode returned invalid resolved config JSON: ${error.message}`, { cause: error });
     }
 }
 
@@ -926,6 +926,7 @@ async function startOpenCodeServer(command, repoRoot, environment, logFile) {
 async function stopOpenCodeServer(server) {
     if (!server) return;
     let timer;
+    let logError;
     try {
         if (!server.closed) {
             if (server.child.exitCode === null && server.child.signalCode === null) {
@@ -945,15 +946,14 @@ async function stopOpenCodeServer(server) {
     } finally {
         clearTimeout(timer);
         if (server.logStream && !server.logStream.closed) {
-            let logError;
             await new Promise((resolve) => {
                 server.logStream.once("close", resolve);
                 server.logStream.once("error", error => { logError = error; });
                 server.logStream.end();
             });
-            if (logError) throw logError;
         }
     }
+    if (logError) throw logError;
 }
 
 function mcpCommand(resolvedConfig) {

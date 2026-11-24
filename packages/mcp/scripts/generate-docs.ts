@@ -26,6 +26,7 @@ function buildToolDocsSection(): string {
     const config: ContextMcpConfig = {
         name: 'Satori MCP Server',
         version: '1.0.0',
+        stateRoot: '/tmp/satori-docs',
         executionProfile: 'connected',
         networkPolicy: { kind: 'remote-allowed' },
         vectorStoreProvider: 'Milvus',

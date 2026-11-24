@@ -7,11 +7,13 @@ import { performance } from 'node:perf_hooks';
 import { analyzeWithOxc } from '../packages/core/src/language-analysis/oxc-adapter';
 import { TypeScriptSemanticProjectAnalyzer } from '../packages/core/src/relationships/typescript-semantic-analyzer';
 import type { ResolutionClaim } from '../packages/core/src/relationships/resolution';
-import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../packages/core/src/symbols/contracts';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    type SymbolRecord,
+} from '../packages/core/src/symbols/contracts';
 import {
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
-    type SymbolRecord,
     type SymbolRegistry,
 } from '../packages/core/src/symbols/registry';
 import {

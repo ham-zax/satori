@@ -146,7 +146,7 @@ function alternativesFromClaim(
     claim: ResolutionClaim,
     symbols: readonly SymbolRecord[],
 ) {
-    return candidateNamesFromResolutionClaim(claim).flatMap((candidateName) => {
+    return candidateNamesFromResolutionClaim(claim).flatMap((candidateName: string) => {
         const providerMatches = symbols.filter((symbol) => symbol.qualifiedName === candidateName);
         if (providerMatches.length !== 1) {
             throw new Error(

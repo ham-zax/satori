@@ -3,7 +3,6 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import {
-    ASSETS_DIR,
     MANIFEST_PATH,
     DESCRIPTOR_PATH,
     SCHEMA_PATH,

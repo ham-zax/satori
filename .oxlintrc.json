@@ -16,7 +16,9 @@
   "ignorePatterns": [
     "**/dist/**",
     "**/node_modules/**",
-    "**/*.d.ts"
+    "**/*.d.ts",
+    "scripts/archive/**",
+    "evals/archive/**"
   ],
   "rules": {
     "constructor-super": "error",

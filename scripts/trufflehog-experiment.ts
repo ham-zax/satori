@@ -158,7 +158,7 @@ async function runExperiment() {
     let resolvedOccurrences = 0;
     const targetFiles = new Set<string>();
 
-    for (const [_, occurrences] of wasmResult.occurrencesByFile) {
+    for (const [, occurrences] of wasmResult.occurrencesByFile) {
         totalOccurrences += occurrences.length;
         for (const occ of occurrences) {
             if (occ.decision === 'resolved' && occ.targetProvenance) {
@@ -216,21 +216,29 @@ async function runExperiment() {
     console.log(`   Vector Chunks Created:    ${indexResult.totalChunks}`);
 
     // Check symbol registry and relationships from sidecars
-    const symRegistryResult = await readSymbolRegistrySidecar({
-        stateRoot: path.join(stateDir, 'navigation'),
-        normalizedRootPath: TRUFFLEHOG_PATH,
-    });
+    const publication = context.getCurrentPublication(TRUFFLEHOG_PATH);
+    const navigation = publication ? context.getPublicationNavigationAddress(publication) : null;
+    const symRegistryResult = navigation
+        ? await readSymbolRegistrySidecar({
+            publicationId: navigation.publicationId,
+            navigationRoot: navigation.navigationRoot,
+            normalizedRootPath: TRUFFLEHOG_PATH,
+        })
+        : { status: 'missing' as const, rootPath: TRUFFLEHOG_PATH, reason: 'no_publication' };
 
     if (symRegistryResult.status === 'ok') {
         console.log(`   Total Extracted Symbols:  ${symRegistryResult.registry.symbols.length}`);
         console.log(`   Manifest Indexed Files:   ${symRegistryResult.registry.manifest.files.length}`);
     }
 
-    const relSidecarResult = await readRelationshipSidecar({
-        stateRoot: path.join(stateDir, 'navigation'),
-        normalizedRootPath: TRUFFLEHOG_PATH,
-        expectedSymbolRegistryManifestHash: symRegistryResult.status === 'ok' ? symRegistryResult.manifestHash : '',
-    });
+    const relSidecarResult = navigation
+        ? await readRelationshipSidecar({
+            publicationId: navigation.publicationId,
+            navigationRoot: navigation.navigationRoot,
+            normalizedRootPath: TRUFFLEHOG_PATH,
+            expectedSymbolRegistryManifestHash: symRegistryResult.status === 'ok' ? symRegistryResult.manifestHash : '',
+        })
+        : { status: 'missing' as const, rootPath: TRUFFLEHOG_PATH, reason: 'no_publication' };
 
     if (relSidecarResult.status === 'ok') {
         console.log(`   Total Relationship Edges: ${relSidecarResult.records.length}`);

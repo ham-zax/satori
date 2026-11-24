@@ -26,7 +26,9 @@ const activeFiles = trackedFiles.filter((file) => (
 
 const stale = [];
 for (const file of activeFiles) {
-  const content = fs.readFileSync(path.join(root, file), 'utf8');
+  const fullPath = path.join(root, file);
+  if (!fs.existsSync(fullPath)) continue;
+  const content = fs.readFileSync(fullPath, 'utf8');
   if (content.includes(oldScope) || content.includes(oldTarballPrefix)) {
     stale.push(file);
   }

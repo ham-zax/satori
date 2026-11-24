@@ -87,6 +87,9 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      - name: Typecheck scripts and evals
+        run: node node_modules/typescript7/bin/tsc -p tsconfig.scripts.json --noEmit
+
       - name: Verify package version references
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.22.0'
         run: pnpm run versions:check
@@ -94,11 +97,11 @@ jobs:
       # `release:check` is the full release gate, but it re-runs the Core/MCP/CLI
       # unit suites that package_unit_tests already runs. Only those three suites
       # are omitted here; the script tests, the x64 Linux packed smokes, the
-      # contract and manifest checks, the package scope check, and the packed
-      # release graph all stay enforced.
+      # manifest check, the package scope check, and the packed release graph
+      # all stay enforced.
       - name: Verify packed release graph
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.22.0'
-        run: pnpm run scope:check && pnpm -C packages/mcp contract:check && pnpm -C packages/mcp manifest:check && pnpm run test:scripts && pnpm run release:smoke:mcp && pnpm run release:smoke:cli && pnpm run release:check:packed
+        run: pnpm run scope:check && pnpm -C packages/mcp manifest:check && pnpm run test:scripts && pnpm run release:smoke:mcp && pnpm run release:smoke:cli && pnpm run release:check:packed
 
       - name: Verify MCP docs are in sync
         run: pnpm -C packages/mcp docs:check

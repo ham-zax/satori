@@ -33,8 +33,14 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
+    embeddingNormalizationPolicy: 'provider_output_v1',
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
+    parserVersion: 'search-quality-v1-parser',
+    extractorVersion: 'search-quality-v1-extractor',
+    relationshipVersion: 'search-quality-v1-relationships',
+    embeddingProjectionVersion: 'embedding_projection_v3',
+    lexicalProjectionVersion: 'lexical_projection_v2',
 };
 
 type SearchScope = 'runtime' | 'mixed' | 'docs';
@@ -579,7 +585,7 @@ async function createEvaluationEnvironment(workspaceRoot: string): Promise<Evalu
         const publication: PublicationRef = {
             id: 'search-quality-v1',
             publication: {
-                version: 1, id: 'search-quality-v1', canonicalRoot: repoPath,
+                version: 2, id: 'search-quality-v1', canonicalRoot: repoPath,
                 createdAt: FIXED_INDEXED_AT, status: 'complete',
                 policy: {
                     profile: 'default', customExtensions: [], customIgnorePatterns: [],
@@ -592,12 +598,13 @@ async function createEvaluationEnvironment(workspaceRoot: string): Promise<Evalu
                     relationshipVersion: 'search-quality-v1-relationships',
                 },
                 vector: { collectionName: 'fixture', indexedFiles: manifest.files.length, totalChunks: manifest.candidates.length },
+                packageOwnership: false,
                 navigation: { relativeRoot: 'navigation' },
             },
         };
         const ready: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
             state: 'ready', root: { path: repoPath, info: { status: 'indexed' } },
-            publication, navigationStatus: 'valid', navigationAuthorityMode: 'canonical_v4',
+            publication, navigationStatus: 'valid',
         };
         const navigationStore = new JsonNavigationStore();
         const prepared = new PreparedReadCacheOwner({
@@ -665,6 +672,7 @@ async function createEvaluationEnvironment(workspaceRoot: string): Promise<Evalu
                 acquirePublicationLease: () => ({ ...publication, release: () => {} }),
                 isPublicationLeaseAdmitted: async () => true, isPublicationAdmitted: async () => true,
                 getPublicationNavigationStatus: async () => 'valid',
+                isPublishedSource: () => true,
             },
             freshness: {
                 inspectSourceFreshnessCheckpoint: unsupported,

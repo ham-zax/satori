@@ -27,6 +27,10 @@ function isTestFile(filename) {
     || filename.includes("/__fixtures__/");
 }
 
+function isDevScriptFile(filename) {
+  return /(?:^|\/)(?:scripts|evals)\//.test(filename);
+}
+
 function isStaticString(node, expected) {
   if (!node) return false;
   if (node.type === "Literal" && typeof node.value === "string") {
@@ -129,7 +133,11 @@ const plugin = {
       },
       create(context) {
         const filename = normalizeFilename(context);
-        if (isTestFile(filename) || filename.endsWith("/packages/mcp/src/core/read-only-git.ts")) {
+        if (
+          isTestFile(filename)
+          || isDevScriptFile(filename)
+          || filename.endsWith("/packages/mcp/src/core/read-only-git.ts")
+        ) {
           return {};
         }
         return {

@@ -14,7 +14,7 @@ import {
 } from '../language/registry';
 
 
-export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v4-catalog-shebang';
+export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v5-content-disambiguated-cls';
 
 export const MAX_INDEXED_SOURCE_FILE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_ALL_TEXT_MAX_BYTES = 1_048_576;

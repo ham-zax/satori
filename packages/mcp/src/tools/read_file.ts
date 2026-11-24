@@ -6,9 +6,10 @@ import {
     createIndexIgnoreMatcher,
     detectLanguageId,
     isLanguageCapabilitySupportedForExtension,
-    isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,
+    isSearchableLanguageSource,
     observeIndexPolicyInputs,
+    pathDeterminedLanguageId,
     recordSourceProcessing,
 } from "@satori-code/core";
 import {
@@ -437,10 +438,29 @@ async function buildReadFileIgnoreMatcher(
     }
 }
 
+function readBoundedLanguageProbe(absoluteFile: string, maxBytes: number = 4096): string | undefined {
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    let fd: number | undefined;
+    try {
+        fd = fs.openSync(absoluteFile, flags);
+        if (!fs.fstatSync(fd).isFile()) return undefined;
+        const buffer = Buffer.allocUnsafe(maxBytes);
+        const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+        return buffer.subarray(0, bytesRead).toString("utf8");
+    } catch {
+        return undefined;
+    } finally {
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch { /* best-effort */ }
+        }
+    }
+}
+
 /**
  * Live-path admission for one requested file, mirroring the search freshness
  * policy: the path must be changed/untracked per git status, language-capable
- * for search, and not excluded by the active or live on-disk ignore rules.
+ * for search (using bounded content disambiguation for `.cls`/`.m`/shebangs),
+ * and not excluded by the active or live on-disk ignore rules.
  */
 async function isLivePathAdmittedForRead(
     codebaseRoot: string,
@@ -456,8 +476,16 @@ async function isLivePathAdmittedForRead(
     if (!changed.available || !changed.files.has(relativePath)) {
         return false;
     }
-    if (!isLanguageCapabilitySupportedForFilename(relativePath, "search")) {
-        return false;
+    const pathLanguage = pathDeterminedLanguageId(relativePath);
+    if (pathLanguage !== undefined) {
+        if (!isLanguageCapabilitySupportedForLanguage(pathLanguage, "search")) {
+            return false;
+        }
+    } else {
+        const probe = readBoundedLanguageProbe(path.join(codebaseRoot, relativePath));
+        if (probe === undefined || !isSearchableLanguageSource(relativePath, probe)) {
+            return false;
+        }
     }
     const matcher = await buildReadFileIgnoreMatcher(codebaseRoot, ctx);
     if (matcher(relativePath)) {

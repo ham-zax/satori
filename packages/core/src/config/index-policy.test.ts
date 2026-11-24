@@ -9,6 +9,7 @@ import {
     MAX_INDEXED_SOURCE_FILE_BYTES,
     classifyFilePathByPolicy,
     isIndexableFileByPolicy,
+    INDEX_FILE_ADMISSION_VERSION,
     isIndexableFileByPolicySync,
     isIndexableFileObservationByPolicy,
     isIndexableFileObservationByPolicySync,
@@ -230,4 +231,5 @@ test('content-determined .cls policy rejects VB6 (including BOM) and admits Apex
     );
     assert.equal(throwingSync, false);
     assert.equal(throwingAsync, false);
+    assert.equal(INDEX_FILE_ADMISSION_VERSION, 'index-file-admission-v5-content-disambiguated-cls');
 });

@@ -229,7 +229,60 @@ const MAGMA_END_MARKERS = ['end function;', 'end procedure;', 'end intrinsic;', 
 const VB6_CLS_RE = /^(?:VERSION\s+1\.0\s+CLASS\b|Attribute\s+VB_(?:Name\s*=|GlobalNameSpace\b|Creatable\b)|BEGIN\r?\n[ \t]+MultiUse\s*=)/m;
 const UDL_CLASS_HEADER_RE = /^Class\s+(%?[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\b/m;
 const UDL_EXTENDS_RE = /\bExtends\s+(?:%[A-Za-z0-9_.]+|[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+|\([^)]+\))/;
-const UDL_MEMBER_RE = /\b(?:(?:ClassMethod|Method|Property|Relationship)\s+[A-Za-z%][A-Za-z0-9]*[^\r\n{}]*\bAs\b|Parameter\s+[A-Za-z%][A-Za-z0-9]*(?:\s+As\s+[^\r\n=]+)?\s*=|Index\s+[A-Za-z%][A-Za-z0-9]*\s+On\b|Storage\s+Default\b|XData\s+[A-Za-z%][A-Za-z0-9]*\b)/;
+const UDL_MEMBER_RE = /(?:^|[;{}])[ \t]*(?:(?:ClassMethod|Method|Property|Relationship)\s+[A-Za-z%][A-Za-z0-9]*[^\r\n{}]*\bAs\b|Parameter\s+[A-Za-z%][A-Za-z0-9]*(?:\s+As\s+[^\r\n=]+)?\s*=|Index\s+[A-Za-z%][A-Za-z0-9]*\s+On\b|Storage\s+Default\b|XData\s+[A-Za-z%][A-Za-z0-9]*\b)/m;
+
+function stripClsCommentsAndStrings(input: string): string {
+    let out = '';
+    let i = 0;
+    const len = input.length;
+    while (i < len) {
+        const ch = input[i];
+        const next = input[i + 1];
+        if (ch === '/' && next === '/') {
+            i += 2;
+            while (i < len && input[i] !== '\n' && input[i] !== '\r') {
+                out += ' ';
+                i += 1;
+            }
+            continue;
+        }
+        if (ch === '/' && next === '*') {
+            out += '  ';
+            i += 2;
+            while (i < len && !(input[i] === '*' && input[i + 1] === '/')) {
+                out += input[i] === '\n' || input[i] === '\r' ? input[i] : ' ';
+                i += 1;
+            }
+            if (i < len) {
+                out += '  ';
+                i += 2;
+            }
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            const quote = ch;
+            out += ' ';
+            i += 1;
+            while (i < len && input[i] !== quote && input[i] !== '\n' && input[i] !== '\r') {
+                if (input[i] === '\\' && i + 1 < len && input[i + 1] !== '\n' && input[i + 1] !== '\r') {
+                    out += '  ';
+                    i += 2;
+                } else {
+                    out += ' ';
+                    i += 1;
+                }
+            }
+            if (i < len && input[i] === quote) {
+                out += ' ';
+                i += 1;
+            }
+            continue;
+        }
+        out += ch;
+        i += 1;
+    }
+    return out;
+}
 
 function interpreterLanguage(interpreter: string): string | undefined {
     const base = interpreter.slice(interpreter.lastIndexOf('/') + 1);
@@ -262,10 +315,13 @@ function disambiguateDotM(head: string): string {
 function disambiguateDotCls(head: string, fallback: string): string {
     const cleanHead = head.startsWith('\uFEFF') ? head.slice(1) : head;
     if (VB6_CLS_RE.test(cleanHead)) return fallback;
-    const classHeader = UDL_CLASS_HEADER_RE.exec(cleanHead);
+    const stripped = stripClsCommentsAndStrings(cleanHead);
+    const classHeader = UDL_CLASS_HEADER_RE.exec(stripped);
     if (classHeader) {
         const hasDottedName = classHeader[1].includes('.');
-        if (hasDottedName || UDL_EXTENDS_RE.test(cleanHead) || UDL_MEMBER_RE.test(cleanHead)) {
+        const braceIdx = stripped.indexOf('{', classHeader.index);
+        const headerSlice = braceIdx >= 0 ? stripped.slice(classHeader.index, braceIdx) : stripped.slice(classHeader.index);
+        if (hasDottedName || UDL_EXTENDS_RE.test(headerSlice) || UDL_MEMBER_RE.test(stripped)) {
             return 'objectscript-udl';
         }
     }

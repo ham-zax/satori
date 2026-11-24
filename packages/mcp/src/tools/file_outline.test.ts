@@ -947,3 +947,81 @@ test('file_outline returns unsupported_language for ObjectScript UDL .cls and st
     assert.equal(apexPayload.reason, 'structural_evidence_unavailable');
     assert.equal(apexPayload.outline, null);
 });
+
+test('file_outline missing-registry branch disambiguates .cls by content: UDL and VB6 return unsupported_language while Apex returns requires_reindex', async (t) => {
+    const tmpBase = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'file-outline-cls-missing-')));
+    t.after(() => fs.rmSync(tmpBase, { recursive: true, force: true }));
+
+    const udlRel = 'Demo/Widget.cls';
+    const vb6Rel = 'vb6/Customer.cls';
+    const apexRel = 'classes/AccountService.cls';
+    fs.mkdirSync(path.join(tmpBase, 'Demo'), { recursive: true });
+    fs.mkdirSync(path.join(tmpBase, 'vb6'), { recursive: true });
+    fs.mkdirSync(path.join(tmpBase, 'classes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpBase, udlRel), 'Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n', 'utf8');
+    fs.writeFileSync(path.join(tmpBase, vb6Rel), 'VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = "Customer"\n', 'utf8');
+    fs.writeFileSync(path.join(tmpBase, apexRel), 'public with sharing class AccountService {\n    public static void run() {}\n}\n', 'utf8');
+
+    const lease = {
+        id: 'publication-cls-missing',
+        publication: { id: 'publication-cls-missing', canonicalRoot: tmpBase },
+        release: () => {},
+    } as PublicationLease;
+
+    const navigationHandlers = new NavigationHandlers({
+        toolResponseBuilders: { buildInvalidFileOutlineRequestPayload: ToolResponseBuilders.prototype.buildInvalidFileOutlineRequestPayload },
+        prepareNavigationRead: async () => ({ state: 'ready', root: { path: tmpBase }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => 'valid',
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        loadPreparedNavigationSymbolsByFile: async () => ({
+            status: 'missing',
+            reason: 'Symbol registry has not been built for this codebase.',
+        }),
+        getOutlineStatusForLanguage: () => 'ok',
+        buildRequiresReindexFileOutlinePayload: (
+            codebasePath: string,
+            input: { file: string },
+            message: string,
+            reason: string,
+        ) => ({
+            status: 'requires_reindex',
+            reason,
+            path: codebasePath,
+            file: input.file,
+            outline: null,
+            hasMore: false,
+            message,
+        }),
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+
+    const ctx = {
+        workspacePolicy: buildWorkspacePolicy([tmpBase]),
+        toolHandlers: {
+            navigationHandlers,
+            handleFileOutline: ToolHandlers.prototype.handleFileOutline,
+        } as unknown as ToolHandlers,
+    } as unknown as ToolContext;
+
+    for (const rel of [udlRel, vb6Rel]) {
+        const res = await fileOutlineTool.execute({ path: tmpBase, file: rel }, ctx);
+        assert.equal(res.isError, undefined, rel);
+        const payload = JSON.parse(res.content[0]!.text);
+        assert.equal(payload.status, 'unsupported', rel);
+        assert.equal(payload.reason, 'unsupported_language', rel);
+        assert.equal(payload.outline, null, rel);
+    }
+
+    const apexRes = await fileOutlineTool.execute({ path: tmpBase, file: apexRel }, ctx);
+    assert.equal(apexRes.isError, undefined);
+    const apexPayload = JSON.parse(apexRes.content[0]!.text);
+    assert.equal(apexPayload.status, 'requires_reindex');
+    assert.equal(apexPayload.reason, 'missing_symbol_registry');
+    assert.equal(apexPayload.outline, null);
+});

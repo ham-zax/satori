@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -404,4 +405,56 @@ test("annotated read_file checks .cls content so ObjectScript UDL and VB6 return
     }, ctx);
     assert.equal(JSON.parse(apexResponse.content[0].text).outlineStatus, "ok");
     assert.deepEqual(outlineCalls, ["src/AccountService.cls"]);
+});
+
+test("live read_file admission rejects dirty VB6 .cls while admitting dirty Apex and ObjectScript UDL .cls", async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-read-live-cls-")));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const trackedBody = "export const ok = true;\n";
+    fs.writeFileSync(path.join(root, "src/index.ts"), trackedBody, "utf8");
+    execFileSync("git", ["add", "src/index.ts"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: root });
+
+    // Dirty untracked .cls files (absent from published fileHashes manifest)
+    fs.writeFileSync(path.join(root, "src/Customer.cls"), "VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = \"Customer\"\n", "utf8");
+    fs.writeFileSync(path.join(root, "src/Widget.cls"), "Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n", "utf8");
+    fs.writeFileSync(path.join(root, "src/AccountService.cls"), "public with sharing class AccountService {\n    public static void run() {}\n}\n", "utf8");
+
+    const publication = { publication: { canonicalRoot: root } };
+    const ctx = {
+        readFileMaxLines: 200,
+        workspacePolicy: createSessionWorkspacePolicy({
+            roots: [root],
+            homeDirectory: "/home/user",
+            stateRoot: "/state",
+        }),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({
+                fileHashes: [["src/index.ts", sha256(Buffer.from(trackedBody, "utf8"))]],
+            }),
+            hasSearchableGeneration: () => true,
+            getCurrentSearchGeneration: () => ({ generationId: "gen-1", compatibility: "compatible" }),
+            getActiveIgnorePatterns: () => ["node_modules/**"],
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+    } as unknown as ToolContext;
+
+    const vb6Res = await readFileTool.execute({ path: path.join(root, "src/Customer.cls"), codebaseRoot: root }, ctx);
+    assert.equal(vb6Res.isError, true, "dirty VB6 .cls must be rejected by live read admission");
+
+    const udlRes = await readFileTool.execute({ path: path.join(root, "src/Widget.cls"), codebaseRoot: root }, ctx);
+    assert.notEqual(udlRes.isError, true, "dirty ObjectScript UDL .cls must be admitted");
+    assert.match(udlRes.content[0].text, /Class Demo\.Widget/);
+
+    const apexRes = await readFileTool.execute({ path: path.join(root, "src/AccountService.cls"), codebaseRoot: root }, ctx);
+    assert.notEqual(apexRes.isError, true, "dirty Apex .cls must be admitted");
+    assert.match(apexRes.content[0].text, /class AccountService/);
 });

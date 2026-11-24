@@ -253,6 +253,14 @@ test('content detection disambiguates .cls between ObjectScript UDL, Salesforce 
     assert.equal(detectLanguageId('classes/AccountService.cls', 'public with sharing class AccountService {\n    public static void run() {}\n}\n'), 'apex');
     assert.equal(detectLanguageId('classes/MyBatch.cls', 'global class MyBatch {\n    global void execute() {}\n}\n'), 'apex');
     assert.equal(detectLanguageId('classes/Plain.cls', 'Class PlainNoUdlMarkers {\n    void run() {}\n}\n'), 'apex');
+    assert.equal(
+        detectLanguageId('classes/CommentedApex.cls', 'Class Demo {\n    // Property example As String\n    /* Method Foo() As %Status */\n    String note = \'Parameter X = 1\';\n    void run() {}\n}\n'),
+        'apex',
+    );
+    assert.equal(
+        detectLanguageId('classes/HeaderCommentApex.cls', '// Class Demo.Fake Extends %RegisteredObject\nClass Demo {\n    /* Extends %Persistent */\n    void run() {}\n}\n'),
+        'apex',
+    );
 
     const vb6 = 'VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = "Customer"\n';
     assert.equal(detectLanguageId('vb6/Customer.cls', vb6), 'text');

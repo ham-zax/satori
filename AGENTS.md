@@ -47,6 +47,7 @@ Your global instructions (`~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENT
 * Validate untrusted input where it enters the system. Stable inputs give stable outputs, ordering, diagnostics, and generated artifacts.
 * Remove code the change makes obsolete unless an established contract requires compatibility.
 * Before changing public behavior, identify first-party consumers and update only those the change invalidates. Keep affected tests, schemas, documentation, and generated artifacts in sync.
+* **Version and policy identifiers:** Only add a version string at a real persistence, cache, or wire boundary. Use one monotonic version per boundary (plus dynamic artifact/tool hashes)—no permanent `+feature-v1` appendages, no frozen prose `"*_v1"` descriptor objects, and no runtime fixture self-verification on startup. Define every cross-package version or model ID once in `packages/core/src/runtime-contract.ts` and import it everywhere; never duplicate literals across packages or tests.
 * Comments explain intent, ownership, invariants, or surprising constraints.
 
 ## Verification

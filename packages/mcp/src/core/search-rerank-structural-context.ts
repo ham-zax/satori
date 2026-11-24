@@ -10,15 +10,10 @@ import { resolveCanonicalOwner } from "./search-rerank-projection.js";
 
 
 export const SEARCH_RERANK_STRUCTURAL_CONTEXT_POLICY = Object.freeze({
-    exactInstanceIdentityRequired: true,
-    callAdmission: "high_confidence_or_proof_backed_authoritative_call_v1",
     proofBackedAuthorities: ["direct_binding", "origin_flow"] as const,
-    testAdmission: "high_confidence_exact_instance_v1",
     maxDirectCallers: 3,
     maxDirectCallees: 3,
     maxSupportingTests: 2,
-    orderBy: ["relation", "repository_relative_path", "canonical_symbol_label"] as const,
-    referenceSourceText: false,
 });
 
 export type SearchRerankStructuralReference = Readonly<{

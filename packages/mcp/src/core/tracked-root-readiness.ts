@@ -91,7 +91,6 @@ export type TrackedRootReadinessState =
     | {
         state: "ready";
         root: TrackedRootEntry;
-        navigationAuthorityMode: "canonical_v4";
         proofDebugHint?: CompletionProbeDebugHint;
         publication: PublicationRef;
         navigationStatus: PublicationNavigationStatus;
@@ -513,10 +512,6 @@ export class TrackedRootReadiness {
         onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
     ): Promise<TrackedRootReadinessState> {
         const effectiveRoot = targetRoot.path;
-        const navigationAuthorityMode: Extract<
-            TrackedRootReadinessState,
-            { state: "ready" }
-        >["navigationAuthorityMode"] = "canonical_v4";
 
         const completionProof = await this.measureAsyncPhase(
             "completion_proof",
@@ -604,7 +599,6 @@ export class TrackedRootReadiness {
         return {
             state: "ready",
             root: targetRoot,
-            navigationAuthorityMode,
             publication: completionProof.publication,
             navigationStatus: completionProof.navigationStatus,
         };

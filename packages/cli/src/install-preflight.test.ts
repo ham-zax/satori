@@ -761,11 +761,11 @@ test("offline install plan composes Potion embeddings with LateOn D128 reranking
         assert.equal(result.runtimeEnvironment.SATORI_LATEON_MODEL_PATH, lateOnModelPath);
         assert.equal(
             result.runtimeEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(
             result.runtimeEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1024,11 +1024,11 @@ test("new offline install persists Potion embeddings and LateOn D128 in the mana
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
         const expectedModelDirectory = path.join(
             homeDir,
@@ -1140,7 +1140,7 @@ test("managed offline install acquires the pinned LateOn closure before activati
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
         assert.equal(fs.existsSync(launcherEnvironment.SATORI_LATEON_MODEL_PATH), true);
     } finally {
@@ -1525,11 +1525,11 @@ test("managed D16 + CLI --reranker lateon migrates to D128", async () => {
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1607,7 +1607,7 @@ test("Linux x64 with implicit Potion defaults to LateOn D128", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1646,7 +1646,7 @@ test("Linux x64 managed Potion keeps its LateOn D128 selection", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, POTION_MODEL_ID);
     } finally {
@@ -1718,7 +1718,7 @@ test("existing managed D128 stays D128", async () => {
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
+            SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
         },
     }), "utf8");
     try {
@@ -1736,11 +1736,11 @@ test("existing managed D128 stays D128", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -2065,7 +2065,7 @@ function seedManagedLateOnInstallation(homeDir: string): ManagedLateOnSnapshot {
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
+            SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
         },
     }), "utf8");
     return {
@@ -2412,8 +2412,8 @@ test("planned launcher environments carry Voyage provider and model in both runt
         potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
         reranker: "lateon",
         lateOnModelPath: "/tmp/satori-lateon-model",
-        lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",
-        lateOnActivationPolicy: "lateon_context_v6_d128_owner_default_v1",
+        lateOnProfileId: LATEON_PROFILE_ID,
+        lateOnActivationPolicy: LATEON_ACTIVATION_POLICY,
         platform: "linux",
         architecture: "x64",
     });
@@ -2487,8 +2487,8 @@ test("rebuilt launcher stores the Voyage model without the API key and removes i
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             reranker: "lateon",
             lateOnModelPath: path.join(homeDir, "lateon-model"),
-            lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",
-            lateOnActivationPolicy: "lateon_context_v6_d128_owner_default_v1",
+            lateOnProfileId: LATEON_PROFILE_ID,
+            lateOnActivationPolicy: LATEON_ACTIVATION_POLICY,
             platform: "linux",
             architecture: "x64",
         });

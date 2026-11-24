@@ -88,10 +88,12 @@ import {
 } from "./managed-runtime-store.js";
 import { activateAfterRetiringManagedRuntime } from "./runtime-activation.js";
 import { terminateSatoriServers } from "./terminate.js";
-import { resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
-    DEFAULT_LATEON_PROFILE_ID,
-    DEFAULT_LATEON_ACTIVATION_POLICY,
+    LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID,
+    resolveSatoriStateRoot,
+} from "./local-runtime-contract.js";
+import {
     resolveDefaultLateOnModelDirectory,
     type VerifiedLateOnModel,
 } from "./lateon-model-store.js";
@@ -235,8 +237,8 @@ export async function executeInstallCommand(
                     lateOnModelPath,
                     ...(reranker === "lateon"
                         ? {
-                            lateOnProfileId: DEFAULT_LATEON_PROFILE_ID,
-                            lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
+                            lateOnProfileId: LATEON_PROFILE_ID,
+                            lateOnActivationPolicy: LATEON_ACTIVATION_POLICY,
                         }
                         : {}),
                     potionAssetsRoot,
@@ -333,7 +335,7 @@ export async function executeInstallCommand(
                                 ? {
                                     lateOnModelPath: lateOnModel.modelDirectory,
                                     lateOnProfileId: lateOnModel.profileId,
-                                    lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
+                                    lateOnActivationPolicy: LATEON_ACTIVATION_POLICY,
                                 }
                                 : {}),
                             potionAssetsRoot,

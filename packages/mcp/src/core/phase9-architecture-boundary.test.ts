@@ -11,9 +11,7 @@ export interface BoundaryViolation {
 }
 
 const EXEMPT_RELATIVE_PATHS = new Set([
-    "packages/core/src/core/persisted-index-authority.ts",
     "packages/mcp/src/server/lateon-reranker-protocol.ts",
-    "packages/mcp/src/core/search-rerank-request-contract.ts",
     "packages/cli/src/runtime-upgrade.ts",
     "packages/cli/src/runtime-selection.ts",
     "packages/cli/src/managed-runtime-closure.ts",

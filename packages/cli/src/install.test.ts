@@ -31,7 +31,9 @@ import {
 } from "./managed-launcher-script.mjs";
 import { acquireManagedRuntimeMutationLock } from "./managed-runtime-store.js";
 import {
+    LATEON_ACTIVATION_POLICY,
     LATEON_FIXTURE_ARTIFACTS,
+    LATEON_PROFILE_ID,
     writeLateOnAcquisitionFixture,
     writeLateOnModelDirectory,
 } from "./test-fixtures/lateon-fixture.js";
@@ -1701,7 +1703,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
+            SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
         });
         const originalLauncher = readFile(launcherPath(homeDir));
         const originalConfig = readFile(path.join(homeDir, ".codex", "config.toml"));
@@ -1801,17 +1803,17 @@ test("legacy no-provider upgrade defaults to LateOn D128", async () => {
         });
 
         assert.equal(observedReranker, "lateon");
-        assert.equal(observedProfile, "lateon_offline_quality_projection_v6_d128_v1");
-        assert.equal(observedPolicy, "lateon_context_v6_d128_owner_default_v1");
+        assert.equal(observedProfile, LATEON_PROFILE_ID);
+        assert.equal(observedPolicy, LATEON_ACTIVATION_POLICY);
         const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
         );
     });
 });
@@ -2432,11 +2434,11 @@ test("managed connected Voyage launcher preserves the direct runtime lifecycle",
             path.join(root, "node_modules"),
             "dir",
         );
-        const contractAssetDirectory = path.join(root, "assets", "lateon");
-        fs.mkdirSync(contractAssetDirectory, { recursive: true });
+        const profileAssetDirectory = path.join(root, "assets", "lateon");
+        fs.mkdirSync(profileAssetDirectory, { recursive: true });
         fs.copyFileSync(
-            path.resolve(PACKAGE_ROOT, "..", "mcp", "assets", "lateon", "rerank-request-contract-v1.json"),
-            path.join(contractAssetDirectory, "rerank-request-contract-v1.json"),
+            path.resolve(PACKAGE_ROOT, "..", "mcp", "assets", "lateon", "runtime-profile-v6-d128.json"),
+            path.join(profileAssetDirectory, "runtime-profile-v6-d128.json"),
         );
         fs.writeFileSync(
             runtimeEntry,
@@ -3446,8 +3448,8 @@ test("OpenCode install removes stale launcher-owned runtime identity while prese
                         SATORI_RUNTIME_PROFILE: "offline",
                         EMBEDDING_PROVIDER: "Potion",
                         SATORI_RERANKER_PROVIDER: "lateon",
-                        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
-                        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
+                        SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
+                        SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
                         VOYAGEAI_API_KEY: "{env:VOYAGEAI_API_KEY}",
                     },
                 },

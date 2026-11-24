@@ -13,7 +13,6 @@ function buildReadyState(codebasePath: string, publicationId = "publication-1", 
     return {
         state: "ready",
         root: { path: codebasePath, info: { status: "indexed" } },
-        navigationAuthorityMode: "canonical_v4",
         navigationStatus: "valid",
         publication: {
             id: publicationId,

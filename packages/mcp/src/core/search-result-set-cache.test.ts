@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import { SEARCH_DISCLOSURE_POLICY_VERSION } from "./search-disclosure.js";
-import { resolveSearchRankingPolicyIdentity } from "./search-order-policy.js";
+import {
+    buildSearchRankedSetBinding,
+    resolveSearchRankingPolicyIdentity,
+} from "./search-result-set-identity.js";
 import {
     SearchContinuationCoordinator,
     SearchRequestCoordinator,
@@ -10,7 +13,6 @@ import {
     type SearchRequestCoordinatorCollaborators,
 } from "./search-request-coordinator.js";
 import { SearchQuerySupport } from "./search-query-support.js";
-import { buildSearchRankedSetBinding } from "./search-result-set-identity.js";
 import {
     SearchResultSetCache,
     SearchResultSetCoordinator,

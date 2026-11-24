@@ -75,10 +75,6 @@ import { buildSearchRetrievalScope } from "./search-retrieval-scope.js";
 import {
     isWriterActionTerm as isWriterActionTermHelper,
 } from "./search-ranking-policy.js";
-import {
-    resolveSearchRankingPolicyIdentity,
-    type SearchOrderAuthority,
-} from "./search-order-policy.js";
 import { SearchQuerySupport } from "./search-query-support.js";
 import {
     TrackedRootReadiness,
@@ -128,18 +124,21 @@ import {
     projectGroupedDisclosure,
 } from "./search-disclosure.js";
 import {
+    SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID,
     buildSearchRankedSetBinding,
+    resolveSearchRankingPolicyIdentity,
+    resolveSearchRerankRequestIdentity,
     verifySearchRankedSetBinding,
+    type SearchOrderAuthority,
     type SearchRankedSetBinding,
     type SearchRankedSetBindingInput,
+    type SearchRerankRequestIdentityV1,
     type SearchRerankerBindingIdentity,
 } from "./search-result-set-identity.js";
 import {
     SEARCH_RERANK_DOCUMENT_POLICY,
-} from "./search-rerank-document.js";
-import {
     resolveSearchRerankDocumentProjectionIdentity,
-} from "./search-rerank-document-routing.js";
+} from "./search-rerank-document.js";
 import {
     createSearchRerankProjectionRequestCache,
     projectPublicationBoundSearchRerankDocument,
@@ -148,19 +147,16 @@ import {
     VerifiedRerankSourceCache,
 } from "./search-rerank-projection.js";
 import type { SearchRerankProjectionResult } from "./search-rerank-projection-result.js";
-import { SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID } from "./search-order-policy.js";
 import {
     prepareSearchRerankStructuralRelationships,
     type PreparedSearchRerankStructuralRelationships,
 } from "./search-rerank-structural-context.js";
 import { resolveSearchRerankStructuralContextStatus } from "./search-rerank-structural-status.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
-import { buildSearchRerankQuery } from "./search-rerank-query.js";
-import { resolveSearchRerankQuery } from "./search-rerank-query-routing.js";
 import {
-    resolveSearchRerankRequestIdentity,
-    type SearchRerankRequestIdentityV1,
-} from "./search-rerank-request-contract.js";
+    buildSearchRerankQuery,
+    resolveSearchRerankQuery,
+} from "./search-rerank-query.js";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import type {
     SearchQueryPlan,
@@ -1389,7 +1385,6 @@ export class SearchRequestCoordinator {
                 const preparedReadState: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
                     state: 'ready',
                     root: searchableRoot,
-                    navigationAuthorityMode: 'canonical_v4',
                     proofDebugHint,
                     publication: {
                         id: lease.id,

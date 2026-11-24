@@ -10,13 +10,6 @@ import {
     type ModelSpec,
 } from "./model-store.js";
 
-/**
- * Managed D128 profile identity used for planning and install checks.
- * Real installation still binds the target MCP package's frozen authority.
- */
-export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v6_d128_v1";
-export const DEFAULT_LATEON_ACTIVATION_POLICY = "lateon_context_v6_d128_owner_default_v1";
-
 const LATEON_PROFILE_FILE = "runtime-profile-v6-d128.json";
 const LATEON_ACQUISITION_FILE = "runtime-profile-v6-d128.acquisition.json";
 const ACQUISITION_SCHEMA_VERSION = "satori_lateon_acquisition_v1";

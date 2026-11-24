@@ -545,7 +545,6 @@ test("Scenario G: readable Publication is served during same-root sync; reindex 
         const readyState = (): Extract<TrackedRootReadinessState, { state: "ready" }> => ({
             state: "ready",
             root: { path: codebasePath, info: {} as never },
-            navigationAuthorityMode: "canonical_v4",
             navigationStatus: "valid",
             publication: {
                 id: "publication-1",

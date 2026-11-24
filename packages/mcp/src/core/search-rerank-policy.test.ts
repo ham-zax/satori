@@ -4,6 +4,7 @@ import {
     buildRerankCandidatePool,
     selectRerankCandidates,
     selectRerankInputWithinUtf8Budget,
+    shouldCallRerankerForProjectedCandidateCount,
     type RerankCandidateLike,
 } from "./search-rerank-policy.js";
 
@@ -367,4 +368,10 @@ test("rerank selection remains stable after shuffled provider rows are determini
     });
 
     assert.deepEqual(shuffled.selected.map(({ id }) => id), forward.selected.map(({ id }) => id));
+});
+
+test("reranker call requires at least two projected candidates", () => {
+    assert.equal(shouldCallRerankerForProjectedCandidateCount(0), false);
+    assert.equal(shouldCallRerankerForProjectedCandidateCount(1), false);
+    assert.equal(shouldCallRerankerForProjectedCandidateCount(2), true);
 });

@@ -1,11 +1,12 @@
 import path from "node:path";
-import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
+import {
+    LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID,
+    POTION_DIMENSION,
+    POTION_MODEL_ID,
+} from "./local-runtime-contract.js";
 import { satoriCliCommand } from "./cli-command.js";
 import { RERANKER_PROVIDERS } from "./reranker-providers.js";
-import {
-    DEFAULT_LATEON_PROFILE_ID,
-    DEFAULT_LATEON_ACTIVATION_POLICY,
-} from "./lateon-model-store.js";
 
 export type RuntimeConfigCheckStatus = "ok" | "error";
 
@@ -193,7 +194,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 nextStep: "Set SATORI_LATEON_MODEL_PATH to the pinned shared model directory.",
             });
         const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-        if (activationPolicy && activationPolicy !== DEFAULT_LATEON_ACTIVATION_POLICY) {
+        if (activationPolicy && activationPolicy !== LATEON_ACTIVATION_POLICY) {
             checks.push({
                 name: "lateon_activation_policy",
                 status: "error",
@@ -201,8 +202,8 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 nextStep: `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
             });
         } else if (activationPolicy) {
-            const lateOnProfileId = env.SATORI_LATEON_PROFILE?.trim() ?? DEFAULT_LATEON_PROFILE_ID;
-            checks.push(lateOnProfileId === DEFAULT_LATEON_PROFILE_ID
+            const lateOnProfileId = env.SATORI_LATEON_PROFILE?.trim() ?? LATEON_PROFILE_ID;
+            checks.push(lateOnProfileId === LATEON_PROFILE_ID
                 ? {
                     name: "lateon_activation_policy",
                     status: "ok",
@@ -211,7 +212,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 : {
                     name: "lateon_activation_policy",
                     status: "error",
-                    message: `SATORI_LATEON_ACTIVATION_POLICY=${DEFAULT_LATEON_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
+                    message: `SATORI_LATEON_ACTIVATION_POLICY=${LATEON_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
                     nextStep: `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
                 });
         } else {

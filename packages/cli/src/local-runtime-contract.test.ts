@@ -14,6 +14,8 @@ const corePackageRoot = path.resolve(packageRoot, '..', 'core');
 
 const AUTHORITATIVE_NAMES = [
     'EMBEDDING_PROJECTION_VERSION',
+    'LATEON_ACTIVATION_POLICY',
+    'LATEON_PROFILE_ID',
     'LEXICAL_PROJECTION_VERSION',
     'POTION_MODEL_ID',
     'POTION_DIMENSION',
@@ -24,6 +26,8 @@ type RuntimeContractValues = Record<(typeof AUTHORITATIVE_NAMES)[number], string
 function pickAuthoritativeValues(source: Record<string, unknown>): RuntimeContractValues {
     return {
         EMBEDDING_PROJECTION_VERSION: source.EMBEDDING_PROJECTION_VERSION as string,
+        LATEON_ACTIVATION_POLICY: source.LATEON_ACTIVATION_POLICY as string,
+        LATEON_PROFILE_ID: source.LATEON_PROFILE_ID as string,
         LEXICAL_PROJECTION_VERSION: source.LEXICAL_PROJECTION_VERSION as string,
         POTION_MODEL_ID: source.POTION_MODEL_ID as string,
         POTION_DIMENSION: source.POTION_DIMENSION as number,
@@ -58,6 +62,8 @@ test('built local runtime contract works in an isolated package without core ins
 const contract = await import('./local-runtime-contract.js');
 process.stdout.write(JSON.stringify({
     EMBEDDING_PROJECTION_VERSION: contract.EMBEDDING_PROJECTION_VERSION,
+    LATEON_ACTIVATION_POLICY: contract.LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID: contract.LATEON_PROFILE_ID,
     LEXICAL_PROJECTION_VERSION: contract.LEXICAL_PROJECTION_VERSION,
     POTION_MODEL_ID: contract.POTION_MODEL_ID,
     POTION_DIMENSION: contract.POTION_DIMENSION,

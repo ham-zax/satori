@@ -1,5 +1,9 @@
 import path from "node:path";
-import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
+import {
+    LATEON_PROFILE_ID,
+    POTION_DIMENSION,
+    POTION_MODEL_ID,
+} from "./local-runtime-contract.js";
 import { CliError } from "./errors.js";
 import { satoriCliCommand } from "./cli-command.js";
 import type {
@@ -19,7 +23,6 @@ import {
 } from "./client-config-inspection.js";
 import type { InstallCommandInput } from "./install-contracts.js";
 import {
-    DEFAULT_LATEON_PROFILE_ID,
     ensureDefaultLateOnModel,
     resolveDefaultLateOnModelDirectory,
     verifyLateOnModelDirectory,
@@ -34,10 +37,10 @@ function staleManagedLateOnProfile(
 ): string | null {
     const managed = managedEnvironment.SATORI_RERANKER_PROVIDER;
     const profile = managedEnvironment.SATORI_LATEON_PROFILE?.trim();
-    if (managed === "lateon" && profile !== DEFAULT_LATEON_PROFILE_ID) {
+    if (managed === "lateon" && profile !== LATEON_PROFILE_ID) {
         return profile || "(missing)";
     }
-    if (!managed && profile && profile !== DEFAULT_LATEON_PROFILE_ID) {
+    if (!managed && profile && profile !== LATEON_PROFILE_ID) {
         return profile;
     }
     return null;
@@ -109,7 +112,7 @@ export function resolveOfflineReranker(
         }
         if (managed === "lateon") {
             const profile = managedEnvironment.SATORI_LATEON_PROFILE?.trim();
-            if (profile !== DEFAULT_LATEON_PROFILE_ID) {
+            if (profile !== LATEON_PROFILE_ID) {
                 throw staleLateOnProfileError(profile || "(missing)");
             }
             if (!isQualifiedPlatform) rejectUnsupportedLateOn();
@@ -199,10 +202,10 @@ export function assertDefaultLateOnProfile(
 ): void {
     if (reranker !== "lateon" || explicitSelection) return;
     const configured = env.SATORI_LATEON_PROFILE?.trim();
-    if (configured && configured !== DEFAULT_LATEON_PROFILE_ID) {
+    if (configured && configured !== LATEON_PROFILE_ID) {
         throw new CliError(
             "E_USAGE",
-            `Offline installation defaults to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${configured}.`,
+            `Offline installation defaults to SATORI_LATEON_PROFILE=${LATEON_PROFILE_ID}; received ${configured}.`,
             2,
         );
     }

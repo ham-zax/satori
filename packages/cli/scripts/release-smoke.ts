@@ -16,7 +16,10 @@ import {
 import { pruneManagedRuntimeDeadWeight } from "../src/managed-runtime-prune.js";
 import { resolvePotionAssetsRoot } from "../src/managed-runtime-paths.js";
 import {
-    DEFAULT_LATEON_PROFILE_ID,
+    LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID,
+} from "../src/local-runtime-contract.js";
+import {
     readLateOnAcquisitionAuthority,
 } from "../src/lateon-model-store.js";
 import { assertPackedDoctorReport } from "../src/release-smoke-report.js";
@@ -128,11 +131,11 @@ async function installAndVerifyPackedReleaseClosure(
     },
     installRoot: string,
     env: NodeJS.ProcessEnv,
-): {
+): Promise<{
     cliEntry: string;
     packedCliRoot: string;
     packedMcpRoot: string;
-} {
+}> {
     const sourceCli = readManifest(path.join(sourceRoots.cli, "package.json"));
     const sourceMcp = readManifest(path.join(sourceRoots.mcp, "package.json"));
     const sourceCore = readManifest(path.join(sourceRoots.core, "package.json"));
@@ -406,9 +409,9 @@ function assertPackedLateOnAcquisitionAuthority(packedMcpRoot: string, packedCli
         }
     }
     const authority = readLateOnAcquisitionAuthority(packedMcpRoot);
-    if (authority.profileId !== DEFAULT_LATEON_PROFILE_ID) {
+    if (authority.profileId !== LATEON_PROFILE_ID) {
         throw new Error(
-            `Packed LateOn acquisition authority must be ${DEFAULT_LATEON_PROFILE_ID}; received ${authority.profileId}.`,
+            `Packed LateOn acquisition authority must be ${LATEON_PROFILE_ID}; received ${authority.profileId}.`,
         );
     }
     for (const artifact of authority.artifacts) {
@@ -440,18 +443,20 @@ export function assertPackedLateOnNativeRuntime(packedMcpRoot: string): void {
     } catch (error) {
         throw new Error(
             `Packed LateOn runtime cannot load Sharp's Linux ${process.arch} native closure: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
         );
     }
 }
 
 function assertPackedCliLateOnAcquisition(packedCliRoot: string): void {
+    const identitiesPath = path.join(packedCliRoot, "dist", "runtime-identities.cjs");
     const storePath = path.join(packedCliRoot, "dist", "lateon-model-store.js");
     const installPath = path.join(packedCliRoot, "dist", "install.js");
-    if (!fs.existsSync(storePath) || !fs.existsSync(installPath)) {
-        throw new Error("Packed CLI must ship the LateOn acquisition module.");
+    if (!fs.existsSync(identitiesPath) || !fs.existsSync(storePath) || !fs.existsSync(installPath)) {
+        throw new Error("Packed CLI must ship the LateOn acquisition module and shared runtime identities.");
     }
-    const storeSource = fs.readFileSync(storePath, "utf8");
-    const policyMissing = !storeSource.includes("lateon_context_v6_d128_owner_default_v1");
+    const identitiesSource = fs.readFileSync(identitiesPath, "utf8");
+    const policyMissing = !identitiesSource.includes(LATEON_ACTIVATION_POLICY);
     const installSource = fs.readFileSync(installPath, "utf8");
     const resolutionMissing = !installSource.includes("resolveVerifiedLateOnModel");
     if (policyMissing || resolutionMissing) {
@@ -700,7 +705,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
         : undefined;
 }
 
-function readToolJson(result: { isError?: boolean; content?: unknown }): Record<string, unknown> {
+function readToolJson(result: Record<string, unknown>): Record<string, unknown> {
     const content = Array.isArray(result.content) ? result.content : [];
     const text = content
         .map((part) => asRecord(part))
@@ -784,7 +789,7 @@ function writeOfflineJourneyFixture(fixtureRepo: string): void {
 }
 
 async function assertOfflineJourneySearch(
-    session: { callTool(name: string, args: Record<string, unknown>): Promise<{ isError?: boolean; content?: unknown }> },
+    session: { callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> },
     fixtureRepo: string,
     expectedProvider: "lateon" | "none",
 ): Promise<{ publicationId: string }> {

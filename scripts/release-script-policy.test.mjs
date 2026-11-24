@@ -54,7 +54,6 @@ test('release qualification owns the complete production gate', () => {
     'pnpm -C packages/mcp run test:raw',
     'pnpm -C packages/cli run test:raw',
     'pnpm run test:scripts',
-    'pnpm -C packages/mcp contract:check',
     'pnpm -C packages/mcp docs:check',
     'pnpm -C packages/mcp manifest:check',
     'pnpm run release:smoke:mcp',

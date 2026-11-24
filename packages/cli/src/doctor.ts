@@ -4,13 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveSatoriStateRoot } from "./local-runtime-contract.js";
+import { LATEON_PROFILE_ID, resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
     readManagedRuntimeRelease,
     resolveCliPackageJsonPath,
     resolveManagedPackageSpecifier,
 } from "./managed-package.js";
-import { DEFAULT_LATEON_PROFILE_ID } from "./lateon-model-store.js";
 import {
     inspectManagedClientConfigurations,
     type ManagedClientConfigProof,
@@ -357,8 +356,8 @@ function buildRuntimeConfigurationRows(
                 }
                 : {}),
             rerankerProfile: selection.rerankerProvider === "lateon"
-                && (context.environment.SATORI_LATEON_PROFILE?.trim() ?? DEFAULT_LATEON_PROFILE_ID) === DEFAULT_LATEON_PROFILE_ID
-                ? DEFAULT_LATEON_PROFILE_ID
+                && (context.environment.SATORI_LATEON_PROFILE?.trim() ?? LATEON_PROFILE_ID) === LATEON_PROFILE_ID
+                ? LATEON_PROFILE_ID
                 : null,
             vectorStore: allowlistedValue(selection.vectorStore, DISPLAYED_VECTOR_STORES),
         };

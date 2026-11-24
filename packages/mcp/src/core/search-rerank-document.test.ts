@@ -3,6 +3,7 @@ import test from "node:test";
 import { createBoundedSourceSelector } from "./bounded-source-selector.js";
 import {
     buildSearchRerankDocument,
+    resolveSearchRerankDocumentProjectionIdentity,
     SEARCH_RERANK_DOCUMENT_POLICY,
 } from "./search-rerank-document.js";
 import {
@@ -366,11 +367,6 @@ test("canonical projection with empty structural context keeps declaration and p
     assert.equal("language" in parsed, false);
     assert.equal("documentation_excerpt" in parsed, false);
     assert.equal("required_owner_siblings" in parsed, false);
-    assert.deepEqual(SEARCH_RERANK_DOCUMENT_POLICY.fieldSetDecision, {
-        language: "intentionally_omitted_v1",
-        documentationExcerpt: "intentionally_removed_v1",
-        requiredOwnerSiblings: "superseded_by_structural_context_v1",
-    });
 });
 
 test("canonical projection stays within 4,000 UTF-8 bytes under a full structural context and truncates references before source", () => {
@@ -522,4 +518,27 @@ test("canonical projection carries no ranking or score state", () => {
     ]) {
         assert.ok(!result.text.includes(field), `document must not leak ${field}`);
     }
+});
+
+test("missing or blank projection identity resolves to raw native document identity", () => {
+    assert.equal(resolveSearchRerankDocumentProjectionIdentity(undefined), "semantic_document_raw_v1");
+    assert.equal(resolveSearchRerankDocumentProjectionIdentity("   "), "semantic_document_raw_v1");
+    assert.equal(
+        resolveSearchRerankDocumentProjectionIdentity("semantic_document_raw_v1"),
+        "semantic_document_raw_v1",
+    );
+});
+
+test("retired search_rerank_document_v1 identity is rejected", () => {
+    assert.throws(
+        () => resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v1"),
+        /search_rerank_document_projection_identity_unknown:search_rerank_document_v1/,
+    );
+});
+
+test("search_rerank_document_v5 identity resolves to canonical projector identity", () => {
+    assert.equal(
+        resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v5"),
+        "search_rerank_document_v5",
+    );
 });

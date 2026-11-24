@@ -1,7 +1,7 @@
 import { SATORI_CLI_NPX_COMMAND, type DoctorCheck, type DoctorResult } from "./doctor.js";
 import type { CliWriters } from "./format.js";
 import { sanitizeTerminalText } from "./terminal-sanitize.js";
-import { DEFAULT_LATEON_PROFILE_ID } from "./lateon-model-store.js";
+import { LATEON_PROFILE_ID } from "./local-runtime-contract.js";
 
 export interface DoctorTextOptions {
     verbose: boolean;
@@ -72,7 +72,7 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
             : modelLabel(configuration.embeddingModel) ?? "—",
         configuration.embeddingDimension ?? "—",
         configuration.rerankerProvider === "lateon"
-            ? configuration.rerankerProfile === DEFAULT_LATEON_PROFILE_ID
+            ? configuration.rerankerProfile === LATEON_PROFILE_ID
                 ? "LateOn · Code-edge D128"
                 : "LateOn · profile unknown"
             : configuration.rerankerProvider === "voyage"

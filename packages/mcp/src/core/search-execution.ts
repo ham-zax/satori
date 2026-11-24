@@ -25,9 +25,9 @@ import type {
 import type { EntrypointOwnerEvidenceResolution } from "./entrypoint-owner-evidence.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
 import { allowsDefinitionDiscovery, type DefinitionDiscoveryMetadata } from "./search-definition-discovery.js";
-import type { SearchOrderAuthority } from "./search-order-policy.js";
-export type { SearchOrderAuthority } from "./search-order-policy.js";
-import type { SearchRerankQueryProjectionIdentity } from "./search-rerank-query-routing.js";
+import type { SearchOrderAuthority } from "./search-result-set-identity.js";
+export type { SearchOrderAuthority } from "./search-result-set-identity.js";
+import type { SearchRerankQueryProjectionIdentity } from "./search-rerank-query.js";
 import {
     appendCoreCandidateTrace,
     appendSearchCandidatePass,

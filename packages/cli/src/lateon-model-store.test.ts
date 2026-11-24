@@ -5,8 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { LATEON_PROFILE_ID } from "./local-runtime-contract.js";
 import {
-    DEFAULT_LATEON_PROFILE_ID,
     calculateRequiredLateOnFreeBytes,
     ensureDefaultLateOnModel,
     loadAcquisitionAuthority,
@@ -30,7 +30,7 @@ function writeAcquisitionFixture(
     fs.mkdirSync(assetsRoot, { recursive: true });
     const profile = {
         schemaVersion: "satori_lateon_runtime_profile_v6",
-        profileId: DEFAULT_LATEON_PROFILE_ID,
+        profileId: LATEON_PROFILE_ID,
         identity: {
             repository: "lightonai/LateOn-Code-edge",
             revision: REVISION,
@@ -107,7 +107,7 @@ test("shipped dry-run profile ID equals the frozen shipped profile ID", () => {
         path.join(SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v6-d128.json"),
         "utf8",
     ));
-    assert.equal(profile.profileId, DEFAULT_LATEON_PROFILE_ID);
+    assert.equal(profile.profileId, LATEON_PROFILE_ID);
     assert.equal(profile.identity.repository, "lightonai/LateOn-Code-edge");
     assert.equal(profile.identity.revision, REVISION);
     const runtimePackage = JSON.parse(fs.readFileSync(
@@ -127,7 +127,7 @@ test("acquisition manifest binds the exact frozen profile digest", () => {
     ), "utf8"));
     assert.equal(authority.runtimeProfileSha256, digest(profileBytes));
     assert.equal(acquisition.runtimeProfileSha256, digest(profileBytes));
-    assert.equal(authority.profileId, DEFAULT_LATEON_PROFILE_ID);
+    assert.equal(authority.profileId, LATEON_PROFILE_ID);
     assert.equal(authority.totalExpectedArtifactBytes, 71577202);
     assert.equal(authority.downloadDeadlineMilliseconds, 10 * 60 * 1000);
     assert.equal(authority.maximumRedirects, 5);
@@ -170,7 +170,7 @@ test("LateOn model store downloads the pinned closure once and reuses it", async
 
         assert.equal(first.modelDirectory, resolveDefaultLateOnModelDirectory(homeDir));
         assert.equal(second.modelDirectory, first.modelDirectory);
-        assert.equal(second.profileId, DEFAULT_LATEON_PROFILE_ID);
+        assert.equal(second.profileId, LATEON_PROFILE_ID);
         assert.equal(second.runtimeProfileSha256, first.runtimeProfileSha256);
         assert.equal(
             fs.readFileSync(path.join(first.modelDirectory, "model.onnx"), "utf8"),
@@ -400,7 +400,7 @@ test("verifyLateOnModelDirectory accepts a verified explicit directory", async (
         writeModelDirectory(modelDirectory, artifacts);
         const verified = verifyLateOnModelDirectory({ modelDirectory, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority });
         assert.equal(verified.modelDirectory, path.resolve(modelDirectory));
-        assert.equal(verified.profileId, DEFAULT_LATEON_PROFILE_ID);
+        assert.equal(verified.profileId, LATEON_PROFILE_ID);
         assert.equal(verified.runtimeProfileSha256.length, 64);
     });
 });

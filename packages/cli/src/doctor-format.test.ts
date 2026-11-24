@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatDoctorText } from "./doctor-format.js";
 import type { DoctorResult } from "./doctor.js";
+import { LATEON_PROFILE_ID } from "./local-runtime-contract.js";
 
 function resultWithActiveRuntime(): DoctorResult {
     return {
@@ -64,7 +65,7 @@ test("Doctor renders effective configuration for every supported client as a tab
                 embeddingModel: "potion-code",
                 embeddingDimension: "256",
                 rerankerProvider: "lateon",
-                rerankerProfile: "lateon_offline_quality_projection_v6_d128_v1",
+                rerankerProfile: LATEON_PROFILE_ID,
                 vectorStore: "LanceDB",
             },
             {
@@ -204,7 +205,7 @@ test("Doctor renders Cursor, VS Code, Windsurf, and Pi in runtime table and expa
                 embeddingModel: "potion-code",
                 embeddingDimension: "256",
                 rerankerProvider: "lateon",
-                rerankerProfile: "lateon_offline_quality_projection_v6_d128_v1",
+                rerankerProfile: LATEON_PROFILE_ID,
                 vectorStore: "LanceDB",
             },
             {

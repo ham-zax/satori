@@ -1,12 +1,17 @@
+import {
+    LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID,
+} from "@satori-code/core/runtime-contract";
+
 export const LATEON_RUNTIME_PROFILE_IDS = Object.freeze({
-    contextV6D128: "lateon_offline_quality_projection_v6_d128_v1",
+    contextV6D128: LATEON_PROFILE_ID,
 } as const);
 
 export type LateOnRuntimeProfileId =
     typeof LATEON_RUNTIME_PROFILE_IDS[keyof typeof LATEON_RUNTIME_PROFILE_IDS];
 
 export const LATEON_ACTIVATION_POLICY_IDS = Object.freeze({
-    ownerDefaultContextV6: "lateon_context_v6_d128_owner_default_v1",
+    ownerDefaultContextV6: LATEON_ACTIVATION_POLICY,
 } as const);
 
 export type LateOnActivationPolicyId =
@@ -22,11 +27,7 @@ type LateOnRuntimeProfileBase = Readonly<{
         repository: string;
         revision: string;
         license: "Apache-2.0";
-        projectionVersion:
-            | "search_rerank_document_v1"
-            | "search_rerank_document_v2"
-            | "search_rerank_document_v3"
-            | "search_rerank_document_v5";
+        projectionVersion: "search_rerank_document_v5";
         projectionSha256?: string;
     }>;
     artifacts: readonly LateOnArtifactContract[];
@@ -62,7 +63,6 @@ export type LateOnRuntimeProfileV6 = LateOnRuntimeProfileBase & Readonly<{
         projectionVersion: "search_rerank_document_v5";
         projectionSha256: string;
         queryProjectionVersion: "search_rerank_query_v2";
-        requestContractSha256: string;
     }>;
     execution: Readonly<{
         workerProcesses: 1;

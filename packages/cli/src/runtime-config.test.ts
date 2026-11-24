@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID } from "./local-runtime-contract.js";
 import { evaluateStaticRuntimeConfig } from "./runtime-config.js";
 
 test("retired reranker application mode fails clearly during CLI configuration checks", () => {
@@ -100,11 +101,11 @@ test("static runtime config exposes the bound LateOn activation policy", () => {
         POTION_MODEL_PATH: "/opt/satori/potion/model",
         SATORI_RERANKER_PROVIDER: "lateon",
         SATORI_LATEON_MODEL_PATH: "/opt/satori/models/lateon-code-edge",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
+        SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
     });
     const boundCheck = bound.find((check) => check.name === "lateon_activation_policy");
     assert.equal(boundCheck?.status, "ok");
-    assert.match(boundCheck?.message || "", /LateOn activation policy: lateon_context_v6_d128_owner_default_v1\./);
+    assert.match(boundCheck?.message || "", new RegExp(`LateOn activation policy: ${LATEON_ACTIVATION_POLICY}\\.`));
 
     const unbound = evaluateStaticRuntimeConfig({
         SATORI_RUNTIME_PROFILE: "offline",
@@ -143,7 +144,7 @@ test("static runtime config rejects an invalid LateOn activation policy", () => 
 test("static runtime config ignores a LateOn activation policy without the lateon provider", () => {
     for (const provider of ["none", "voyage"] as const) {
         for (const activationPolicy of [
-            "lateon_context_v6_d128_owner_default_v1",
+            LATEON_ACTIVATION_POLICY,
             "untrusted_policy_v1",
         ]) {
             const checks = evaluateStaticRuntimeConfig({
@@ -178,13 +179,13 @@ test("static runtime config rejects the context-v3 policy without the activated 
         SATORI_RERANKER_PROVIDER: "lateon",
         SATORI_LATEON_MODEL_PATH: "/opt/satori/models/lateon-code-edge",
         SATORI_LATEON_PROFILE: "lateon_projection_v2_d16_v1",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
+        SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
     });
     const policy = checks.find((check) => check.name === "lateon_activation_policy");
     assert.equal(policy?.status, "error");
     assert.match(
         policy?.message || "",
-        /SATORI_LATEON_ACTIVATION_POLICY=lateon_context_v6_d128_owner_default_v1 requires SATORI_LATEON_PROFILE=lateon_offline_quality_projection_v6_d128_v1; received lateon_projection_v2_d16_v1\./,
+        new RegExp(`SATORI_LATEON_ACTIVATION_POLICY=${LATEON_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${LATEON_PROFILE_ID}; received lateon_projection_v2_d16_v1\\.`),
     );
 });
 

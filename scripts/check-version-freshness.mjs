@@ -90,6 +90,13 @@ const SHARED_RUNTIME_CONTRACT_NAMES = [
   'LEXICAL_PROJECTION_VERSION',
   'POTION_MODEL_ID',
   'POTION_DIMENSION',
+  'LATEON_PROFILE_ID',
+  'LATEON_ACTIVATION_POLICY',
+];
+
+const SHARED_RUNTIME_CONTRACT_OWNED_LITERALS = [
+  { name: 'LATEON_PROFILE_ID', value: 'lateon_offline_quality_projection_v6_d128_v1' },
+  { name: 'LATEON_ACTIVATION_POLICY', value: 'lateon_context_v6_d128_owner_default_v1' },
 ];
 
 const SHARED_RUNTIME_CONTRACT_CANONICAL_PATH = 'packages/core/src/runtime-contract.ts';
@@ -98,6 +105,9 @@ const SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS = [
   'packages/core/src/core/search-projections.ts',
   'packages/core/src/embedding/potion-embedding.ts',
   'packages/cli/src/local-runtime-contract.ts',
+  'packages/cli/src/lateon-model-store.ts',
+  'packages/cli/src/test-fixtures/lateon-fixture.ts',
+  'packages/mcp/src/server/lateon-reranker-protocol.ts',
 ];
 
 export function findSharedContractOwnershipViolations(files) {
@@ -114,10 +124,19 @@ export function findSharedContractOwnershipViolations(files) {
   const findings = [];
   for (const filePath of SHARED_RUNTIME_CONTRACT_FORMER_OWNER_PATHS) {
     const content = files.get(filePath);
+    const seenNames = new Set();
     for (const name of SHARED_RUNTIME_CONTRACT_NAMES) {
       const declaration = new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
       if (declaration.test(content)) {
+        seenNames.add(name);
         findings.push({ filePath, name });
+      }
+    }
+    for (const entry of SHARED_RUNTIME_CONTRACT_OWNED_LITERALS) {
+      if (seenNames.has(entry.name)) continue;
+      const literal = new RegExp(`['"]${entry.value}['"]`);
+      if (literal.test(content)) {
+        findings.push({ filePath, name: entry.name });
       }
     }
   }

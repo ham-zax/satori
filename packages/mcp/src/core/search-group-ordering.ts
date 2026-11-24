@@ -1,5 +1,5 @@
 import type { SearchGroupResult } from "./search-types.js";
-import type { SearchOrderAuthority } from "./search-order-policy.js";
+import type { SearchOrderAuthority } from "./search-result-set-identity.js";
 
 export function isDeclarationSearchGroup(group: SearchGroupResult): boolean {
     const label = group.displayLabel.trim().toLowerCase();

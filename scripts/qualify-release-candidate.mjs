@@ -14,7 +14,6 @@ export const RELEASE_QUALIFICATION_COMMANDS = Object.freeze([
   Object.freeze({ label: 'MCP tests', cached: true, command: 'pnpm', args: Object.freeze(['-C', 'packages/mcp', 'run', 'test:raw']) }),
   Object.freeze({ label: 'CLI tests', cached: true, command: 'pnpm', args: Object.freeze(['-C', 'packages/cli', 'run', 'test:raw']) }),
   Object.freeze({ label: 'release script tests', cached: true, command: 'pnpm', args: Object.freeze(['run', 'test:scripts']) }),
-  Object.freeze({ label: 'MCP request contract', cached: true, command: 'pnpm', args: Object.freeze(['-C', 'packages/mcp', 'contract:check']) }),
   Object.freeze({ label: 'MCP documentation', cached: true, command: 'pnpm', args: Object.freeze(['-C', 'packages/mcp', 'docs:check']) }),
   Object.freeze({ label: 'MCP manifest', command: 'pnpm', args: Object.freeze(['-C', 'packages/mcp', 'manifest:check']) }),
   Object.freeze({ label: 'MCP packed smoke', cached: true, parallel: true, command: 'pnpm', args: Object.freeze(['run', 'release:smoke:mcp']) }),

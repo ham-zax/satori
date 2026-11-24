@@ -34,8 +34,6 @@
     "docs:check": "tsx scripts/generate-docs.ts --check",
     "manifest:generate": "tsx scripts/generate-server-manifest.ts",
     "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
-    "contract:generate": "tsx scripts/generate-rerank-request-contract.ts",
-    "contract:check": "tsx scripts/generate-rerank-request-contract.ts --check",
     "release:smoke": "tsx scripts/release-smoke.ts",
     "test:release-smoke": "node --import tsx --test scripts/release-smoke.test.ts",
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",

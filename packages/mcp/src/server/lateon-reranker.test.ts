@@ -32,10 +32,9 @@ import type {
     LateOnEncoderRequest,
     LateOnEncoderResponse,
 } from "./lateon-reranker-protocol.js";
-import { resolveSearchRerankQuery } from "../core/search-rerank-query-routing.js";
-import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
 import { buildSearchRerankDocument } from "../core/search-rerank-document.js";
-import { buildSearchRerankQuery } from "../core/search-rerank-query.js";
+import { buildSearchRerankQuery, resolveSearchRerankQuery } from "../core/search-rerank-query.js";
+import { LATEON_PROFILE_ID } from "@satori-code/core/runtime-contract";
 
 type FakeWorkerOptions = Readonly<{
     readyDelayMilliseconds?: number;
@@ -578,17 +577,13 @@ test("LateOn native request scores all 128 candidates and rejects overflow befor
 test("LateOn context-v6 profile keeps query-v2 and document-v5 semantic projections", () => {
     const v5 = loadLateOnRuntimeProfile(LATEON_RUNTIME_PROFILE_IDS.contextV6D128);
     assert.equal(v5.schemaVersion, "satori_lateon_runtime_profile_v6");
-    assert.equal(v5.profileId, "lateon_offline_quality_projection_v6_d128_v1");
+    assert.equal(v5.profileId, LATEON_PROFILE_ID);
     assert.equal(v5.qualificationStatus, "owner_activated_not_held_out");
     assert.equal(v5.identity.projectionVersion, "search_rerank_document_v5");
     assert.equal(v5.identity.queryProjectionVersion, "search_rerank_query_v2");
     assert.equal(
         v5.identity.projectionSha256,
         "b9131931424dae9430e0f954af1f79dec1b12fed76dc785bb9b73351fff7f712",
-    );
-    assert.equal(
-        v5.identity.requestContractSha256,
-        loadSearchRerankRequestContract().contractSha256,
     );
 });
 

@@ -22,7 +22,7 @@ function prepared(id: string, root = '/repo'): Extract<TrackedRootReadinessState
     };
     return {
         state: 'ready', root: { path: root, info: { status: 'indexed' } },
-        publication, navigationStatus: 'valid', navigationAuthorityMode: 'canonical_v4',
+        publication, navigationStatus: 'valid',
     };
 }
 

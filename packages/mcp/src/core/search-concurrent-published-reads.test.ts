@@ -58,7 +58,6 @@ test('parallel searches execute concurrently against pinned publication during a
         proofDebugHint: undefined,
         publication: publicationRef(tempRoot, 'publication-15', 'col_gen_15', 'pol-15'),
         navigationStatus: 'valid' as const,
-        navigationAuthorityMode: 'canonical_v4' as const,
     };
 
     let concurrentReadsObserved = 0;
@@ -256,7 +255,6 @@ test('SearchRequestCoordinator preserves pinned reader A on Gen N across Gen N+1
                         proofDebugHint: undefined,
                         publication,
                         navigationStatus: 'valid' as const,
-                        navigationAuthorityMode: 'canonical_v4' as const,
                     };
                     return isN
                         ? {
@@ -480,7 +478,6 @@ test('coordinator characterization: five parallel stale reads stay pinned across
                         proofDebugHint: undefined,
                         publication,
                         navigationStatus: 'valid' as const,
-                        navigationAuthorityMode: 'canonical_v4' as const,
                     };
                     return isN
                         ? {

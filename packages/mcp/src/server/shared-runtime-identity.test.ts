@@ -16,7 +16,10 @@ import {
     removeOwnedLifecycleState,
     writeHostMetadataAtomic,
 } from "./shared-runtime-lifecycle.js";
-import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
+import { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID } from "@satori-code/core/runtime-contract";
+import { loadLateOnRuntimeProfile } from "./lateon-reranker.js";
+import { serializeCanonicalJson } from "../core/canonical-json.js";
+import crypto from "node:crypto";
 
 const runtimeEntry = path.resolve("dist/index.js");
 
@@ -111,11 +114,11 @@ test("shared runtime identity is exact, non-secret, and bounded to eligible Linu
     });
     assert.equal(
         lateOnDefaultIdentity.lateOnProfile,
-        "lateon_offline_quality_projection_v6_d128_v1",
+        LATEON_PROFILE_ID,
     );
     assert.equal(
         lateOnDefaultIdentity.lateOnActivationPolicy,
-        "lateon_context_v6_d128_owner_default_v1",
+        LATEON_ACTIVATION_POLICY,
     );
     assert.notEqual(lateOnDefaultIdentity.hash, lateOnD32Identity.hash);
     const lateOnV3Identity = buildSharedRuntimeIdentity(runtimeEntry, {
@@ -333,22 +336,32 @@ test("lifecycle cleanup removes only the socket and metadata owned by the exitin
     );
 });
 
-test("shared runtime identity binds the LateOn rerank request contract digest", (t) => {
+test("shared runtime identity binds the LateOn profile projection digest", (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-contract-"));
     fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const env = offlineEnv(root);
 
     const plainIdentity = buildSharedRuntimeIdentity(runtimeEntry, env);
-    assert.equal(plainIdentity.lateOnRequestContractSha256, "");
+    assert.equal(plainIdentity.lateOnProfileDigest, "");
 
     const lateOnIdentity = buildSharedRuntimeIdentity(runtimeEntry, {
         ...env,
         SATORI_RERANKER_PROVIDER: "lateon",
         SATORI_LATEON_MODEL_PATH: path.join(root, "lateon"),
     });
-    const committedDigest = loadSearchRerankRequestContract().contractSha256;
-    assert.match(committedDigest, /^[a-f0-9]{64}$/);
-    assert.equal(lateOnIdentity.lateOnRequestContractSha256, committedDigest);
+    const profile = loadLateOnRuntimeProfile();
+    const profileDigest = crypto.createHash("sha256")
+        .update(serializeCanonicalJson(profile), "utf8")
+        .digest("hex");
+    const expectedDigest = crypto.createHash("sha256")
+        .update(JSON.stringify({
+            profileDigest,
+            projectionVersion: profile.identity.projectionVersion,
+            queryProjectionVersion: profile.identity.queryProjectionVersion,
+        }), "utf8")
+        .digest("hex");
+    assert.match(expectedDigest, /^[a-f0-9]{64}$/);
+    assert.equal(lateOnIdentity.lateOnProfileDigest, expectedDigest);
     assert.notEqual(lateOnIdentity.hash, plainIdentity.hash);
 });

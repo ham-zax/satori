@@ -19,7 +19,7 @@ import {
     collapseSupersededFileGroups,
     sortNativeGroupedSearchResults,
 } from "./search-group-ordering.js";
-import type { SearchOrderAuthority } from "./search-order-policy.js";
+import type { SearchOrderAuthority } from "./search-result-set-identity.js";
 import {
     buildSearchCandidateProvenance,
     classifyPathCategory,

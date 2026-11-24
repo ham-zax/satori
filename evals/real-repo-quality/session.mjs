@@ -54,12 +54,12 @@ export function explicitRuntimeEnvironment(env = process.env) {
 export async function localOfflineEnvironment(home = os.homedir()) {
     const env = installedOfflineEnvironment(home);
     if (env.SATORI_RERANKER_PROVIDER === 'lateon') {
-        const { DEFAULT_LATEON_PROFILE_ID, DEFAULT_LATEON_ACTIVATION_POLICY } = await import(
-            pathToFileURL(path.join(workspaceRoot, 'packages/cli/dist/lateon-model-store.js')).href
+        const { LATEON_PROFILE_ID, LATEON_ACTIVATION_POLICY } = await import(
+            pathToFileURL(path.join(workspaceRoot, 'packages/cli/dist/local-runtime-contract.js')).href
         );
-        if (!DEFAULT_LATEON_PROFILE_ID || !DEFAULT_LATEON_ACTIVATION_POLICY) throw new Error('Build the current CLI profile constants before benchmarking the local runtime.');
-        env.SATORI_LATEON_PROFILE = DEFAULT_LATEON_PROFILE_ID;
-        env.SATORI_LATEON_ACTIVATION_POLICY = DEFAULT_LATEON_ACTIVATION_POLICY;
+        if (!LATEON_PROFILE_ID || !LATEON_ACTIVATION_POLICY) throw new Error('Build the current CLI profile constants before benchmarking the local runtime.');
+        env.SATORI_LATEON_PROFILE = LATEON_PROFILE_ID;
+        env.SATORI_LATEON_ACTIVATION_POLICY = LATEON_ACTIVATION_POLICY;
     }
     return env;
 }

@@ -1,11 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Reranker } from "@satori-code/core";
 import {
+    SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID,
+    SEARCH_NATIVE_RERANKER_ORDER_POLICY_ID,
+    SEARCH_NATIVE_RETRIEVAL_ORDER_POLICY_ID,
     buildSearchRankedSetBinding,
+    resolveSearchRankingPolicyIdentity,
+    resolveSearchRerankRequestIdentity,
     verifySearchRankedSetBinding,
     type SearchRankedSetBindingInput,
 } from "./search-result-set-identity.js";
-import { SEARCH_NATIVE_RERANKER_ORDER_POLICY_ID } from "./search-order-policy.js";
+
+function fakeReranker(overrides: Partial<Reranker> = {}): Reranker {
+    return {
+        getIdentity: () => ({
+            provider: "lateon",
+            model: "LateOn-Code-edge",
+            profile: "e".repeat(64),
+        }),
+        rerank: async () => [],
+        ...overrides,
+    };
+}
 
 function input(): SearchRankedSetBindingInput {
     return {
@@ -24,14 +41,13 @@ function input(): SearchRankedSetBindingInput {
             model: "lightonai/LateOn-Code-edge@revision-1",
             profile: "e".repeat(64),
         },
-        rerankerProjectionIdentity: "search_rerank_document_v1",
+        rerankerProjectionIdentity: "search_rerank_document_v5",
         rerankerRequestIdentity: {
             provider: "lateon",
             model: "lightonai/LateOn-Code-edge@revision-1",
             profile: "e".repeat(64),
             queryProjectionIdentity: "search_rerank_query_v1",
-            documentProjectionIdentity: "search_rerank_document_v1",
-            requestContractSha256: "f".repeat(64),
+            documentProjectionIdentity: "search_rerank_document_v5",
         },
         orderedResults: [{
             target: {
@@ -211,9 +227,15 @@ test("ranked-set digest binds the complete rerank request identity", () => {
         })),
         withMutation((value) => ({
             ...value,
+            rerankerIdentity: {
+                kind: "provider",
+                provider: "lateon",
+                model: "lightonai/LateOn-Code-edge@revision-1",
+                profile: "0".repeat(64),
+            },
             rerankerRequestIdentity: {
                 ...value.rerankerRequestIdentity!,
-                requestContractSha256: "0".repeat(64),
+                profile: "0".repeat(64),
             },
         })),
         withMutation((value) => ({
@@ -242,10 +264,10 @@ test("applied reranking requires a complete request identity; baselines reject o
             ...value,
             rerankerRequestIdentity: {
                 ...value.rerankerRequestIdentity!,
-                requestContractSha256: "",
+                queryProjectionIdentity: "",
             },
         })),
-    ), /rerank request contract digest identity must be non-empty/);
+    ), /rerank request query projection identity must be non-empty/);
     assert.throws(() => buildSearchRankedSetBinding(
         withMutation((value) => ({
             ...value,
@@ -275,17 +297,50 @@ test("ranked-set binding rejects contradictory duplicated reranker identities", 
                 documentProjectionIdentity: "semantic_document_raw_v1",
             },
         })),
-        withMutation((value) => ({
-            ...value,
-            rerankerRequestIdentity: {
-                ...value.rerankerRequestIdentity!,
-                requestContractSha256: "not-a-sha256",
-            },
-        })),
     ]) {
         assert.throws(
             () => buildSearchRankedSetBinding(variant),
-            /rerank request.*must match|contract digest must be a SHA-256/,
+            /rerank request.*must match/,
         );
     }
+});
+
+test("resolveSearchRerankRequestIdentity binds provider projections, profile, and raw fallback", () => {
+    const identity = resolveSearchRerankRequestIdentity(fakeReranker({
+        getQueryProjectionVersion: () => "search_rerank_query_v2",
+        getDocumentProjectionVersion: () => "search_rerank_document_v5",
+    }));
+    assert.deepEqual(identity, {
+        provider: "lateon",
+        model: "LateOn-Code-edge",
+        profile: "e".repeat(64),
+        queryProjectionIdentity: "search_rerank_query_v2",
+        documentProjectionIdentity: "search_rerank_document_v5",
+    });
+
+    const raw = resolveSearchRerankRequestIdentity(fakeReranker());
+    assert.equal(raw.queryProjectionIdentity, "semantic_query_raw_v1");
+    assert.equal(raw.documentProjectionIdentity, "semantic_document_raw_v1");
+
+    assert.throws(
+        () => resolveSearchRerankRequestIdentity(fakeReranker({
+            getDocumentProjectionVersion: () => "search_rerank_document_v3",
+        })),
+        /search_rerank_document_projection_identity_unknown:search_rerank_document_v3/,
+    );
+});
+
+test("ranking policy identity distinguishes retrieval, reranker, and definition fusion order", () => {
+    assert.equal(
+        resolveSearchRankingPolicyIdentity({ orderAuthority: "retrieval_order" }),
+        SEARCH_NATIVE_RETRIEVAL_ORDER_POLICY_ID,
+    );
+    assert.equal(
+        resolveSearchRankingPolicyIdentity({ orderAuthority: "reranker_order" }),
+        SEARCH_NATIVE_RERANKER_ORDER_POLICY_ID,
+    );
+    assert.equal(
+        resolveSearchRankingPolicyIdentity({ orderAuthority: "definition_fusion_order" }),
+        SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID,
+    );
 });

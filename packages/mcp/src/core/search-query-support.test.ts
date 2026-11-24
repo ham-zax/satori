@@ -467,58 +467,29 @@ test('parseSearchOperators derives clean retrieval text for operator-only reques
     }
 });
 
-test('buildSearchQueryPlan keeps the accepted baseline while exposing semantic-cue replay', () => {
+test('buildSearchQueryPlan routes path-shaped queries deterministically to exact_path', () => {
     const cases = [
-        { query: 'src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
-        { query: 'open src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
-        { query: 'path:src/search/ranking.ts rankCandidates', route: 'exact_path', retrievalMode: 'lexical' },
+        { query: 'src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical', rerankAllowed: false },
+        { query: 'open src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical', rerankAllowed: false },
+        { query: 'path:src/search/ranking.ts rankCandidates', route: 'exact_path', retrievalMode: 'lexical', rerankAllowed: false },
         {
             query: 'reconcile ignore rules when .gitignore or satori.toml changes during sync',
-            route: 'mixed',
-            retrievalMode: 'hybrid',
+            route: 'exact_path',
+            retrievalMode: 'lexical',
+            rerankAllowed: false,
         },
-        { query: 'who calls initialization in src/runtime.ts', route: 'references', retrievalMode: 'hybrid' },
-        { query: 'where is src/runtime.ts configured', route: 'configuration', retrievalMode: 'lexical' },
-        { query: 'trace the startup pipeline in src/runtime.ts', route: 'structural', retrievalMode: 'hybrid' },
+        { query: 'who calls initialization', route: 'references', retrievalMode: 'hybrid', rerankAllowed: true },
+        { query: 'where is retry threshold configured', route: 'configuration', retrievalMode: 'lexical', rerankAllowed: false },
+        { query: 'trace the startup pipeline', route: 'structural', retrievalMode: 'hybrid', rerankAllowed: true },
     ] as const;
 
     for (const row of cases) {
         const parsed = parseSearchOperators(row.query);
-        const plan = buildSearchQueryPlan(
-            parsed.semanticQuery,
-            true,
-            parsed,
-            'semantic_cues_before_heuristic_path_v1',
-        );
+        const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
         assert.equal(plan.route.kind, row.route, row.query);
         assert.equal(plan.retrievalMode, row.retrievalMode, row.query);
+        assert.equal(plan.rerankAllowed, row.rerankAllowed, row.query);
     }
-
-    const parsed = parseSearchOperators(
-        'reconcile ignore rules when .gitignore or satori.toml changes during sync',
-    );
-    const baseline = buildSearchQueryPlan(
-        parsed.semanticQuery,
-        true,
-        parsed,
-        'baseline_path_anywhere_v1',
-    );
-    assert.equal(baseline.route.kind, 'exact_path');
-    assert.equal(baseline.retrievalMode, 'lexical');
-    assert.equal(baseline.rerankAllowed, false);
-
-    const defaultPlan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
-    assert.deepEqual(defaultPlan, baseline);
-
-    const contender = buildSearchQueryPlan(
-        parsed.semanticQuery,
-        true,
-        parsed,
-        'semantic_cues_before_heuristic_path_v1',
-    );
-    assert.equal(contender.route.kind, 'mixed');
-    assert.equal(contender.retrievalMode, 'hybrid');
-    assert.equal(contender.rerankAllowed, true);
 });
 
 test('buildSearchQueryPlan extracts one strong structural target and reference direction', () => {

@@ -1,12 +1,9 @@
 /**
  * Canonical rerank document projection (Phase 9.2B).
  *
- * One production projector. `SEARCH_RERANK_DOCUMENT_POLICY` carries the full
- * frozen policy semantics of the current contract identity
- * (`search_rerank_document_v5`); `buildSearchRerankDocument` is its single
- * executable implementation. Historical V2/V3 builders are retired, and their
- * fixture material survives only as inert contract evidence in
- * `search-rerank-request-contract.ts`.
+ * One production projector (`search_rerank_document_v5`) plus the raw fallback
+ * identity (`semantic_document_raw_v1`). Retired v1/v2/v3 identities fail closed
+ * before any provider call.
  */
 import { compareContractStrings } from "@satori-code/core";
 import { serializeCanonicalJson } from "./canonical-json.js";
@@ -43,28 +40,34 @@ import {
     type NormalizedProjectionInput,
 } from "./search-rerank-projection-primitives.js";
 
+export const SEARCH_RERANK_DOCUMENT_RAW_IDENTITY = "semantic_document_raw_v1" as const;
+
 export const SEARCH_RERANK_DOCUMENT_POLICY = Object.freeze({
     id: "search_rerank_document_v5",
     maximumUtf8Bytes: 4_000,
-    serialization: "canonical_json_utf8",
-    serializedKeyOrder: "lexicographic_recursive_canonical_json_v1",
-    addedField: "source_references",
-    sourceReferenceSemantics: "textual_occurrence_in_hash_validated_symbol_span_v1",
     sourceReferenceLimit: SEARCH_RERANK_SOURCE_REFERENCE_LIMIT,
     sourceReferenceExcerptMaximumBytes: SEARCH_RERANK_SOURCE_REFERENCE_MAX_BYTES,
-    sourceReferenceOrder: "query_tokens_then_source_line_v1",
-    fieldSetDecision: {
-        language: "intentionally_omitted_v1",
-        documentationExcerpt: "intentionally_removed_v1",
-        requiredOwnerSiblings: "superseded_by_structural_context_v1",
-    },
-    declarationRequirement: "trusted_non_empty_declaration_required_v1",
-    structuralContextBudget: "source_before_references_v1",
-    structuralContextOrder: "relation_then_path_then_label_v1",
     directCallerLimit: 3,
     directCalleeLimit: 3,
     supportingTestLimit: 2,
 });
+
+export type SearchRerankDocumentProjectionIdentity =
+    | typeof SEARCH_RERANK_DOCUMENT_RAW_IDENTITY
+    | typeof SEARCH_RERANK_DOCUMENT_POLICY.id;
+
+export function resolveSearchRerankDocumentProjectionIdentity(
+    projectionIdentity: string | undefined,
+): SearchRerankDocumentProjectionIdentity {
+    const identity = projectionIdentity?.trim();
+    if (!identity || identity === SEARCH_RERANK_DOCUMENT_RAW_IDENTITY) {
+        return SEARCH_RERANK_DOCUMENT_RAW_IDENTITY;
+    }
+    if (identity === SEARCH_RERANK_DOCUMENT_POLICY.id) {
+        return SEARCH_RERANK_DOCUMENT_POLICY.id;
+    }
+    throw new Error(`search_rerank_document_projection_identity_unknown:${identity}`);
+}
 
 export interface SearchRerankDocumentInput {
     readonly relativePath: string;

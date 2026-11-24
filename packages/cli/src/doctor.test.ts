@@ -13,6 +13,7 @@ import {
 import { formatDoctorText } from "./doctor-format.js";
 import type { ManagedClientConfigProof } from "./install.js";
 import { buildLauncherScript } from "./managed-launcher-script.mjs";
+import { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID } from "./local-runtime-contract.js";
 
 const successfulExecFileSync: NonNullable<DoctorOptions["execFileSyncImpl"]> = () => "0.0.0";
 
@@ -599,8 +600,8 @@ test("runDoctor surfaces the installer-bound LateOn activation policy", async ()
                 POTION_MODEL_PATH: path.join(tempDir, "potion", "model"),
                 SATORI_RERANKER_PROVIDER: "lateon",
                 SATORI_LATEON_MODEL_PATH: path.join(tempDir, "lateon-model"),
-                SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
-                SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
+                SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
+                SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
             },
         }));
 
@@ -617,14 +618,14 @@ test("runDoctor surfaces the installer-bound LateOn activation policy", async ()
         assert.equal(result.status, "ok");
         const policy = result.checks.find((check) => check.name === "lateon_activation_policy");
         assert.equal(policy?.status, "ok");
-        assert.equal(policy?.message, "OpenCode: LateOn activation policy: lateon_context_v6_d128_owner_default_v1.");
+        assert.equal(policy?.message, `OpenCode: LateOn activation policy: ${LATEON_ACTIVATION_POLICY}.`);
         assert.equal(
             result.checks.find((check) => check.name === "reranker_provider")?.status,
             "ok",
         );
         assert.equal(
             result.runtimeConfigurations?.find((configuration) => configuration.client === "opencode")?.rerankerProfile,
-            "lateon_offline_quality_projection_v6_d128_v1",
+            LATEON_PROFILE_ID,
         );
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -656,7 +657,7 @@ test("runDoctor flags a managed launcher whose LateOn activation policy contradi
                 SATORI_RERANKER_PROVIDER: "lateon",
                 SATORI_LATEON_MODEL_PATH: path.join(tempDir, "lateon-model"),
                 SATORI_LATEON_PROFILE: "lateon_projection_v2_d16_v1",
-                SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
+                SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
             },
         }));
 
@@ -674,7 +675,7 @@ test("runDoctor flags a managed launcher whose LateOn activation policy contradi
         assert.equal(policy?.status, "error");
         assert.match(
             policy?.message || "",
-            /requires SATORI_LATEON_PROFILE=lateon_offline_quality_projection_v6_d128_v1; received lateon_projection_v2_d16_v1/,
+            new RegExp(`requires SATORI_LATEON_PROFILE=${LATEON_PROFILE_ID}; received lateon_projection_v2_d16_v1`),
         );
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });

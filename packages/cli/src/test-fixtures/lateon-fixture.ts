@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID } from "../local-runtime-contract.js";
 
-export const LATEON_PROFILE_ID = "lateon_offline_quality_projection_v6_d128_v1";
-export const LATEON_ACTIVATION_POLICY = "lateon_context_v6_d128_owner_default_v1";
+export { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID };
 export const LATEON_REVISION = "07ef20f406c86badca122464808f4cac2f6e4b25";
 export const LATEON_FIXTURE_ARTIFACTS = {
     "model.onnx": "model",

@@ -10,6 +10,10 @@ import {
     envManager,
 } from '@satori-code/core';
 import {
+    LATEON_ACTIVATION_POLICY,
+    LATEON_PROFILE_ID,
+} from '@satori-code/core/runtime-contract';
+import {
     createMcpConfig,
     resolveRerankerProvider,
     resolveMcpRuntimeBootstrap,
@@ -201,8 +205,8 @@ test('offline config selects the shared LateOn model without machine-speed overr
         const parsed = createMcpConfig();
         assert.equal(parsed.rerankerProvider, 'lateon');
         assert.equal(parsed.lateOnModelPath, '/opt/satori/models/lateon-code-edge');
-        assert.equal(parsed.lateOnProfileId, 'lateon_offline_quality_projection_v6_d128_v1');
-        assert.equal(parsed.lateOnActivationPolicy, 'lateon_context_v6_d128_owner_default_v1');
+        assert.equal(parsed.lateOnProfileId, LATEON_PROFILE_ID);
+        assert.equal(parsed.lateOnActivationPolicy, LATEON_ACTIVATION_POLICY);
     } finally {
         for (const key of keys) {
             const value = previous[key];
@@ -243,15 +247,15 @@ test('LateOn config selects the current profile and rejects any other profile or
         const current = createMcpConfig();
         assert.equal(
             current.lateOnProfileId,
-            'lateon_offline_quality_projection_v6_d128_v1',
+            LATEON_PROFILE_ID,
         );
-        assert.equal(current.lateOnActivationPolicy, 'lateon_context_v6_d128_owner_default_v1');
+        assert.equal(current.lateOnActivationPolicy, LATEON_ACTIVATION_POLICY);
 
-        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v6_d128_v1';
-        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1';
+        process.env.SATORI_LATEON_PROFILE = LATEON_PROFILE_ID;
+        process.env.SATORI_LATEON_ACTIVATION_POLICY = LATEON_ACTIVATION_POLICY;
         assert.equal(
             createMcpConfig().lateOnActivationPolicy,
-            'lateon_context_v6_d128_owner_default_v1',
+            LATEON_ACTIVATION_POLICY,
         );
 
         // Any profile or policy other than the current one is rejected.
@@ -259,14 +263,14 @@ test('LateOn config selects the current profile and rejects any other profile or
         delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
         assert.throws(
             createMcpConfig,
-            /Invalid SATORI_LATEON_PROFILE 'lateon_offline_quality_projection_v4_d32_v1'[\s\S]*lateon_offline_quality_projection_v6_d128_v1; reinstall is required/,
+            new RegExp(`Invalid SATORI_LATEON_PROFILE 'lateon_offline_quality_projection_v4_d32_v1'[\\s\\S]*${LATEON_PROFILE_ID}; reinstall is required`),
         );
 
-        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v6_d128_v1';
+        process.env.SATORI_LATEON_PROFILE = LATEON_PROFILE_ID;
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v4_d32_owner_default_v1';
         assert.throws(
             createMcpConfig,
-            /Invalid SATORI_LATEON_ACTIVATION_POLICY 'lateon_context_v4_d32_owner_default_v1'[\s\S]*lateon_context_v6_d128_owner_default_v1; reinstall is required/,
+            new RegExp(`Invalid SATORI_LATEON_ACTIVATION_POLICY 'lateon_context_v4_d32_owner_default_v1'[\\s\\S]*${LATEON_ACTIVATION_POLICY}; reinstall is required`),
         );
 
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'untrusted_policy_v1';
@@ -275,7 +279,7 @@ test('LateOn config selects the current profile and rejects any other profile or
 
         // The activation policy is LateOn-only; other providers ignore it.
         process.env.SATORI_RERANKER_PROVIDER = 'none';
-        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1';
+        process.env.SATORI_LATEON_ACTIVATION_POLICY = LATEON_ACTIVATION_POLICY;
         assert.equal(createMcpConfig().lateOnActivationPolicy, undefined);
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'untrusted_policy_v1';
         assert.equal(createMcpConfig().lateOnActivationPolicy, undefined);
@@ -422,8 +426,8 @@ test('offline config ignores a leftover LateOn activation policy for Voyage rera
         SATORI_RERANKER_PROVIDER: 'voyage',
         VOYAGEAI_API_KEY: 'test-voyage-key',
         SATORI_LATEON_MODEL_PATH: '/opt/satori/models/lateon-code-edge',
-        SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v6_d128_v1',
-        SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v6_d128_owner_default_v1',
+        SATORI_LATEON_PROFILE: LATEON_PROFILE_ID,
+        SATORI_LATEON_ACTIVATION_POLICY: LATEON_ACTIVATION_POLICY,
     }, () => {
         const parsed = createMcpConfig();
 

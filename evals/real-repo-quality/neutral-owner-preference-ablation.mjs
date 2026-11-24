@@ -54,7 +54,7 @@ const intentControls = [
   { id: 'path_trade', query: 'path:src/content/action-guide.ts trade workflow idempotent rejected bundle loop' },
 ];
 
-const runtimeFiles = ['packages/mcp/dist/core/search-flags.js', 'packages/mcp/dist/core/search-ranking-policy.js', 'packages/mcp/dist/core/search-execution.js', 'packages/mcp/dist/core/search-request-coordinator.js', 'packages/mcp/dist/core/search-symbol-metadata-bm25.js', 'packages/mcp/dist/core/search-definition-discovery.js', 'packages/mcp/dist/core/search-order-policy.js'];
+const runtimeFiles = ['packages/mcp/dist/core/search-flags.js', 'packages/mcp/dist/core/search-ranking-policy.js', 'packages/mcp/dist/core/search-execution.js', 'packages/mcp/dist/core/search-request-coordinator.js', 'packages/mcp/dist/core/search-symbol-metadata-bm25.js', 'packages/mcp/dist/core/search-definition-discovery.js', 'packages/mcp/dist/core/search-result-set-identity.js'];
 const runtimeHash = () => crypto.createHash('sha256').update(Buffer.concat(runtimeFiles.map(file => fs.readFileSync(path.join(root, file))))).digest('hex');
 const startedRuntimeHash = runtimeHash();
 const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-owner-preference-eval-'));

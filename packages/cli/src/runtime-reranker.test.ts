@@ -10,13 +10,16 @@ import { buildLauncherScript, parseManagedLauncherDescriptor } from "./managed-l
 import { executeInstallCommand as executeInstallCommandProduction } from "./install.js";
 import { executeManagedRerankerCommand, formatRerankerText } from "./runtime-reranker.js";
 import type { InstallCommandOptions } from "./install-contracts.js";
-import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
+import {
+    LATEON_PROFILE_ID as LATEON_PROFILE,
+    POTION_DIMENSION,
+    POTION_MODEL_ID,
+} from "./local-runtime-contract.js";
 import { runCli } from "./index.js";
 import { promptHiddenApiKey, resolveVoyageApiKey } from "./voyage-api-key.js";
 
 const VERSION = "1.0.0";
 const API_KEY = "test-voyage-secret";
-const LATEON_PROFILE = "lateon_offline_quality_projection_v6_d128_v1";
 
 function withTempHome(run: (homeDir: string) => Promise<void>): Promise<void> {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-reranker-test-"));

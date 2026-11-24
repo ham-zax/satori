@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
+import { fileURLToPath } from "node:url";
+import { serializeCanonicalJson } from "../core/canonical-json.js";
 import {
     LATEON_ACTIVATION_POLICY_IDS,
     LATEON_RUNTIME_PROFILE_IDS,
@@ -36,7 +37,7 @@ export type SharedRuntimeIdentity = Readonly<{
     lateOnModelPath: string;
     lateOnProfile: string;
     lateOnActivationPolicy: string;
-    lateOnRequestContractSha256: string;
+    lateOnProfileDigest: string;
     vectorStoreProvider: string;
     lanceDbPath: string;
     watcherEnabled: string;
@@ -130,11 +131,35 @@ export function isSharedOfflineRuntimeEligible(
         && (architecture === "x64" || architecture === "arm64");
 }
 
-function resolveLateOnRequestContractDigest(env: NodeJS.ProcessEnv): string {
+const LATEON_PROFILE_ASSET_PATH = fileURLToPath(
+    new URL("../../assets/lateon/runtime-profile-v6-d128.json", import.meta.url),
+);
+
+function resolveLateOnProfileDigest(env: NodeJS.ProcessEnv): string {
     if (env.SATORI_RERANKER_PROVIDER !== "lateon") return "";
-    // A shared LateOn host is keyed by its complete rerank request contract.
-    // Do not let a missing/corrupt contract asset silently collapse identity.
-    return loadSearchRerankRequestContract().contractSha256;
+    // Key the shared LateOn host off the profile's projection versions and canonical
+    // profile digest rather than executing startup contract fixtures.
+    const profile = JSON.parse(fs.readFileSync(LATEON_PROFILE_ASSET_PATH, "utf8")) as {
+        identity?: {
+            projectionVersion?: unknown;
+            queryProjectionVersion?: unknown;
+        };
+    };
+    const projectionVersion = profile.identity?.projectionVersion;
+    const queryProjectionVersion = profile.identity?.queryProjectionVersion;
+    if (typeof projectionVersion !== "string" || typeof queryProjectionVersion !== "string") {
+        throw new Error("LateOn runtime profile identity must declare projectionVersion and queryProjectionVersion.");
+    }
+    const profileDigest = crypto.createHash("sha256")
+        .update(serializeCanonicalJson(profile), "utf8")
+        .digest("hex");
+    return crypto.createHash("sha256")
+        .update(stableStringify({
+            projectionVersion,
+            queryProjectionVersion,
+            profileDigest,
+        }), "utf8")
+        .digest("hex");
 }
 
 export function buildSharedRuntimeIdentity(
@@ -179,7 +204,7 @@ export function buildSharedRuntimeIdentity(
             ?? (env.SATORI_RERANKER_PROVIDER === "lateon" && env.SATORI_LATEON_PROFILE === undefined
                 ? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
                 : ""),
-        lateOnRequestContractSha256: resolveLateOnRequestContractDigest(env),
+        lateOnProfileDigest: resolveLateOnProfileDigest(env),
         vectorStoreProvider: env.VECTOR_STORE_PROVIDER ?? "",
         lanceDbPath: env.LANCEDB_PATH
             ? canonicalizePath(env.LANCEDB_PATH)

@@ -14,9 +14,9 @@ import { buildSearchQueryPlan, parseSearchOperators } from "./search-query-plann
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
 import {
     buildSearchRerankQuery,
+    resolveSearchRerankQuery,
     SEARCH_RERANK_QUERY_PROJECTION_IDENTITY,
 } from "./search-rerank-query.js";
-import { resolveSearchRerankQuery } from "./search-rerank-query-routing.js";
 import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import { resolveSearchCandidateRole } from "./search-candidate-role.js";
 import { resolveSearchPolicy } from "./search-policy.js";

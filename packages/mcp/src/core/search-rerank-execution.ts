@@ -17,7 +17,7 @@ import type {
     SearchRerankerOperationalReason,
 } from "./search-types.js";
 import { allowsDefinitionDiscovery, fuseDefinitionDiscovery, rerankerOrderNeedsDefinitionFusion } from "./search-definition-discovery.js";
-import type { SearchOrderAuthority } from "./search-order-policy.js";
+import type { SearchOrderAuthority } from "./search-result-set-identity.js";
 import {
     appendSearchCandidateRemoval,
     appendSearchCandidateStage,

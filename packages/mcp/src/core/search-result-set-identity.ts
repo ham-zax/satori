@@ -1,10 +1,50 @@
 import crypto from "node:crypto";
+import type { Reranker } from "@satori-code/core";
 import { serializeCanonicalJson } from "./canonical-json.js";
-import type { SearchRerankRequestIdentityV1 } from "./search-rerank-request-contract.js";
+import { resolveSearchRerankDocumentProjectionIdentity } from "./search-rerank-document.js";
+import { SEARCH_RERANK_QUERY_RAW_IDENTITY } from "./search-rerank-query.js";
 import type {
     SearchGroupedResultV2,
     SearchRecommendedNextAction,
 } from "./search-types.js";
+
+export const SEARCH_NATIVE_RETRIEVAL_ORDER_POLICY_ID = "search_native_retrieval_order_v2";
+export const SEARCH_NATIVE_RERANKER_ORDER_POLICY_ID = "search_native_reranker_order_v2";
+export const SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID = "search_definition_discovery_order_v2";
+
+export type SearchOrderAuthority = "retrieval_order" | "reranker_order" | "definition_fusion_order";
+
+export function resolveSearchRankingPolicyIdentity(input: {
+    orderAuthority: SearchOrderAuthority;
+}): string {
+    if (input.orderAuthority === "definition_fusion_order") return SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID;
+    return input.orderAuthority === "reranker_order"
+        ? SEARCH_NATIVE_RERANKER_ORDER_POLICY_ID
+        : SEARCH_NATIVE_RETRIEVAL_ORDER_POLICY_ID;
+}
+
+export interface SearchRerankRequestIdentityV1 {
+    provider: string;
+    model: string;
+    profile: string;
+    queryProjectionIdentity: string;
+    documentProjectionIdentity: string;
+}
+
+export function resolveSearchRerankRequestIdentity(reranker: Reranker): SearchRerankRequestIdentityV1 {
+    const identity = reranker.getIdentity();
+    const queryProjectionIdentity = reranker.getQueryProjectionVersion?.()?.trim();
+    const documentProjectionIdentity = reranker.getDocumentProjectionVersion?.()?.trim();
+    return {
+        provider: identity.provider,
+        model: identity.model,
+        profile: identity.profile,
+        queryProjectionIdentity: queryProjectionIdentity || SEARCH_RERANK_QUERY_RAW_IDENTITY,
+        documentProjectionIdentity: resolveSearchRerankDocumentProjectionIdentity(
+            documentProjectionIdentity,
+        ),
+    };
+}
 
 export const SEARCH_RANKED_SET_BINDING_VERSION =
     "search_ranked_set_binding_v1" as const;
@@ -143,10 +183,6 @@ export function buildSearchRankedSetBinding(
             input.rerankerRequestIdentity.documentProjectionIdentity,
             "rerank request document projection",
         );
-        requireIdentityText(
-            input.rerankerRequestIdentity.requestContractSha256,
-            "rerank request contract digest",
-        );
         if (input.rerankerRequestIdentity.provider !== input.rerankerIdentity.provider) {
             throw new Error("Ranked-set rerank request provider must match the applied reranker provider.");
         }
@@ -158,9 +194,6 @@ export function buildSearchRankedSetBinding(
         }
         if (input.rerankerRequestIdentity.documentProjectionIdentity !== input.rerankerProjectionIdentity) {
             throw new Error("Ranked-set rerank request document projection must match the applied reranker projection.");
-        }
-        if (!/^[a-f0-9]{64}$/.test(input.rerankerRequestIdentity.requestContractSha256)) {
-            throw new Error("Ranked-set rerank request contract digest must be a SHA-256 hex string.");
         }
     } else if (input.rerankerRequestIdentity !== null) {
         throw new Error("Deterministic baseline ranked sets must not carry a rerank request identity.");

@@ -17,7 +17,7 @@ import type { InstallCommandOptions } from "./install-contracts.js";
 // a runtime whose manifest does not match this upload fails integrity and its
 // extended languages stay search-only.
 export const CBM_EXTENDED_REPOSITORY = "zokizuan/satori-cbm-extractors";
-export const CBM_EXTENDED_REVISION = "ba6860be894fd4815a389e9360e1ef514bb12ef0";
+export const CBM_EXTENDED_REVISION = "48027a01390d791af6f97f8f3daad46963af95fd";
 const CBM_EXTENDED_ID = "cbm-extractors";
 const CBM_EXTENDED_LABEL = "CBM extended language pack";
 

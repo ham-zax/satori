@@ -134,8 +134,16 @@ function patchDefinitions(input) {
             '        return node;\n' +
             '    }\n' +
             '    TSNode sib = ts_node_next_named_sibling(anchor);\n' +
-            '    if (!ts_node_is_null(sib) && strcmp(ts_node_type(sib), "function_body") == 0) {\n' +
-            '        return sib;\n' +
+            '    while (!ts_node_is_null(sib)) {\n' +
+            '        const char *sib_kind = ts_node_type(sib);\n' +
+            '        if (strcmp(sib_kind, "comment") == 0 || strcmp(sib_kind, "documentation_comment") == 0) {\n' +
+            '            sib = ts_node_next_named_sibling(sib);\n' +
+            '            continue;\n' +
+            '        }\n' +
+            '        if (strcmp(sib_kind, "function_body") == 0) {\n' +
+            '            return sib;\n' +
+            '        }\n' +
+            '        break;\n' +
             '    }\n' +
             '    return node;\n' +
             '}\n\n' +

@@ -160,6 +160,74 @@ test('Dart multiline block-body named and unnamed extensions capture full method
     );
 });
 
+test('Dart comment and documentation_comment before body extend spans without crossing declaration boundaries', async (context) => {
+    if (!supportsCbmDefinitions('dart')) {
+        context.skip('Dart CBM extractor module is not built');
+        return;
+    }
+    const source = [
+        'int lineCommented(int x) // comment before body',
+        '{',
+        '  return x + 1;',
+        '}',
+        '',
+        'int docCommented(int x)',
+        '/// doc comment before body',
+        '{',
+        '  return x + 2;',
+        '}',
+        '',
+        'abstract class Service {',
+        '  void abstractStep();',
+        '  // comment after abstract declaration',
+        '  /// doc after abstract declaration',
+        '  int blockCommented(int x) /* block comment before body */ {',
+        '    return x * 2;',
+        '  }',
+        '}',
+        '',
+        'external int nativeStep(int x);',
+        '// comment after external declaration',
+        'int concreteAfterExternal(int x) {',
+        '  return x - 1;',
+        '}',
+        '',
+    ].join('\n');
+    const symbols = await analyzeWithCbmDefinitions({
+        content: source,
+        relativePath: 'lib/comment_before_body.dart',
+        language: 'dart',
+    });
+    const byQn = new Map(symbols.map((symbol) => [symbol.qualifiedName, symbol]));
+    const bytes = Buffer.from(source, 'utf8');
+    const spanText = (qn: string): string => {
+        const symbol = byQn.get(qn);
+        assert.ok(symbol, `missing ${qn}`);
+        return bytes.subarray(symbol.span.startByte, symbol.span.endByte).toString('utf8');
+    };
+
+    assert.equal(spanText('lineCommented'), 'int lineCommented(int x) // comment before body\n{\n  return x + 1;\n}');
+    assert.deepEqual([byQn.get('lineCommented')!.span.startLine, byQn.get('lineCommented')!.span.endLine], [1, 4]);
+
+    assert.equal(spanText('docCommented'), 'int docCommented(int x)\n/// doc comment before body\n{\n  return x + 2;\n}');
+    assert.deepEqual([byQn.get('docCommented')!.span.startLine, byQn.get('docCommented')!.span.endLine], [6, 10]);
+
+    assert.equal(
+        spanText('Service.blockCommented'),
+        'int blockCommented(int x) /* block comment before body */ {\n    return x * 2;\n  }',
+    );
+    assert.deepEqual([byQn.get('Service.blockCommented')!.span.startLine, byQn.get('Service.blockCommented')!.span.endLine], [16, 18]);
+
+    assert.equal(spanText('nativeStep'), 'int nativeStep(int x)');
+    assert.deepEqual([byQn.get('nativeStep')!.span.startLine, byQn.get('nativeStep')!.span.endLine], [21, 21]);
+
+    assert.equal(
+        spanText('concreteAfterExternal'),
+        'int concreteAfterExternal(int x) {\n  return x - 1;\n}',
+    );
+    assert.deepEqual([byQn.get('concreteAfterExternal')!.span.startLine, byQn.get('concreteAfterExternal')!.span.endLine], [23, 25]);
+});
+
 test('Swift class, nested struct, and labeled/typed methods preserve parentQualifiedNamePath', async (context) => {
     const synthetic = symbolsFromCbmDefinitions([
         {

@@ -297,7 +297,7 @@ export function projectCallGraphEvidence(
 
     const pageSize = Math.max(1, Math.min(50, Math.floor(request.limit)));
     const publicationId = payload.navigationAuthority?.publicationId;
-    if (request.cursor && !publicationId) {
+    if ((request.cursor && !publicationId) || !payload.symbolRef.symbolId) {
         throw new InvalidCallGraphEvidenceContinuationError();
     }
     const scopeIdentity = crypto.createHash("sha256")

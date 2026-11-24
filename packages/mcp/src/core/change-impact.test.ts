@@ -883,3 +883,259 @@ test("detect_changes does not execute repo-local core.fsmonitor or rewrite .git/
         fs.rmSync(repo, { recursive: true, force: true });
     }
 });
+
+test("detect_changes preserves test site provenance, deduplicates deterministically, and discloses non-exhaustive coverage", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-tests-provenance-"));
+    try {
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo });
+        fs.writeFileSync(
+            path.join(repo, "a.ts"),
+            "export function seedA() {\n  return 1;\n}\nexport function seedB() {\n  return 2;\n}\n",
+        );
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+        fs.writeFileSync(
+            path.join(repo, "a.ts"),
+            "export function seedA() {\n  return 10;\n}\nexport function seedB() {\n  return 20;\n}\n",
+        );
+
+        const seedA = { ...node("seedA", "a.ts"), span: { startLine: 1, endLine: 3 } };
+        const seedB = { ...node("seedB", "a.ts"), span: { startLine: 4, endLine: 6 } };
+
+        const result = await detectChangeImpact(
+            { path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 },
+            {
+                outline: async () => ({
+                    status: "ok",
+                    path: repo,
+                    file: "a.ts",
+                    outline: {
+                        symbols: [
+                            { ...seedA, kind: "function" },
+                            { ...seedB, kind: "function" },
+                        ],
+                    },
+                    hasMore: false,
+                } as FileOutlineResponseEnvelope),
+                callers: async (_root, symbol) => ({
+                    status: "ok",
+                    path: repo,
+                    symbolRef: { file: symbol.file, symbolId: symbol.symbolId },
+                    supported: true,
+                    direction: "callers",
+                    depth: 1,
+                    limit: 20,
+                    nodes: [symbol],
+                    edges: [],
+                    notes: [],
+                    exactReferences: [],
+                    testReferences: symbol.symbolId === "seedA"
+                        ? [
+                            {
+                                file: "tests/z.test.ts",
+                                symbolId: "test-fallback",
+                                symbolLabel: "function testFallback()",
+                                span: { startLine: 10, endLine: 15 },
+                                site: { file: "tests/z.test.ts", startLine: 10 },
+                                siteProvenance: "symbol_start_fallback",
+                                targetSymbolId: "seedA",
+                                kind: "call",
+                                confidence: 0.65,
+                            },
+                            // Duplicate recorded test reference should deduplicate cleanly
+                            {
+                                file: "tests/a.test.ts",
+                                symbolId: "test-recorded",
+                                symbolLabel: "function testRecorded()",
+                                span: { startLine: 1, endLine: 6 },
+                                site: { file: "tests/a.test.ts", startLine: 3, endLine: 3 },
+                                siteProvenance: "recorded_call_site",
+                                targetSymbolId: "seedA",
+                                kind: "call",
+                                confidence: 0.95,
+                            },
+                            {
+                                file: "tests/a.test.ts",
+                                symbolId: "test-recorded",
+                                symbolLabel: "function testRecorded()",
+                                span: { startLine: 1, endLine: 6 },
+                                site: { file: "tests/a.test.ts", startLine: 3, endLine: 3 },
+                                siteProvenance: "recorded_call_site",
+                                targetSymbolId: "seedA",
+                                kind: "call",
+                                confidence: 0.95,
+                            },
+                        ]
+                        : [
+                            {
+                                file: "tests/a.test.ts",
+                                symbolId: "test-recorded",
+                                symbolLabel: "function testRecorded()",
+                                span: { startLine: 1, endLine: 6 },
+                                site: { file: "tests/a.test.ts", startLine: 5, endLine: 5 },
+                                siteProvenance: "recorded_call_site",
+                                targetSymbolId: "seedB",
+                                kind: "call",
+                                confidence: 0.95,
+                            },
+                        ],
+                } as unknown as CallGraphResponseEnvelope),
+            },
+        );
+
+        assert.deepEqual(result.directSeedTestReferences, [
+            {
+                seedSymbolId: "seedA",
+                file: "tests/a.test.ts",
+                symbolId: "test-recorded",
+                symbolLabel: "function testRecorded()",
+                span: { startLine: 1, endLine: 6 },
+                siteProvenance: "recorded_call_site",
+                callSite: { file: "tests/a.test.ts", startLine: 3, endLine: 3 },
+                confidence: 0.95,
+            },
+            {
+                seedSymbolId: "seedB",
+                file: "tests/a.test.ts",
+                symbolId: "test-recorded",
+                symbolLabel: "function testRecorded()",
+                span: { startLine: 1, endLine: 6 },
+                siteProvenance: "recorded_call_site",
+                callSite: { file: "tests/a.test.ts", startLine: 5, endLine: 5 },
+                confidence: 0.95,
+            },
+            {
+                seedSymbolId: "seedA",
+                file: "tests/z.test.ts",
+                symbolId: "test-fallback",
+                symbolLabel: "function testFallback()",
+                span: { startLine: 10, endLine: 15 },
+                siteProvenance: "symbol_start_fallback",
+                confidence: 0.65,
+            },
+        ]);
+        assert.equal("callSite" in result.directSeedTestReferences[2]!, false);
+        assert.equal(result.completeness.directSeedTestReferenceCount, 3);
+        assert.equal(result.omitted.directSeedTestReferences, 0);
+        assert.ok(result.testReferenceCoverage);
+        assert.equal(result.testReferenceCoverage.scope, "direct_seed_persisted_tests_only");
+        assert.equal(result.testReferenceCoverage.exhaustive, false);
+        assert.equal(result.testReferenceCoverage.totalCandidateCount, 3);
+        assert.equal(result.testReferenceCoverage.returnedCount, 3);
+        assert.equal(result.testReferenceCoverage.omittedCount, 0);
+        assert.match(result.testReferenceCoverage.disclosure, /Transitive caller tests/i);
+        assert.match(result.testReferenceCoverage.disclosure, /empty list does not prove/i);
+    } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+    }
+});
+
+test("detect_changes trims directSeedTestReferences first under the 48 KiB budget without evicting seeds or CALLS edges", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-test-budget-"));
+    try {
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo });
+        fs.writeFileSync(path.join(repo, "seed.ts"), "export function seed() {\n  return 1;\n}\n");
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+        fs.writeFileSync(path.join(repo, "seed.ts"), "export function seed() {\n  return 2;\n}\n");
+
+        const seed = node("seed", "seed.ts");
+        const callers = Array.from({ length: 40 }, (_, index) => node(
+            `caller-${String(index).padStart(2, "0")}`,
+            `packages/app/src/caller-${String(index).padStart(2, "0")}.ts`,
+        ));
+        const manyTests = Array.from({ length: 600 }, (_, index) => ({
+            file: `packages/app/tests/very-long-test-suite-path-name-for-budget-pressure-${String(index).padStart(4, "0")}.test.ts`,
+            symbolId: `test-symbol-${String(index).padStart(4, "0")}`,
+            symbolLabel: `function testCase_${String(index).padStart(4, "0")}()`,
+            span: { startLine: 1, endLine: 10 },
+            site: {
+                file: `packages/app/tests/very-long-test-suite-path-name-for-budget-pressure-${String(index).padStart(4, "0")}.test.ts`,
+                startLine: 4,
+                endLine: 4,
+            },
+            siteProvenance: "recorded_call_site" as const,
+            targetSymbolId: seed.symbolId,
+            kind: "call" as const,
+            confidence: 0.95,
+        }));
+
+        const runWithTests = async (withTests: boolean, padding = 0) => detectChangeImpact(
+            { path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 100 },
+            {
+                outline: async () => ({
+                    status: "ok",
+                    path: repo,
+                    file: seed.file,
+                    outline: { symbols: [{ ...seed, kind: "function" }] },
+                    hasMore: false,
+                } as FileOutlineResponseEnvelope),
+                callers: async () => ({
+                    status: "ok",
+                    path: repo,
+                    symbolRef: { file: seed.file, symbolId: seed.symbolId },
+                    supported: true,
+                    direction: "callers",
+                    depth: 1,
+                    limit: 100,
+                    nodes: [seed, ...callers.map((caller, index) => index === 0 && padding > 0
+                        ? { ...caller, symbolLabel: caller.symbolLabel + "x".repeat(padding) }
+                        : caller)],
+                    edges: callers.map((caller) => ({
+                        srcSymbolId: caller.symbolId,
+                        dstSymbolId: seed.symbolId,
+                        kind: "call",
+                        site: { file: caller.file, startLine: 2 },
+                        confidence: 1,
+                        resolutionAuthority: "direct_binding",
+                    })),
+                    notes: [],
+                    exactReferences: [],
+                    ...(withTests ? { testReferences: manyTests } : {}),
+                } as unknown as CallGraphResponseEnvelope),
+            },
+        );
+
+        const control = await runWithTests(false);
+        const withTests = await runWithTests(true);
+
+        assert.ok(control.testReferenceCoverage);
+        assert.ok(control.directSeedTestReferences);
+        assert.equal(control.testReferenceCoverage.totalCandidateCount, 0);
+        assert.equal(control.testReferenceCoverage.exhaustive, false);
+        assert.equal(control.directSeedTestReferences.length, 0);
+
+        assert.ok(Buffer.byteLength(JSON.stringify(withTests), "utf8") <= 48 * 1024);
+        assert.deepEqual(withTests.seeds, control.seeds);
+        assert.deepEqual(withTests.impacted, control.impacted);
+        assert.equal(withTests.omitted.seeds, 0);
+        assert.equal(withTests.omitted.impacted, 0);
+        assert.ok(withTests.testReferenceCoverage);
+        assert.ok(withTests.directSeedTestReferences);
+        assert.ok(withTests.omitted.directSeedTestReferences !== undefined);
+        assert.ok(withTests.omitted.directSeedTestReferences > 0);
+        assert.equal(
+            withTests.directSeedTestReferences.length + withTests.omitted.directSeedTestReferences,
+            manyTests.length,
+        );
+        assert.equal(withTests.testReferenceCoverage.omittedCount, withTests.omitted.directSeedTestReferences);
+        assert.equal(withTests.testReferenceCoverage.returnedCount, withTests.directSeedTestReferences.length);
+        assert.ok(withTests.warnings.includes("IMPACT_RESPONSE_BYTE_LIMIT"));
+
+        const padding = 48 * 1024 - Buffer.byteLength(JSON.stringify(control), "utf8") - 8;
+        const saturatedControl = await runWithTests(false, padding);
+        const saturatedTreatment = await runWithTests(true, padding);
+        assert.equal(saturatedControl.impacted.length, callers.length);
+        assert.ok(Buffer.byteLength(JSON.stringify(saturatedTreatment), "utf8") <= 48 * 1024);
+        assert.deepEqual(saturatedTreatment.seeds, saturatedControl.seeds);
+        assert.deepEqual(saturatedTreatment.impacted, saturatedControl.impacted);
+        assert.deepEqual(saturatedTreatment.uncertainCallReferences, saturatedControl.uncertainCallReferences);
+        assert.equal(saturatedTreatment.testReferenceCoverage, undefined);
+    } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+    }
+});

@@ -39,7 +39,7 @@ const sourceContinuationSchema = z.object({
 }).strict().superRefine((value, context) => {
     if (value.endLine < value.startLine) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["endLine"],
             message: "endLine must not precede startLine.",
         });
@@ -99,14 +99,14 @@ export const exactSymbolOpenRequestSchema = z.object({
 }).strict().superRefine((value, context) => {
     if (Number(Boolean(value.symbolId)) + Number(Boolean(value.symbolLabel)) !== 1) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["symbolId"],
             message: "exactly one of symbolId or symbolLabel is required.",
         });
     }
     if (Number(Boolean(value.context)) + Number(Boolean(value.continuation)) !== 1) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["context"],
             message: "exactly one of context or continuation is required.",
         });
@@ -119,7 +119,7 @@ export const directSpanOpenRequestSchema = z.object({
 }).strict().superRefine((value, context) => {
     if (value.endLine < value.startLine) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["endLine"],
             message: "endLine must not precede startLine.",
         });
@@ -180,28 +180,28 @@ export const openSymbolRequestSchema = z.object({
     if (hasExactSymbolMarker(value)) {
         if (value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["contractVersion"],
                 message: `contractVersion ${SYMBOL_CONTEXT_FORMAT_VERSION} is required for exact-symbol requests.`,
             });
         }
         if (Number(Boolean(value.symbolId)) + Number(Boolean(value.symbolLabel)) !== 1) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["symbolId"],
                 message: "exactly one of symbolId or symbolLabel is required.",
             });
         }
         if (value.context !== undefined && value.continuation !== undefined) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["context"],
                 message: "exactly one of context or continuation is required.",
             });
         }
         if (value.startLine !== undefined || value.endLine !== undefined) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["startLine"],
                 message: "direct span fields cannot be combined with an exact-symbol request.",
             });
@@ -242,14 +242,14 @@ export const openSymbolRequestSchema = z.object({
     }
     if (value.startLine === undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["startLine"],
             message: "startLine is required for direct-span requests.",
         });
     }
     if (value.endLine === undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["endLine"],
             message: "endLine is required for direct-span requests.",
         });
@@ -260,7 +260,7 @@ export const openSymbolRequestSchema = z.object({
         && value.endLine < value.startLine
     ) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["endLine"],
             message: "endLine must not precede startLine.",
         });
@@ -321,8 +321,8 @@ const PRESET_DEFAULTS: Record<SymbolContextPreset, SymbolContextInclude & {
     implementation: {
         source: true,
         siblings: true,
-        callers: false,
-        callees: false,
+        callers: true,
+        callees: true,
         lexicalContext: true,
     },
     call_context: {
@@ -443,12 +443,15 @@ function continuationInclude(
 
 export function resolveSymbolContextOperation(input: {
     mode: "plain" | "annotated";
+    format?: "json" | "text";
     request: ExactSymbolOpenRequest;
 }): ResolvedSymbolContextOperation | { kind: "unsupported_continuation" } {
+    const isTextFormat = input.format === "text";
     if (input.request.context) {
         const effectiveRequest = effectiveContextRequest(input.mode, input.request.context);
-        const innerLimit = effectiveRequest.budgets.totalResponseBytes
-            - responsePrefixBytes(effectiveRequest);
+        const innerLimit = isTextFormat
+            ? effectiveRequest.budgets.totalResponseBytes
+            : effectiveRequest.budgets.totalResponseBytes - responsePrefixBytes(effectiveRequest);
         if (innerLimit < 1) {
             throw new RangeError("The effective symbol-context response budget is too small.");
         }
@@ -498,8 +501,9 @@ export function resolveSymbolContextOperation(input: {
         ...effectiveBase,
         continuation: { kind: continuation.kind },
     };
-    const innerLimit = effectiveBase.budgets.totalResponseBytes
-        - responsePrefixBytes(effectiveRequest);
+    const innerLimit = isTextFormat
+        ? effectiveBase.budgets.totalResponseBytes
+        : effectiveBase.budgets.totalResponseBytes - responsePrefixBytes(effectiveRequest);
     if (innerLimit < 1) {
         throw new RangeError("The effective symbol-context response budget is too small.");
     }
@@ -530,3 +534,5 @@ export function composePublicSymbolContextEnvelope(input: {
         limitations: input.context.limitations,
     };
 }
+
+export type PublicSymbolContextEnvelope = ReturnType<typeof composePublicSymbolContextEnvelope>;

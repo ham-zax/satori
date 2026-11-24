@@ -38,21 +38,21 @@ const manageIndexInputSchema = z.object({
 }).superRefine((value, ctx) => {
     if (value.action !== "status" && value.detail !== undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["detail"],
             message: "detail is only valid for action='status'.",
         });
     }
     if (value.action === "cancel" && value.operationId === undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["operationId"],
             message: "operationId is required for action='cancel'.",
         });
     }
     if (value.action !== "cancel" && value.operationId !== undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["operationId"],
             message: "operationId is only valid for action='cancel'.",
         });
@@ -62,7 +62,7 @@ const manageIndexInputSchema = z.object({
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage Publication lifecycle operations (create/reindex/sync/status/cancel/clear). A compatible completed Publication remains readable while source freshness is changed or unverified. Explicit sync is a supervised background operation. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance for already-tracked incompatible Publications; explicit reindex is the operator recovery override when automatic maintenance is unavailable, suppressed after failure, unsafe, or intentionally disabled for connected/remote providers. cancel requires the exact live supervised create/reindex/sync operationId and never force-unlocks a root. Mutation operation state is process-lifetime diagnostic state, not persistent history. Status detail=capabilities/diagnostics/full exposes language support, structural coverage within the current Publication policy, compatibility, and runtime-owner evidence. Use read_file on a specific absolute path when exact published-path coverage must be checked.",
+        "Manage Publication index lifecycle: create, reindex, sync, status, cancel, or clear. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance; explicit reindex is the operator recovery override. cancel requires the exact live supervised create/reindex/sync operationId. status (detail=summary|capabilities|diagnostics|full) reports process-lifetime diagnostic state, not persistent history.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});

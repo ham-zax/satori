@@ -39,8 +39,7 @@ function normalizeRelativePath(value: string): string {
  * Open a regular file only when every layer agrees it is authorized:
  *
  * 1. The workspace policy authorizes the codebase root itself.
- * 2. The workspace policy authorizes the requested path (canonical realpath
- *    containment inside a session workspace root; symlink escape is denied).
+ * 2. The workspace policy authorizes the requested path's directory.
  * 3. The canonical requested path stays inside the canonical codebase root.
  * 4. The codebase-relative path belongs to the published source manifest.
  * 5. The requested path's final component is not a symlink and is a regular
@@ -59,11 +58,14 @@ export async function openAuthorizedPublishedFile(input: {
 }): Promise<AuthorizedPublishedFile> {
     const { workspacePolicy, codebaseRoot, requestedPath, publishedRelativePaths } = input;
 
-    // Authorize and canonicalize both the root and the requested path through
-    // the immutable session policy. Both throw WorkspaceAuthorizationError on
-    // denial, including canonical escape through symlinks.
+    // Preserve the final component from authorization through descriptor open.
     const canonicalRoot = workspacePolicy.authorizeRoot(codebaseRoot).canonicalPath;
-    const canonicalPath = workspacePolicy.authorizePath(requestedPath).canonicalPath;
+    if (canonicalRoot !== path.resolve(codebaseRoot)) {
+        throw new PublishedFileAuthorizationError("OUTSIDE_CODEBASE_ROOT", "The published codebase root changed.");
+    }
+    const logicalPath = path.resolve(requestedPath);
+    const parent = workspacePolicy.authorizePath(path.dirname(logicalPath)).canonicalPath;
+    const canonicalPath = path.join(parent, path.basename(logicalPath));
 
     // Separator-boundary containment under the canonical codebase root.
     if (!(canonicalPath === canonicalRoot || canonicalPath.startsWith(`${canonicalRoot}${path.sep}`))) {
@@ -92,7 +94,7 @@ export async function openAuthorizedPublishedFile(input: {
     // paths return uniform FILE_NOT_PUBLISHED with no existence/type oracle.
     let preStat: fs.Stats | undefined;
     try {
-        preStat = fs.lstatSync(path.resolve(requestedPath));
+        preStat = fs.lstatSync(canonicalPath);
     } catch {
         preStat = undefined;
     }
@@ -127,7 +129,16 @@ export async function openAuthorizedPublishedFile(input: {
         );
     }
 
-    const opened = await openRegularFileWithIdentityInsideRoot(canonicalPath, canonicalRoot);
+    const opened = await openRegularFileWithIdentityInsideRoot(canonicalPath, canonicalRoot, {
+        rejectFinalSymlink: true,
+    });
+    if (opened.identity.canonicalRelativePath !== relativePath) {
+        await opened.handle.close();
+        throw new PublishedFileAuthorizationError(
+            "OUTSIDE_CODEBASE_ROOT",
+            `Opened file differs from its authorized path: ${requestedPath}`,
+        );
+    }
     return Object.freeze({
         handle: opened.handle,
         codebaseRoot: canonicalRoot,

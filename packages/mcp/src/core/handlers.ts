@@ -463,7 +463,9 @@ export class ToolHandlers {
             getFailedIndexOperation: (codebasePath: string) => this.getFailedIndexOperationForReadiness(codebasePath),
             hasSearchableGeneration: (codebasePath: string) => this.hasSearchableGenerationForReadiness(codebasePath),
             validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
-            probeLocalSearchCollectionState: (codebasePath: string) => this.probeLocalSearchCollectionState(codebasePath),
+            probeLocalSearchCollectionState: (codebasePath, selectedCollection) => (
+                this.probeLocalSearchCollectionState(codebasePath, selectedCollection)
+            ),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildReindexHint: this.buildReindexHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
@@ -650,8 +652,8 @@ export class ToolHandlers {
                 getIndexingOperationForReadiness: (codebasePath) => (
                     this.getIndexingOperationForReadiness(codebasePath)
                 ),
-                probeLocalSearchCollectionState: (codebasePath) => (
-                    this.probeLocalSearchCollectionState(codebasePath)
+                probeLocalSearchCollectionState: (codebasePath, selectedCollection) => (
+                    this.probeLocalSearchCollectionState(codebasePath, selectedCollection)
                 ),
             },
             hints: {
@@ -683,6 +685,10 @@ export class ToolHandlers {
                 ),
             },
             preparedRead: {
+                isPublishedSource: (publication, file, hash) => (
+                    this.context.getPublicationSourceCheckpoint?.(publication)?.fileHashes
+                        .some(([publishedFile, publishedHash]) => file === publishedFile && hash === publishedHash) === true
+                ),
                 loadPreparedNavigationManifest: (preparedRead, operations) => (
                     this.loadPreparedNavigationManifest(preparedRead, operations)
                 ),
@@ -939,8 +945,8 @@ export class ToolHandlers {
         requireNavigation = false,
     ): Promise<CachedPreparedReadResult> {
         // Cache residency must not choose the root or change cold-read semantics.
-        const root = this.trackedRootReadiness.resolveTrackedRoot(absolutePath, ['indexed']);
-        if (!root) return { status: 'miss', reason: 'cache_miss' };
+        const root = this.trackedRootReadiness.resolveTrackedRoot(absolutePath, ['indexed', 'indexing']);
+        if (root?.info.status !== 'indexed') return { status: 'miss', reason: 'cache_miss' };
         return this.preparedReadCacheOwner.getCachedPreparedRead(
             root.path,
             operations,
@@ -994,7 +1000,7 @@ export class ToolHandlers {
 
         this.evictPreparedRead(state.root.path);
         const operation = this.getIndexingOperationForReadiness(state.root.path);
-        const matchingActiveSync = activeMutation.action === 'sync';
+        const preservesSearchableRead = activeMutation.action === 'sync' || activeMutation.action === 'reindex';
 
         if (process.env.SATORI_TASK7_DEBUG === '1') {
             console.error('[TASK7-DEBUG][readiness-wrapper] ' + JSON.stringify({
@@ -1014,8 +1020,8 @@ export class ToolHandlers {
                         phase: operation.phase,
                     }
                     : null,
-                matchingActiveSync,
-                decision: matchingActiveSync
+                matchingActiveSync: preservesSearchableRead,
+                decision: preservesSearchableRead
                     ? 'preserve_searchable_read'
                     : 'strip_searchable_read',
             }));
@@ -1026,7 +1032,7 @@ export class ToolHandlers {
             codebasePath: state.root.path,
             ...(operation ? { operation } : {}),
             searchableGenerationAvailable: true,
-            ...(matchingActiveSync ? { searchableRead: state } : {}),
+            ...(preservesSearchableRead ? { searchableRead: state } : {}),
         };
     }
 
@@ -1044,7 +1050,7 @@ export class ToolHandlers {
             ready: Extract<TrackedRootReadinessState, { state: 'ready' }>,
         ): Promise<TrackedRootReadinessState> => {
             const activeOperation = this.getIndexingOperationForReadiness(ready.root.path);
-            if (activeOperation && activeOperation.action !== 'sync') {
+            if (activeOperation?.action === 'create') {
                 return {
                     state: 'indexing',
                     codebasePath: ready.root.path,
@@ -1052,7 +1058,7 @@ export class ToolHandlers {
                     searchableGenerationAvailable: true,
                 };
             }
-            if (activeOperation?.action === 'sync') {
+            if (activeOperation?.action === 'sync' || activeOperation?.action === 'reindex') {
                 return {
                     ...ready,
                     freshnessDecision: {
@@ -1075,7 +1081,7 @@ export class ToolHandlers {
                 { preparedPublication: ready.publication },
             );
             const operationAfterAssessment = this.getIndexingOperationForReadiness(ready.root.path);
-            if (operationAfterAssessment && operationAfterAssessment.action !== 'sync') {
+            if (operationAfterAssessment?.action === 'create') {
                 return {
                     state: 'indexing',
                     codebasePath: ready.root.path,
@@ -1083,7 +1089,7 @@ export class ToolHandlers {
                     searchableGenerationAvailable: true,
                 };
             }
-            if (operationAfterAssessment?.action === 'sync') {
+            if (operationAfterAssessment?.action === 'sync' || operationAfterAssessment?.action === 'reindex') {
                 return {
                     ...ready,
                     freshnessDecision: {
@@ -1113,7 +1119,7 @@ export class ToolHandlers {
             'navigation',
         );
         const readable = state.state === 'indexing'
-            && state.operation?.action === 'sync'
+            && (state.operation?.action === 'sync' || state.operation?.action === 'reindex')
             && state.searchableGenerationAvailable
             && state.searchableRead
             ? state.searchableRead
@@ -1164,6 +1170,11 @@ export class ToolHandlers {
             if (!navigation || preparedRead.navigationStatus !== 'valid') {
                 return { status: 'unavailable', reason: 'prepared_navigation_identity_unavailable' };
             }
+            const sourceCheckpoint = this.context.getPublicationSourceCheckpoint(lease);
+            const publishedSource = sourceCheckpoint?.fileHashes.find(([file]) => file === input.relativeFile);
+            if (!publishedSource) {
+                return { status: 'unavailable', reason: 'prepared_source_not_published' };
+            }
             const registryState = await this.loadPreparedNavigationSymbolsByFile(
                 preparedRead,
                 input.relativeFile,
@@ -1185,6 +1196,9 @@ export class ToolHandlers {
                 ...(input.symbolId ? { symbolIdExact: input.symbolId } : {}),
                 ...(input.symbolLabel ? { symbolLabelExact: input.symbolLabel } : {}),
             });
+            if (exactTargets.length === 1 && exactTargets[0].fileHash !== publishedSource[1]) {
+                return { status: 'unavailable', reason: 'prepared_source_not_published' };
+            }
             const preparedTraversals = relationshipState.status === 'ok'
                 && exactTargets.length === 1
                 ? await prepareRelationshipTraversals({
@@ -1523,7 +1537,7 @@ export class ToolHandlers {
         return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
     }
 
-    private async probeLocalSearchCollectionState(codebasePath: string): Promise<{
+    private async probeLocalSearchCollectionState(codebasePath: string, selectedCollection?: string): Promise<{
         state: 'ready' | 'missing' | 'unknown';
         collectionName?: string;
     }> {
@@ -1534,7 +1548,7 @@ export class ToolHandlers {
 
         if (
             typeof context.getVectorStore !== 'function'
-            || typeof context.getActiveIndexedCollectionName !== 'function'
+            || (!selectedCollection && typeof context.getActiveIndexedCollectionName !== 'function')
         ) {
             return { state: 'unknown' };
         }
@@ -1546,7 +1560,7 @@ export class ToolHandlers {
 
         let collectionName: string | null;
         try {
-            const activeCollectionName = await context.getActiveIndexedCollectionName(codebasePath);
+            const activeCollectionName = selectedCollection ?? await context.getActiveIndexedCollectionName?.(codebasePath);
             collectionName = typeof activeCollectionName === 'string' && activeCollectionName.trim().length > 0
                 ? activeCollectionName.trim()
                 : null;
@@ -2097,6 +2111,10 @@ export class ToolHandlers {
 
     public async handleCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal, sourceOptions?: NavigationSourceOptions) {
         return this.navigationHandlers.handleCallGraph(args, workspacePolicy, signal, sourceOptions);
+    }
+
+    public async resolveUnprojectedCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal, sourceOptions?: NavigationSourceOptions) {
+        return this.navigationHandlers.resolveUnprojectedCallGraph(args, workspacePolicy, signal, sourceOptions);
     }
 
     public async handleTracePath(args: ToolArgs) {

@@ -73,6 +73,23 @@ test("read_file gives identical FILE_NOT_PUBLISHED denial for missing, directory
     }
 });
 
+test("exact-symbol reads deny a tracked final symlink before composing source", async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-rf-symbol-alias-")));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const file = path.join(root, "published.ts");
+    const copy = path.join(root, "private-copy.ts");
+    fs.writeFileSync(copy, "export function target() { return 1; }\n");
+    fs.symlinkSync(copy, file);
+    const ctx = makeToolContext(root, ["published.ts"]);
+    const result = await readFileTool.execute({
+        path: file, codebaseRoot: root,
+        open_symbol: { contractVersion: 2, symbolId: "published-id", context: { preset: "implementation" } },
+    }, ctx);
+    assert.equal(result.isError, true);
+    assert.equal(JSON.parse(result.content[0].text).code, "FINAL_SYMLINK_REJECTED");
+    assert.ok(!result.content[0].text.includes(copy));
+});
+
 test("read_file rejects in-root symlinks without echoing the resolved target path (P1-2)", async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-rf-symlink-")));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -106,6 +123,83 @@ test("read_file rejects in-root symlinks without echoing the resolved target pat
             `denial must not disclose symlink target '${forbiddenTargetName}': ${text}`,
         );
     }
+});
+
+test("read_file rejects in-root final symlink pointing outside boundRoot with FINAL_SYMLINK_REJECTED instead of ROOT_BINDING_INVALID", async (t) => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-rf-bound-symlink-")));
+    t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+    const root = path.join(base, "repo");
+    const symlinkedRoot = path.join(base, "repo-link");
+    const outsideDir = path.join(base, "outside");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.symlinkSync(root, symlinkedRoot);
+
+    fs.writeFileSync(path.join(root, "published.ts"), "export const ok = 1;\n");
+    const outsideSecret = path.join(outsideDir, "secret-token.env");
+    fs.writeFileSync(outsideSecret, "TOP_SECRET=1\n");
+    const escapeLink = path.join(root, "escape.ts");
+    fs.symlinkSync(outsideSecret, escapeLink);
+
+    const ctx = makeToolContext(root, ["published.ts"]);
+
+    // Even when codebaseRoot is passed via a symlinked workspace directory, an in-root final
+    // symlink pointing outside boundRoot must fail uniformly as FINAL_SYMLINK_REJECTED without
+    // disclosing its target path or triggering ROOT_BINDING_INVALID.
+    const symlinkRes = await readFileTool.execute({
+        path: path.join(symlinkedRoot, "escape.ts"),
+        codebaseRoot: symlinkedRoot,
+        start_line: 1,
+        end_line: 5,
+    }, ctx);
+    assert.equal(symlinkRes.isError, true);
+    const symlinkText = symlinkRes.content[0].text;
+    const symlinkPayload = JSON.parse(symlinkText) as {
+        code?: string;
+        reason?: string;
+        path?: string;
+        kind?: string;
+    };
+    assert.equal(symlinkPayload.code, "FINAL_SYMLINK_REJECTED");
+    assert.equal(symlinkPayload.reason, "symlink_rejected");
+    assert.equal(symlinkPayload.path, path.join(symlinkedRoot, "escape.ts"));
+    assert.equal(symlinkPayload.kind, undefined);
+    assert.equal(symlinkText.includes("secret-token.env"), false);
+    assert.equal(symlinkText.includes("TOP_SECRET"), false);
+
+    // Regular/non-symlink paths outside boundRoot still return plain ROOT_BINDING_INVALID.
+    const outsideRegularRes = await readFileTool.execute({
+        path: outsideSecret,
+        codebaseRoot: symlinkedRoot,
+        start_line: 1,
+        end_line: 5,
+    }, ctx);
+    assert.equal(outsideRegularRes.isError, true);
+    const outsidePayload = JSON.parse(outsideRegularRes.content[0].text) as {
+        code?: string;
+        reason?: string;
+        kind?: string;
+        formatVersion?: number;
+    };
+    assert.equal(outsidePayload.code, "ROOT_BINDING_INVALID");
+    assert.equal(outsidePayload.reason, "root_binding_invalid");
+    assert.equal(outsidePayload.kind, undefined);
+    assert.equal(outsidePayload.formatVersion, undefined);
+
+    // Missing file under a symlinked boundRoot must return FILE_NOT_PUBLISHED (not outside_indexed_root).
+    const missingUnderSymlinkedRoot = await readFileTool.execute({
+        path: path.join(symlinkedRoot, "does-not-exist.ts"),
+        codebaseRoot: symlinkedRoot,
+        start_line: 1,
+        end_line: 5,
+    }, ctx);
+    assert.equal(missingUnderSymlinkedRoot.isError, true);
+    const missingPayload = JSON.parse(missingUnderSymlinkedRoot.content[0].text) as {
+        code?: string;
+        reason?: string;
+    };
+    assert.equal(missingPayload.code, "FILE_NOT_PUBLISHED");
+    assert.equal(missingPayload.reason, "file_not_published");
 });
 
 test("read_file live-path admission fails closed when ignore patterns are missing or empty (P1-3)", async (t) => {

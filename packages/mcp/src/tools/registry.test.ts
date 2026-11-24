@@ -89,18 +89,52 @@ test('call_graph description is capability-based and calibrates conservative CAL
     assert.match(callGraphTool!.description, /current Publication/i);
     assert.match(callGraphTool!.description, /heuristic/i);
     assert.match(callGraphTool!.description, /name-based/i);
-    assert.match(callGraphTool!.description, /Go, Java, C#, C\+\+, and Rust.*qualified direct-call/i);
-    assert.match(callGraphTool!.description, /exclude receiver\/type-aware dispatch/i);
-    assert.match(callGraphTool!.description, /Java and C#.*same detected build root/i);
-    assert.match(callGraphTool!.description, /Maven\/Gradle.*\.csproj/i);
-    assert.match(callGraphTool!.description, /C and C\+\+ admit a cross-file target only when the caller's include closure contains/i);
-    assert.match(callGraphTool!.description, /Rust.*Cargo ownership/i);
-    assert.match(callGraphTool!.description, /Python and Go.*testReferences/i);
+    assert.match(callGraphTool!.description, /qualified direct-call/i);
+    assert.match(callGraphTool!.description, /receiver\/type-aware dispatch/i);
     assert.match(callGraphTool!.description, /bounded/i);
     assert.match(callGraphTool!.description, /advisory/i);
-    assert.match(callGraphTool!.description, /not authoritative blast-radius/i);
+    assert.match(callGraphTool!.description, /not.*authoritative blast-radius/i);
     assert.match(callGraphTool!.description, /not a compiler-grade call graph/i);
     assert.doesNotMatch(callGraphTool!.description, /TS\/JS\/Python/i);
+    assert.ok(
+        callGraphTool!.description.length <= 700,
+        `call_graph description should stay concise for agent context budgets (got ${callGraphTool!.description.length} chars)`,
+    );
+});
+
+test('all MCP tool descriptions stay concise to minimize per-turn context tax', () => {
+    const tools = getMcpToolList(buildContext());
+    const totalChars = tools.reduce((sum, tool) => sum + tool.description.length, 0);
+    for (const tool of tools) {
+        assert.ok(
+            tool.description.length <= 800,
+            `${tool.name} description exceeded 800 chars (${tool.description.length})`,
+        );
+    }
+    assert.ok(
+        totalChars <= 5000,
+        `Total MCP tool descriptions exceeded 5000 chars (${totalChars})`,
+    );
+});
+
+test('full serialized tools/list payload stays within per-tool and total byte budgets', () => {
+    const tools = getMcpToolList(buildContext());
+    const maxToolBytes = 6_000;
+    const maxTotalPayloadBytes = 24_576;
+
+    for (const tool of tools) {
+        const entryBytes = Buffer.byteLength(JSON.stringify(tool), 'utf8');
+        assert.ok(
+            entryBytes <= maxToolBytes,
+            `${tool.name} serialized tools/list entry exceeded ${maxToolBytes}B (${entryBytes}B)`,
+        );
+    }
+
+    const totalPayloadBytes = Buffer.byteLength(JSON.stringify({ tools }), 'utf8');
+    assert.ok(
+        totalPayloadBytes <= maxTotalPayloadBytes,
+        `Full serialized tools/list payload exceeded ${maxTotalPayloadBytes}B (${totalPayloadBytes}B)`,
+    );
 });
 
 test('search_codebase schema exposes scoped grouped/raw controls', () => {

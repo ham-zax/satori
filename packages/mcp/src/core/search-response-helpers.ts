@@ -18,6 +18,16 @@ import type {
 import { WARNING_CODES } from "./warnings.js";
 
 export type SearchActionIntent = Pick<SearchQueryPlan, "semanticQuery" | "referenceSeeking" | "implementationSeeking">;
+export type RecommendedReadFormat = "json" | "text";
+
+export function resolveRecommendedReadFormat(
+    explicit?: RecommendedReadFormat,
+): RecommendedReadFormat {
+    if (explicit !== undefined) {
+        return explicit;
+    }
+    return process.env.SATORI_RECOMMEND_TEXT_READS === "1" ? "text" : "json";
+}
 
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE";
 
@@ -466,6 +476,7 @@ export function buildSearchGroupRecommendedAction(
     result: SearchGroupResult,
     resultIndex?: number,
     intent?: SearchActionIntent,
+    recommendedReadFormat?: RecommendedReadFormat,
 ): SearchRecommendedNextAction | undefined {
     if (!isValidSearchSpan(result.target.span)) {
         return undefined;
@@ -480,6 +491,7 @@ export function buildSearchGroupRecommendedAction(
     if (!absolutePath) {
         return undefined;
     }
+    const readFormat = resolveRecommendedReadFormat(recommendedReadFormat);
 
     if (
         result.evidenceSpan
@@ -491,8 +503,10 @@ export function buildSearchGroupRecommendedAction(
             tool: "read_file",
             args: {
                 path: absolutePath,
+                codebaseRoot: path.resolve(codebaseRoot),
                 start_line: result.evidenceSpan.startLine,
                 end_line: result.evidenceSpan.endLine,
+                ...(readFormat === "text" ? { format: "text" } : {}),
             },
             reason: "Open the matched source evidence before requesting more context.",
         };
@@ -508,6 +522,7 @@ export function buildSearchGroupRecommendedAction(
             args: {
                 path: absolutePath,
                 mode: "plain",
+                ...(readFormat === "text" ? { format: "text" } : {}),
                 codebaseRoot: path.resolve(codebaseRoot),
                 open_symbol: {
                     contractVersion: 2,
@@ -531,8 +546,10 @@ export function buildSearchGroupRecommendedAction(
         tool: "read_file",
         args: {
             path: absolutePath,
+            codebaseRoot: path.resolve(codebaseRoot),
             start_line: result.target.span.startLine,
             end_line: result.target.span.endLine,
+            ...(readFormat === "text" ? { format: "text" } : {}),
         },
         reason: "Read the highest-ranked validated span before inferring symbol ownership.",
     };
@@ -569,6 +586,7 @@ function resolveUnambiguousSameFileExecutableAction(
     results: SearchGroupResult[],
     firstActionableIndex: number,
     intent?: SearchActionIntent,
+    recommendedReadFormat?: RecommendedReadFormat,
 ): SearchRecommendedNextAction | undefined {
     if (!intent?.implementationSeeking || intent.referenceSeeking) {
         return undefined;
@@ -594,7 +612,7 @@ function resolveUnambiguousSameFileExecutableAction(
         if (typeof candidate.target.symbolId !== "string" || candidate.target.symbolId.trim().length === 0) {
             continue;
         }
-        const action = buildSearchGroupRecommendedAction(codebaseRoot, candidate, index, intent);
+        const action = buildSearchGroupRecommendedAction(codebaseRoot, candidate, index, intent, recommendedReadFormat);
         if (!action || !("open_symbol" in action.args)) {
             continue;
         }
@@ -628,9 +646,10 @@ export function buildTopRecommendedSearchAction(
     codebaseRoot: string,
     results: SearchGroupResult[],
     intent?: SearchActionIntent,
+    recommendedReadFormat?: RecommendedReadFormat,
 ): SearchRecommendedNextAction | undefined {
     const firstActionableIndex = results.findIndex(
-        (result) => buildSearchGroupRecommendedAction(codebaseRoot, result) !== undefined,
+        (result) => buildSearchGroupRecommendedAction(codebaseRoot, result, undefined, undefined, recommendedReadFormat) !== undefined,
     );
     if (firstActionableIndex < 0) {
         return undefined;
@@ -640,16 +659,18 @@ export function buildTopRecommendedSearchAction(
         results,
         firstActionableIndex,
         intent,
+        recommendedReadFormat,
     );
     if (executableAction) {
         return executableAction;
     }
-    return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex, intent);
+    return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex, intent, recommendedReadFormat);
 }
 
 export function buildTopRecommendedRawSearchAction(
     codebaseRoot: string,
     results: SearchChunkResult[],
+    recommendedReadFormat?: RecommendedReadFormat,
 ): SearchRecommendedNextAction | undefined {
     const first = results[0];
     if (!first) {
@@ -659,13 +680,16 @@ export function buildTopRecommendedRawSearchAction(
     if (!absolutePath || !isValidSearchSpan(first.span)) {
         return undefined;
     }
+    const readFormat = resolveRecommendedReadFormat(recommendedReadFormat);
     return {
         resultIndex: 0,
         tool: "read_file",
         args: {
             path: absolutePath,
+            codebaseRoot: path.resolve(codebaseRoot),
             start_line: first.span.startLine,
             end_line: first.span.endLine,
+            ...(readFormat === "text" ? { format: "text" } : {}),
         },
         reason: "Open the top raw chunk before inferring ownership from ungrouped search results.",
     };

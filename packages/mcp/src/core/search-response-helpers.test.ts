@@ -11,6 +11,7 @@ import {
     buildSearchGroupRecommendedAction,
     extractIdentifierFromSymbolLabel,
     buildSearchWarningDetails,
+    buildTopRecommendedRawSearchAction,
     buildTopRecommendedSearchAction,
     truncateSearchUtf8,
 } from "./search-response-helpers.js";
@@ -117,6 +118,7 @@ test("oversized symbol recommends the matched evidence span before exact open", 
     assert.equal(action.resultIndex, 0);
     assert.deepEqual(action.args, {
         path: "/repo/src/tool-handlers.ts",
+        codebaseRoot: "/repo",
         start_line: 100,
         end_line: 140,
     });
@@ -156,7 +158,7 @@ test("a matched evidence target keeps its bounded first read and exact symbol id
         },
     });
     assert.deepEqual(buildSearchGroupRecommendedAction("/repo", result)?.args, {
-        path: "/repo/src/tool-handlers.ts", start_line: 100, end_line: 140,
+        path: "/repo/src/tool-handlers.ts", codebaseRoot: "/repo", start_line: 100, end_line: 140,
     });
     assert.equal(result.target.symbolId, "sym_tool_handlers");
 });
@@ -171,7 +173,7 @@ test("a file evidence recommendation describes the source without claiming a lar
     const action = buildSearchGroupRecommendedAction("/repo", result);
     assert.ok(action);
     assert.deepEqual(action.args, {
-        path: "/repo/README.md", start_line: 1, end_line: 40,
+        path: "/repo/README.md", codebaseRoot: "/repo", start_line: 1, end_line: 40,
     });
     assert.equal(action.reason, "Open the matched source evidence before requesting more context.");
 });
@@ -244,6 +246,7 @@ test("top recommendation preserves ranked order instead of skipping a span-only 
     assert.equal(action?.resultIndex, 0);
     assert.deepEqual(action?.args, {
         path: "/repo/src/first.ts",
+        codebaseRoot: "/repo",
         start_line: 8,
         end_line: 12,
     });
@@ -340,8 +343,31 @@ test("top recommendation targets an unambiguous same-file function when #1 is a 
     assert.equal(ambiguousAction?.resultIndex, 0);
     assert.deepEqual(ambiguousAction?.args, {
         path: "/repo/crates/polars-compute/src/rolling/nulls/mean.rs",
+        codebaseRoot: "/repo",
         start_line: 1,
         end_line: 120,
+    });
+});
+
+test("buildTopRecommendedRawSearchAction pins normalized codebaseRoot on range reads", () => {
+    const action = buildTopRecommendedRawSearchAction("/repo/./sub/..", [
+        {
+            file: "src/raw.ts",
+            span: { startLine: 15, endLine: 35 },
+            score: 0.9,
+            content: "const x = 1;",
+        } as Parameters<typeof buildTopRecommendedRawSearchAction>[1][number],
+    ]);
+    assert.deepEqual(action, {
+        resultIndex: 0,
+        tool: "read_file",
+        args: {
+            path: "/repo/src/raw.ts",
+            codebaseRoot: "/repo",
+            start_line: 15,
+            end_line: 35,
+        },
+        reason: "Open the top raw chunk before inferring ownership from ungrouped search results.",
     });
 });
 
@@ -511,4 +537,63 @@ test("identifier extraction skips the variable kind prefix", () => {
     assert.equal(extractIdentifierFromSymbolLabel("variable LIVE_WASM_DECISION_TIME_MS"), "LIVE_WASM_DECISION_TIME_MS");
     assert.equal(extractIdentifierFromSymbolLabel("const LIVE_WASM_DECISION_TIME_MS"), "LIVE_WASM_DECISION_TIME_MS");
     assert.equal(extractIdentifierFromSymbolLabel("variable"), "variable");
+});
+
+test("recommendedNextAction helpers omit format by default and emit format='text' when opted in", () => {
+    const exactGroup = baseGroup({
+        target: {
+            file: "src/tool-handlers.ts",
+            span: { startLine: 10, endLine: 40 },
+            symbolId: "sym_tool_handlers",
+        },
+        evidenceSpan: { startLine: 12, endLine: 20 },
+    });
+    const rangeGroup = baseGroup({
+        target: {
+            file: "src/tool-handlers.ts",
+            span: { startLine: 1, endLine: 2000 },
+            symbolId: "sym_tool_handlers",
+        },
+        evidenceSpan: { startLine: 100, endLine: 140 },
+    });
+    const rawChunk = {
+        file: "src/raw.ts",
+        span: { startLine: 5, endLine: 15 },
+        score: 0.9,
+        content: "const a = 1;",
+    } as Parameters<typeof buildTopRecommendedRawSearchAction>[1][number];
+
+    assert.equal("format" in buildSearchGroupRecommendedAction("/repo", exactGroup)!.args, false);
+    assert.equal("format" in buildSearchGroupRecommendedAction("/repo", rangeGroup)!.args, false);
+    assert.equal("format" in buildTopRecommendedRawSearchAction("/repo", [rawChunk])!.args, false);
+
+    assert.equal(
+        buildSearchGroupRecommendedAction("/repo", exactGroup, 0, undefined, "text")?.args.format,
+        "text",
+    );
+    assert.equal(
+        buildSearchGroupRecommendedAction("/repo", rangeGroup, 0, undefined, "text")?.args.format,
+        "text",
+    );
+    assert.equal(
+        buildTopRecommendedSearchAction("/repo", [exactGroup], undefined, "text")?.args.format,
+        "text",
+    );
+    assert.equal(
+        buildTopRecommendedRawSearchAction("/repo", [rawChunk], "text")?.args.format,
+        "text",
+    );
+
+    const previousEnv = process.env.SATORI_RECOMMEND_TEXT_READS;
+    try {
+        process.env.SATORI_RECOMMEND_TEXT_READS = "1";
+        assert.equal(buildSearchGroupRecommendedAction("/repo", exactGroup)?.args.format, "text");
+        assert.equal(buildSearchGroupRecommendedAction("/repo", exactGroup, 0, undefined, "json")?.args.format, undefined);
+    } finally {
+        if (previousEnv === undefined) {
+            delete process.env.SATORI_RECOMMEND_TEXT_READS;
+        } else {
+            process.env.SATORI_RECOMMEND_TEXT_READS = previousEnv;
+        }
+    }
 });

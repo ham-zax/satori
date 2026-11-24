@@ -268,3 +268,27 @@ test("inspectable source preserves a final path escape as a safety failure", asy
         fs.rmSync(outside, { recursive: true, force: true });
     }
 });
+
+test("inspectable source rejects a final link to identical bytes inside the bound root", async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-inspectable-alias-")));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const file = path.join(root, "source.ts");
+    const aliasTarget = path.join(root, "copy.ts");
+    const source = "export function target() { return 1; }\n";
+    fs.writeFileSync(file, source);
+    fs.writeFileSync(aliasTarget, source);
+    const input = { codebaseRoot: root, relativeFile: "source.ts", maxInspectableBytes: 1024 };
+    const prepared = await prepareInspectableSource(input);
+    assert.equal(prepared.status, "available");
+    try {
+        const final = await prepared.finalizer.finalize({ validatePreparedAuthority: async () => {
+            fs.renameSync(file, path.join(root, "original.ts"));
+            fs.symlinkSync(aliasTarget, file);
+        } });
+        assert.equal(final.status, "safety_error");
+    } finally {
+        await prepared.finalizer.release();
+    }
+    const reopened = await prepareInspectableSource(input);
+    assert.equal(reopened.status, "safety_error");
+});

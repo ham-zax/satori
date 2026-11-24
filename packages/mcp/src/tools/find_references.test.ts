@@ -83,7 +83,7 @@ test("find_references schema requires canonical symbol target and safe repo-rela
 
     assert.equal(findReferencesInputSchema.safeParse({
         path: path.resolve("/tmp/repo"),
-        symbolRef: { file: "/etc/passwd", symbolId: "target" },
+        symbolRef: { file: "/tmp/repo/src/../outside.ts", symbolId: "target" },
     }).success, false);
 
     assert.equal(findReferencesInputSchema.safeParse({
@@ -385,4 +385,173 @@ test("find_references keeps an unchanged published file on published_source_text
         assert.equal(page.payload.references[0].evidenceClass, "published_source_text");
         assert.equal(page.payload.coverage.reasons.length, 0);
     }
+});
+
+test("find_references resolves unique symbolLabel across cursor pages and fails closed on ambiguous_symbol", async (t) => {
+    const tmpBase = fs.mkdtempSync(path.resolve("satori-find-references-label-"));
+    t.after(() => fs.rmSync(tmpBase, { recursive: true, force: true }));
+    const realRoot = path.join(tmpBase, "real-repo");
+    const linkRoot = path.join(tmpBase, "link-repo");
+    fs.mkdirSync(path.join(realRoot, "src"), { recursive: true });
+    fs.symlinkSync(realRoot, linkRoot, "dir");
+
+    const fileA = path.join(realRoot, "src", "a.ts");
+    const fileB = path.join(realRoot, "src", "b.ts");
+    fs.writeFileSync(fileA, "export function uniqueWorker() {}\nuniqueWorker();\n");
+    fs.writeFileSync(fileB, "export function dup() {}\nexport function dup(x: number) {}\n");
+
+    const uniqueSymbol = {
+        symbolInstanceId: "syminst_unique_worker",
+        name: "uniqueWorker",
+        file: "src/a.ts",
+        language: "typescript",
+        kind: "function",
+        label: "function uniqueWorker()",
+        qualifiedName: "uniqueWorker",
+        parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 1 },
+        symbolKey: "key_unique",
+        fileHash: sha256(fs.readFileSync(fileA, "utf8")),
+        extractorVersion: "1.0.0",
+    } as SymbolRecord;
+    const dup1 = {
+        symbolInstanceId: "syminst_dup_1",
+        name: "dup",
+        file: "src/b.ts",
+        language: "typescript",
+        kind: "function",
+        label: "function dup()",
+        qualifiedName: "dup",
+        parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 1 },
+        symbolKey: "key_dup_1",
+        fileHash: sha256(fs.readFileSync(fileB, "utf8")),
+        extractorVersion: "1.0.0",
+    } as SymbolRecord;
+    const dup2 = {
+        symbolInstanceId: "syminst_dup_2",
+        name: "dup",
+        file: "src/b.ts",
+        language: "typescript",
+        kind: "function",
+        label: "function dup(x: number)",
+        qualifiedName: "dup",
+        parentQualifiedNamePath: [],
+        span: { startLine: 2, endLine: 2 },
+        symbolKey: "key_dup_2",
+        fileHash: sha256(fs.readFileSync(fileB, "utf8")),
+        extractorVersion: "1.0.0",
+    } as SymbolRecord;
+
+    const registry = {
+        manifest: {
+            files: [
+                { path: "src/a.ts", hash: sha256(fs.readFileSync(fileA, "utf8")) },
+                { path: "src/b.ts", hash: sha256(fs.readFileSync(fileB, "utf8")) },
+            ],
+        },
+        symbolsByFile: new Map([
+            ["src/a.ts", [uniqueSymbol]],
+            ["src/b.ts", [dup1, dup2]],
+        ]),
+    } as unknown as SymbolRegistry;
+    const canonicalRoot = fs.realpathSync(realRoot);
+    const lease = {
+        id: "publication-1",
+        publication: { id: "publication-1", canonicalRoot },
+        release: () => {},
+    } as PublicationLease;
+    const policy = createSessionWorkspacePolicy({
+        roots: [canonicalRoot, linkRoot],
+        homeDirectory: tmpBase,
+        stateRoot: path.join(tmpBase, "state"),
+    });
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: canonicalRoot }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        loadPreparedNavigationManifest: async () => ({ status: "ok", registry }),
+        normalizeRelativeFilePath: (value: string) => value,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const ctx = {
+        toolHandlers: {
+            navigationHandlers,
+            handleFindReferences: ToolHandlers.prototype.handleFindReferences,
+        } as unknown as ToolHandlers,
+        workspacePolicy: policy,
+    } as unknown as ToolContext;
+
+    // 1. Unique symbolLabel + symlinked-root absolute symbolRef.file + cursor paging
+    const page1 = await findReferencesTool.execute({
+        path: linkRoot,
+        symbolRef: { file: path.join(linkRoot, "src", "a.ts"), symbolLabel: "uniqueWorker" },
+        limit: 1,
+    }, ctx);
+    assert.equal(page1.isError, undefined);
+    const p1 = JSON.parse(page1.content[0]!.text);
+    assert.equal(p1.status, "ok");
+    assert.equal(p1.references.length, 1);
+    assert.equal(p1.hints.nextPage.args.symbolRef.symbolId, "syminst_unique_worker");
+
+    const page2 = await findReferencesTool.execute({
+        path: linkRoot,
+        symbolRef: { file: "src/a.ts", symbolLabel: "function uniqueWorker()" },
+        limit: 1,
+        cursor: p1.nextCursor,
+    }, ctx);
+    assert.equal(page2.isError, undefined);
+    const p2 = JSON.parse(page2.content[0]!.text);
+    assert.equal(p2.status, "ok");
+    assert.equal(p2.references.length, 1);
+    assert.equal(p2.nextCursor, undefined);
+
+    for (const [requestRoot, fileRoot] of [[linkRoot, canonicalRoot], [canonicalRoot, linkRoot]]) {
+        const mixed = await findReferencesTool.execute({
+            path: requestRoot,
+            symbolRef: { file: path.join(fileRoot, "src", "a.ts"), symbolLabel: "uniqueWorker" },
+            limit: 1,
+        }, ctx);
+        assert.equal(mixed.isError, undefined, mixed.content[0]!.text);
+        assert.deepEqual(JSON.parse(mixed.content[0]!.text).references, p1.references);
+    }
+
+    const outside = await findReferencesTool.execute({
+        path: linkRoot,
+        symbolRef: { file: path.join(tmpBase, "outside.ts"), symbolLabel: "uniqueWorker" },
+    }, ctx);
+    assert.equal(outside.isError, true);
+    const outsidePayload = JSON.parse(outside.content[0]!.text);
+    assert.equal(outsidePayload.reason, "invalid_request");
+    assert.match(outsidePayload.message, /must resolve inside the indexed codebase root/);
+
+    // 2. Ambiguous symbolLabel fails closed with deterministic candidates
+    const ambig = await findReferencesTool.execute({
+        path: canonicalRoot,
+        symbolRef: { file: "src/b.ts", symbolLabel: "dup" },
+    }, ctx);
+    assert.equal(ambig.isError, undefined);
+    const ambigPayload = JSON.parse(ambig.content[0]!.text);
+    assert.equal(ambigPayload.status, "not_found");
+    assert.equal(ambigPayload.reason, "ambiguous_symbol");
+    assert.equal(ambigPayload.totalCandidateCount, 2);
+    assert.deepEqual(ambigPayload.candidates, [
+        {
+            symbolId: "syminst_dup_1",
+            symbolLabel: "function dup()",
+            kind: "function",
+            file: "src/b.ts",
+            span: { startLine: 1, endLine: 1 },
+        },
+        {
+            symbolId: "syminst_dup_2",
+            symbolLabel: "function dup(x: number)",
+            kind: "function",
+            file: "src/b.ts",
+            span: { startLine: 2, endLine: 2 },
+        },
+    ]);
 });

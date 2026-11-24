@@ -6,7 +6,6 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
     createSessionWorkspacePolicy,
-    WorkspaceAuthorizationError,
     type SessionWorkspacePolicy,
 } from "./session-workspace-policy.js";
 import {
@@ -101,14 +100,15 @@ test("rejects a symlink to an outside file", async (t) => {
     fs.writeFileSync(outsideTarget, "SECRET\n");
     const linkPath = path.join(workspace, "escaped.ts");
     fs.symlinkSync(outsideTarget, linkPath);
-    await assert.rejects(
+    await expectCode(
         openAuthorizedPublishedFile({
             workspacePolicy: policy,
             codebaseRoot: workspace,
             requestedPath: linkPath,
             publishedRelativePaths: new Set(["escaped.ts"]),
         }),
-        WorkspaceAuthorizationError,
+        PublishedFileAuthorizationError,
+        "FINAL_SYMLINK_REJECTED",
     );
 });
 
@@ -117,9 +117,6 @@ test("rejects a symlink to an inside file", async (t) => {
     const targetPath = writeFile(workspace, "src/target.ts", "export const target = 1;\n");
     const linkPath = path.join(workspace, "alias.ts");
     fs.symlinkSync(targetPath, linkPath);
-    // The symlink's canonical identity is its resolved target, so the published
-    // set must contain the target's relative path for the publication gate to
-    // pass and the final-symlink rejection to be the gate under test.
     await expectCode(
         openAuthorizedPublishedFile({
             workspacePolicy: policy,

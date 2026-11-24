@@ -1,12 +1,12 @@
+import path from 'node:path';
 import { z } from 'zod';
-import { requireAbsoluteFilesystemPath } from '../utils.js';
+import { requireAbsoluteFilesystemPath, requireRepoRelativeFilePath } from '../utils.js';
 import {
     McpTool,
     ToolContext,
     ToolResponse,
     absoluteFilesystemPathSchema,
     formatZodError,
-    repoRelativeFilePathSchema,
 } from './types.js';
 import { resolveVectorBackedToolContext } from './provider-context.js';
 import {
@@ -15,19 +15,64 @@ import {
 } from '../core/session-workspace-policy.js';
 import type { CallGraphSymbolRef } from '../core/search-types.js';
 
+function hasUnsafePathSegments(value: string): boolean {
+    if (value.includes('\0')) {
+        return true;
+    }
+    const segments = value.split(/[\\/]/);
+    return segments.includes('..');
+}
+
+export function isValidNavigationBoundaryFilePath(value: string): boolean {
+    if (typeof value !== 'string') {
+        return false;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '.' || hasUnsafePathSegments(trimmed)) {
+        return false;
+    }
+    if (/^[A-Za-z]:(?![\\/])/.test(trimmed)) {
+        return false;
+    }
+    if (path.isAbsolute(trimmed)) {
+        const resolved = path.resolve(trimmed);
+        return path.basename(resolved).length > 0;
+    }
+    return requireRepoRelativeFilePath(trimmed, 'file').ok;
+}
+
+export function navigationBoundaryFilePathSchema(description: string) {
+    return z.string().min(1).describe(description).refine(
+        (value) => isValidNavigationBoundaryFilePath(value),
+        {
+            message: "must be a repo-relative path or an absolute path inside the codebase root (not drive-relative; no .. escape segments; not '.')",
+        },
+    );
+}
+
 export const callGraphSymbolRefSchema: z.ZodType<CallGraphSymbolRef> = z.object({
-    file: repoRelativeFilePathSchema('Repo-relative file path from the codebase root (not absolute; resolved only against that root).'),
-    symbolId: z.string().min(1).describe('Concrete symbol identifier from search_codebase grouped result target.symbolId.'),
-    symbolLabel: z.string().optional().describe('Optional symbol display label.'),
+    file: navigationBoundaryFilePathSchema('Repo-relative file path from the codebase root, or an absolute file path inside that root.'),
+    symbolId: z.string().min(1).optional().describe('Concrete symbol identifier from search_codebase grouped result target.symbolId.'),
+    symbolLabel: z.string().min(1).optional().describe('Exact symbol label or name in the target file when symbolId is not yet known.'),
     span: z.object({
         startLine: z.number().int().positive(),
         endLine: z.number().int().positive(),
     }).optional().describe('Optional symbol span in the file.'),
+}).superRefine((ref, ctx) => {
+    const hasSymbolId = typeof ref.symbolId === 'string' && ref.symbolId.trim().length > 0;
+    const hasSymbolLabel = typeof ref.symbolLabel === 'string' && ref.symbolLabel.trim().length > 0;
+    if (!hasSymbolId && !hasSymbolLabel) {
+        ctx.addIssue({
+            code: "custom",
+            path: ['symbolId'],
+            message: 'symbolRef requires either symbolId or symbolLabel.',
+        });
+    }
 });
 
 export const callGraphInputSchema = z.object({
     path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected).'),
-    symbolRef: callGraphSymbolRefSchema.describe('Pass a graph-ready grouped search result target directly.'),
+    symbolRef: callGraphSymbolRefSchema.describe('Pass a graph-ready grouped search result target or { file, symbolLabel }.'),
     direction: z.enum(['callers', 'callees', 'both']).optional().meta({ default: 'both' }).describe('Traversal direction from the starting symbol. both unions separate caller and callee traversals within the shared edge limit.'),
     depth: z.number().int().min(1).max(3).optional().meta({ default: 1 }).describe('Traversal depth (max 3).'),
     limit: z.number().int().positive().max(50).optional().meta({ default: 20 }).describe('Maximum number of returned edges (at most 50, which keeps one response within the 48 KiB budget the other navigation tools use).'),
@@ -81,7 +126,7 @@ function formatWorkspaceAuthorizationError(
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse Publication relationship navigation when the indexed symbol\'s canonical language capability supports call-graph queries and the current Publication has compatible relationship navigation. When path names a subdirectory inside the indexed root, that requested path is a hard boundary for the target, graph traversal, semantic/test/source evidence, construct gaps, summaries, and evidence continuations; sibling paths do not contribute evidence. When a grouped search result has navigation.graph="ready", pass its target directly as symbolRef and use the envelope codebaseRoot as path. Relationship-backed CALLS v0 is language-specific and conservative: some supported tiers use heuristic, name-based evidence, while CBM-backed Go, Java, C#, C++, and Rust expose qualified direct-call slices and exclude receiver/type-aware dispatch. Java and C# require caller and target to share the same detected build root (Maven/Gradle or .csproj), falling back to the same source directory when no manifest establishes broader authority. C and C++ admit a cross-file target only when the caller\'s include closure contains the target file or a declaration of it; parse-error and conditional-preprocessing regions are excluded and reported as partial files. Rust requires Cargo ownership while rejecting unmodeled cfg-dependent sources. For supported test-reference languages, including Python and Go, resolved testReferences remain available as relationship evidence. Successful responses are summary-first: resolved graph edges and evidenceSummary distinguish returned CALLS edges/inbound caller owners from resolved exact target references, canonical owners present only in reference evidence, ownerless exact references, ambiguous/unresolved target evidence, and observational textual source references without returning bulky exact/source/test reference rows, construct gap spans, or edge argument expressions. Pass evidence={kind,limit,cursor?} to page one evidence class; continuations are bound to the serving Publication, symbol, and requested path scope. Semantic providers expose exact references from persisted resolution claims, while ambiguous or unresolved candidates remain explicit evidence and are never promoted into edges. When inbound CALLS are empty, call_graph may scan the validated Publication source universe for exact textual occurrences with honest complete/partial sourceReferenceCoverage; these matches are observational only and never become CALLS. It is not a compiler-grade call graph; traversal is bounded, incomplete, advisory, and not authoritative blast-radius proof, so empty or short edge lists are not proof of no callers. Verify impact with search_codebase, read_file, tests, or direct references. Readable edited files retain published symbols, spans, and graph edges with source-drift warnings. Node freshness distinguishes current-source hash checks from unknown per-file index age. Limit warnings indicate incomplete traversal. In successful responses, graph.nodeCount and graph.edgeCount count only records returned in that response.',
+    description: () => 'Traverse callers/callees in the current Publication when canonical language capability supports call-graph navigation. For a grouped search hit with navigation.graph="ready", pass its target as symbolRef and codebaseRoot as path (subdirectories confine traversal). Summary-first; pass evidence={kind,limit,cursor?} for details. CALLS is conservative/heuristic (name-based or qualified direct-call without receiver/type-aware dispatch), bounded, and advisory—not a compiler-grade call graph or authoritative blast-radius proof. Verify impact with find_references, read_file, or tests.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

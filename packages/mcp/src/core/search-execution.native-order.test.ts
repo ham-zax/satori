@@ -512,3 +512,45 @@ test("implementation focus skips reranking supporting test chunks when enough pr
     assert.equal(testSeen.length, results.length);
     assert.ok(testSeen.some((doc) => doc.includes("tests/cleanup-")));
 });
+
+test("implementation focus orders runtime implementations before config/JSON and test files even when reranking does not run", async () => {
+    const results = [
+        candidate("evals/agent-discovery/tasks.json", 0.99),
+        candidate("tests/frontdoor.test.ts", 0.95),
+        candidate("packages/mcp/src/core/search-frontdoor.ts", 0.80),
+    ];
+
+    // 1. served_previous_generation (active sync skips reranking)
+    const staleInput = buildInput("how does frontdoor re-prove tracked-root readiness");
+    staleInput.freshnessMode = "served_previous_generation";
+    const staleOutcome = await run(staleInput, buildHost(results, rerankerReturning([])));
+    assert.equal(staleOutcome.kind, "ok");
+    assert.equal(staleOutcome.rerankerAttempted, false);
+    assert.equal(staleOutcome.orderAuthority, "retrieval_order");
+    assert.deepEqual(staleOutcome.scored.map((entry) => entry.result.relativePath), [
+        "packages/mcp/src/core/search-frontdoor.ts",
+        "evals/agent-discovery/tasks.json",
+        "tests/frontdoor.test.ts",
+    ]);
+
+    // 2. No reranker configured
+    const noRerankOutcome = await run(
+        buildInput("how does frontdoor re-prove tracked-root readiness"),
+        buildHost(results, null),
+    );
+    assert.equal(noRerankOutcome.kind, "ok");
+    assert.equal(noRerankOutcome.rerankerAttempted, false);
+    assert.deepEqual(noRerankOutcome.scored.map((entry) => entry.result.relativePath), [
+        "packages/mcp/src/core/search-frontdoor.ts",
+        "evals/agent-discovery/tasks.json",
+        "tests/frontdoor.test.ts",
+    ]);
+
+    // 3. Explicit configuration/test intent preserves retrieval order without reranker
+    const configOutcome = await run(
+        buildInput("configuration for frontdoor tasks"),
+        buildHost(results, null),
+    );
+    assert.equal(configOutcome.kind, "ok");
+    assert.equal(configOutcome.scored[0]?.result.relativePath, "evals/agent-discovery/tasks.json");
+});

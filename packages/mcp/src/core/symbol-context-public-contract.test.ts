@@ -318,3 +318,52 @@ test("public envelope projects only frozen fields and cannot be overwritten by i
     assert.equal(envelope.effectiveRequest, resolved.effectiveRequest);
     assert.equal(Object.prototype.hasOwnProperty.call(envelope, "internalOnly"), false);
 });
+
+test("implementation preset includes bounded callers and callees by default while honoring explicit overrides", () => {
+    const defaultRequest = exactSymbolOpenRequestSchema.parse({
+        contractVersion: 2,
+        symbolId: "sym_target",
+        context: { preset: "implementation", query: "how target validates readiness" },
+    });
+    const defaultResolved = resolveSymbolContextOperation({ mode: "plain", request: defaultRequest });
+    assert.equal(defaultResolved.kind, "context");
+    if (defaultResolved.kind !== "context") return;
+    assert.deepEqual(defaultResolved.effectiveRequest.include, {
+        source: true,
+        siblings: true,
+        callers: true,
+        callees: true,
+        lexicalContext: true,
+    });
+
+    const overrideRequest = exactSymbolOpenRequestSchema.parse({
+        contractVersion: 2,
+        symbolId: "sym_target",
+        context: {
+            preset: "implementation",
+            include: { callers: false, callees: false },
+        },
+    });
+    const overrideResolved = resolveSymbolContextOperation({ mode: "plain", request: overrideRequest });
+    assert.equal(overrideResolved.kind, "context");
+    if (overrideResolved.kind !== "context") return;
+    assert.deepEqual(overrideResolved.effectiveRequest.include, {
+        source: true,
+        siblings: true,
+        callers: false,
+        callees: false,
+        lexicalContext: true,
+    });
+});
+
+test("text format uses full totalResponseBytes budget without subtracting JSON envelope prefix", () => {
+    const request = exactSymbolOpenRequestSchema.parse({
+        contractVersion: 2,
+        symbolId: "sym_target",
+        context: { preset: "definition", budgets: { totalResponseBytes: 4_096 } },
+    });
+    const textResolved = resolveSymbolContextOperation({ mode: "plain", format: "text", request });
+    assert.equal(textResolved.kind, "context");
+    if (textResolved.kind !== "context") return;
+    assert.equal(textResolved.budgets.maxSerializedResponseBytes, 4_096);
+});

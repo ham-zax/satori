@@ -112,6 +112,7 @@ import {
     type PreparedEntrypointOwnerEvidence,
 } from "./entrypoint-owner-evidence.js";
 import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
+import { attachHydratedExactSource } from "./search-exact-registry-hit.js";
 import {
     finalizeSearchResults,
     type FinalizedSearchResultSet,
@@ -369,7 +370,10 @@ type SearchToolTextResponse = ToolTextResponse & {
 };
 
 type ValidatedSearchRequest = {
-    input: SearchRequestInput & { debugMode: NonNullable<SearchRequestInput['debugMode']> };
+    input: SearchRequestInput & {
+        debugMode: NonNullable<SearchRequestInput['debugMode']>;
+        hydrateExact?: boolean;
+    };
     parsedOperators: ReturnType<SearchQuerySupport['parseSearchOperators']>;
 };
 
@@ -441,7 +445,7 @@ export interface SearchReadinessCollaborator {
         | { action: "create" | "reindex" | "sync"; phase: string; generation: number }
         | undefined;
 
-    probeLocalSearchCollectionState(codebasePath: string): Promise<{
+    probeLocalSearchCollectionState(codebasePath: string, selectedCollection?: string): Promise<{
         state: 'ready' | 'missing' | 'unknown';
         collectionName?: string;
     }>;
@@ -502,6 +506,8 @@ export interface SearchHintPayloadCollaborator {
 }
 
 export interface SearchPreparedReadCollaborator {
+    isPublishedSource(publication: PublicationRef, file: string, hash: string): boolean;
+
     loadPreparedNavigationManifest(
         preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
         operations?: SearchReadinessDebugHint['operations'],
@@ -862,6 +868,9 @@ export class SearchRequestCoordinator {
             ...(args.includeResultIndex !== undefined
                 ? { includeResultIndex: args.includeResultIndex === true }
                 : {}),
+            ...(typeof args.hydrateExact === 'boolean'
+                ? { hydrateExact: args.hydrateExact }
+                : {}),
             debugMode,
             ...(Number.isFinite(rawDebugCandidateLimit)
                 ? { debugCandidateLimit: Math.max(1, rawDebugCandidateLimit) }
@@ -901,8 +910,10 @@ export class SearchRequestCoordinator {
         const isResultIndexValid = args.includeResultIndex === undefined
             || (typeof args.includeResultIndex === "boolean"
                 && input.resultMode === "grouped");
+        const isHydrateExactValid = args.hydrateExact === undefined
+            || typeof args.hydrateExact === "boolean";
 
-        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || !isLimitValid || !isDebugCandidateLimitValid || !isDisclosureLimitValid || !isResultIndexValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || !isLimitValid || !isDebugCandidateLimitValid || !isDisclosureLimitValid || !isResultIndexValid || !isHydrateExactValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
             const payload = this.buildInvalidSearchRequestPayload({
                 path: typeof input.path === 'string' ? input.path : '',
                 query: typeof input.query === 'string' ? input.query : '',
@@ -1241,10 +1252,17 @@ export class SearchRequestCoordinator {
                     prepared.effectiveRoot,
                     prepared.publication.id,
                 ),
-                isLeaseAdmitted: (prepared, lease) => (
-                    prepared.publication.id === lease.id
-                    && this.preparedRead.isPublicationLeaseAdmitted(lease)
-                ),
+                isLeaseAdmitted: async (prepared, lease) => {
+                    if (prepared.publication.id !== lease.id
+                        || !await this.preparedRead.isPublicationLeaseAdmitted(lease)) return false;
+                    if (prepared.freshnessDecision.mode !== 'served_previous_generation') return true;
+
+                    const selectedCollection = lease.publication.vector.collectionName;
+                    const observation = await this.readiness.probeLocalSearchCollectionState(
+                        prepared.effectiveRoot, selectedCollection,
+                    );
+                    return observation.state === 'ready' && observation.collectionName === selectedCollection;
+                },
             });
             const outcome = await session.read(async (prepared, lease): Promise<SearchToolTextResponse | undefined> => {
                 const {
@@ -1362,6 +1380,9 @@ export class SearchRequestCoordinator {
                     },
                     navigationStatus,
                 };
+                const responseByteLimit = debugMode === "full"
+                    ? SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES
+                    : SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES;
                 const attachSearchResultSet = (
                     envelope: SearchGroupedResponseEnvelope,
                     resultSet: FinalizedSearchResultSet | undefined,
@@ -1369,9 +1390,6 @@ export class SearchRequestCoordinator {
                     orderAuthority: SearchOrderAuthority,
                 ): SearchGroupedResponseEnvelope => {
                     if (!resultSet) return envelope;
-                    const responseByteLimit = debugMode === "full"
-                        ? SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES
-                        : SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES;
                     const successfulEnvelope = removeCacheAdmissionWarning(envelope);
                     const baseEnvelopeDraft: Partial<SearchGroupedResponseEnvelope> = structuredClone(
                         successfulEnvelope,
@@ -1516,6 +1534,7 @@ export class SearchRequestCoordinator {
                     limit: input.limit,
                     disclosureLimit: retrievalPolicy.disclosureResultLimit,
                     includeResultIndex: input.includeResultIndex === true,
+                    ...(input.hydrateExact !== undefined ? { hydrateExact: input.hydrateExact } : {}),
                     debugMode,
                     rankingMode: input.rankingMode,
                     semanticQuery,
@@ -1547,6 +1566,7 @@ export class SearchRequestCoordinator {
                         preparedReadState,
                         readinessDebug.operations,
                     ),
+                    isPublishedSource: (symbol) => this.preparedRead.isPublishedSource?.(lease, symbol.file, symbol.fileHash) === true,
                     loadRegistryValidatedRelationshipNavigation: (exactInput) => this.readiness.loadRegistryValidatedRelationshipNavigation({
                         ...exactInput,
                         preparedRead: preparedReadState,
@@ -1593,12 +1613,13 @@ export class SearchRequestCoordinator {
                     ) {
                         const groupedEnvelope = exactEnvelope;
                         const resultSet = exactFastPath.finalized.resultSet;
-                        exactEnvelope = await perfSpan('search.exact_result_set', () => attachSearchResultSet(
+                        const indexedEnvelope = await perfSpan('search.exact_result_set', () => attachSearchResultSet(
                             groupedEnvelope,
                             resultSet,
                             false,
                             "retrieval_order",
                         ));
+                        exactEnvelope = attachHydratedExactSource(indexedEnvelope, exactFastPath.hydratedExactSource, responseByteLimit);
                     }
                     await perfSpan('search.exact_watcher_touch', () => (
                         this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot)

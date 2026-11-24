@@ -34,6 +34,7 @@ import { SEARCH_CHANGED_FILES_CACHE_TTL_MS } from "../core/search-constants.js";
 import type {
     ReadFileAnnotatedOutlineStatus,
     ReadFileAnnotatedResponseEnvelope,
+    FileOutlineResponseEnvelope,
     ReadFileStructuredErrorResponseEnvelope,
 } from "../core/search-types.js";
 import {
@@ -47,6 +48,11 @@ import {
     type ExactSymbolOpenRequest,
     type ResolvedSymbolContextOperation,
 } from "../core/symbol-context-public-contract.js";
+import type { ComposedSymbolContext } from "../core/symbol-context-composer.js";
+import {
+    renderOrdinaryRangeText,
+    renderSymbolContextText,
+} from "../core/symbol-context-text-renderer.js";
 
 export const readFileInputSchema = z.object({
     path: absoluteFilesystemPathSchema(
@@ -58,12 +64,13 @@ export const readFileInputSchema = z.object({
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive). An end_line past the end of the file reads to the last line."),
     mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Defaults to plain, including exact-symbol requests."),
+    format: z.enum(["json", "text"]).optional().describe("Response format. Defaults to json; text renders compact line-numbered source and metadata in a single text block."),
     presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
     open_symbol: openSymbolRequestSchema.optional().describe("Read bounded symbol source with continuation-aware excerpts using {contractVersion:2, symbolId}; context defaults to {preset:definition}. Explicit context and continuation are mutually exclusive. Direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
     if (input.start_line !== undefined && input.end_line !== undefined && input.start_line > input.end_line) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["end_line"],
             message: `start_line (${input.start_line}) must not exceed end_line (${input.end_line}).`,
         });
@@ -71,14 +78,14 @@ export const readFileInputSchema = z.object({
     if (!input.open_symbol) return;
     if (input.start_line !== undefined || input.end_line !== undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["open_symbol"],
             message: "open_symbol cannot be combined with top-level line ranges.",
         });
     }
     if (input.presentation !== undefined) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["presentation"],
             message: "presentation applies only to ordinary reads and cannot be combined with open_symbol.",
         });
@@ -267,6 +274,7 @@ function composeSymbolContextRequest(input: {
     relativeFile: string;
     request: ExactSymbolOpenRequest;
     operation: Exclude<ResolvedSymbolContextOperation, { kind: "unsupported_continuation" }>;
+    format?: "json" | "text";
 }) {
     return {
         codebaseRoot: input.root,
@@ -281,6 +289,20 @@ function composeSymbolContextRequest(input: {
             : {}),
         ...(input.operation.kind === "continuation"
             ? { continuation: input.operation.continuation }
+            : {}),
+        ...(input.format === "text"
+            ? {
+                measureResponseBytes: (context: ComposedSymbolContext) => Buffer.byteLength(
+                    renderSymbolContextText({
+                        codebaseRoot: input.root,
+                        envelope: composePublicSymbolContextEnvelope({
+                            effectiveRequest: input.operation.effectiveRequest,
+                            context,
+                        }),
+                    }),
+                    "utf8",
+                ),
+            }
             : {}),
     };
 }
@@ -453,11 +475,11 @@ function collectCodebaseCandidatesForFile(
     }
     for (const activity of ctx.mutationRuntime.listActiveMutations()) {
         if (activity.action === 'create' || activity.action === 'reindex') {
+            if (activity.action === 'reindex' && tracked.has(activity.canonicalRoot)) continue;
             tracked.set(activity.canonicalRoot, 'indexing');
         }
     }
 
-    const canonicalTarget = canonicalizeFilesystemPath(absolutePath);
     const candidates: ReadFileCodebaseCandidate[] = [];
     for (const [rootPath, status] of tracked) {
         const rootResult = requireAbsoluteFilesystemPath(rootPath, "codebase.path");
@@ -468,7 +490,7 @@ function collectCodebaseCandidatesForFile(
         } catch {
             continue;
         }
-        if (!isPathInsideRoot(canonicalTarget, candidatePath) || !allowedStatuses.has(status)) {
+        if (!isPathInsideRoot(absolutePath, candidatePath) || !allowedStatuses.has(status)) {
             continue;
         }
         candidates.push({ path: candidatePath, status });
@@ -538,15 +560,18 @@ async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext,
 }
 
 function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, boundRoot?: string): ReadFileIndexingBlock | undefined {
-    const canonicalTarget = canonicalizeFilesystemPath(absolutePath);
     const candidates: Array<{
         codebaseRoot: string;
         progressPct: number | null;
         lastUpdated: string | null;
     }> = [];
 
-    for (const activity of ctx.mutationRuntime.listActiveMutations()) {
+    const activeMutations = ctx.mutationRuntime.listActiveMutations();
+    if (activeMutations.length === 0) return undefined;
+    const publishedRoots = new Set(ctx.context.listCurrentPublications().map(({ publication }) => publication.canonicalRoot));
+    for (const activity of activeMutations) {
         if (activity.action !== 'create' && activity.action !== 'reindex') continue;
+        if (activity.action === 'reindex' && publishedRoots.has(activity.canonicalRoot)) continue;
         const rootResult = requireAbsoluteFilesystemPath(activity.canonicalRoot, "codebase.path");
         if (!rootResult.ok) continue;
         const codebaseRoot = canonicalizeFilesystemPath(rootResult.absolutePath);
@@ -556,7 +581,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, bou
         } catch {
             continue;
         }
-        if (!isPathInsideRoot(canonicalTarget, codebaseRoot)) continue;
+        if (!isPathInsideRoot(absolutePath, codebaseRoot)) continue;
         const operation = ctx.mutationRuntime.getOperation(activity.canonicalRoot);
         candidates.push({
             codebaseRoot,
@@ -572,7 +597,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, bou
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage plus files changed or untracked in git since the Publication that are searchable-language, in scope, and not ignored (their current source is read). FILE_NOT_PUBLISHED means the path is in neither set. With mode=\"annotated\", outlineStatus=\"not_ready\" and outlineReason=\"structural_evidence_unavailable\" mean the file is published and readable but lacks structural extraction evidence.",
+        "Read exact source within a current Satori Publication (prefer canonical read_file requests from search_codebase). open_symbol / symbol_context returns bounded symbol source with continuation-aware excerpts and relationships. Explicit start_line/end_line reads return the exact requested source range; presentation=\"full\" returns raw multiline source. Restricted to published files plus searchable, non-ignored git-changed/untracked files.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -606,19 +631,33 @@ export const readFileTool: McpTool = {
             : undefined;
 
         try {
-            // Schema already requires an absolute path; collapse . / .. and realpath when present.
             const resolvedPath = path.resolve(input.path);
-            const absolutePath = canonicalizeFilesystemPath(resolvedPath);
-            const boundRoot = input.codebaseRoot ? canonicalizeFilesystemPath(input.codebaseRoot) : undefined;
-            if (boundRoot) {
-                ctx.workspacePolicy.authorizeRoot(boundRoot);
-                if (!isPathInsideRoot(absolutePath, boundRoot)) {
+            const boundRoot = input.codebaseRoot
+                ? ctx.workspacePolicy.authorizeRoot(input.codebaseRoot).canonicalPath
+                : undefined;
+            // Authorize the directory without resolving the final component. A link's
+            // destination must never determine the public denial for a file read.
+            let parent: string | undefined;
+            try {
+                parent = ctx.workspacePolicy.authorizePath(path.dirname(resolvedPath)).canonicalPath;
+            } catch (error) {
+                if (!boundRoot || !(error instanceof WorkspaceAuthorizationError)) throw error;
+            }
+            const absolutePath = parent ? path.join(parent, path.basename(resolvedPath)) : resolvedPath;
+            if (boundRoot && (!parent || !isPathInsideRoot(absolutePath, boundRoot))) {
+                if (exactRequest) {
                     return symbolContextErrorResponse({
                         code: "ROOT_BINDING_INVALID",
                         reason: "root_binding_invalid",
                         message: "The requested file is outside its originating codebase root.",
                     });
                 }
+                return readFileAuthorizationDenial({
+                    reason: "root_binding_invalid",
+                    code: "ROOT_BINDING_INVALID",
+                    path: resolvedPath,
+                    message: "The requested file is outside its originating codebase root.",
+                });
             }
 
             // Fail closed: deny content access outside searchable roots before any content read.
@@ -678,10 +717,24 @@ export const readFileTool: McpTool = {
                 return outsideIndexedRootResponse(resolvedPath);
             }
 
+            // This check provides a stable diagnostic. The descriptor opener enforces
+            // the same restriction at open and when validating the final observation.
+            const finalStat = await fs.promises.lstat(absolutePath).catch(() => undefined);
+            if (finalStat?.isSymbolicLink()) {
+                return publishedFileAuthorizationDenial(
+                    new PublishedFileAuthorizationError(
+                        "FINAL_SYMLINK_REJECTED",
+                        `Final path component is a symlink: ${resolvedPath}`,
+                    ),
+                    resolvedPath,
+                );
+            }
+
             if (exactRequest) {
                 const relativeFile = normalizeRelativePath(path.relative(allowedRoot, absolutePath));
                 const operation = resolveSymbolContextOperation({
                     mode: input.mode as "plain" | "annotated",
+                    ...(input.format !== undefined ? { format: input.format } : {}),
                     request: exactRequest,
                 });
                 if (operation.kind === "unsupported_continuation") {
@@ -713,15 +766,38 @@ export const readFileTool: McpTool = {
                         relativeFile,
                         request: exactRequest,
                         operation,
+                        ...(input.format !== undefined ? { format: input.format } : {}),
                     }),
                 );
                 if (result.status === "ok") {
-                    const payload = { codebaseRoot: allowedRoot, ...composePublicSymbolContextEnvelope({
+                    const envelope = composePublicSymbolContextEnvelope({
                         effectiveRequest: operation.effectiveRequest,
                         context: result.context,
-                    }) };
-                    const serialized = JSON.stringify(payload);
+                    });
                     const hardLimit = operation.effectiveRequest.budgets.totalResponseBytes;
+                    if (input.format === "text") {
+                        const text = renderSymbolContextText({
+                            codebaseRoot: allowedRoot,
+                            envelope,
+                        });
+                        if (Buffer.byteLength(text, "utf8") > hardLimit) {
+                            return symbolContextErrorResponse({
+                                code: "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
+                                reason: "minimum_safe_package_exceeds_limit",
+                                message: "The exact symbol cannot be represented safely within the bounded response contract.",
+                                extra: {
+                                    symbolId: result.context.symbol.symbolId,
+                                    minimumRequiredResponseBytes: Buffer.byteLength(text, "utf8"),
+                                    hardResponseLimitBytes: SYMBOL_CONTEXT_LIMITS.hardResponseLimitBytes,
+                                },
+                            });
+                        }
+                        return {
+                            content: [{ type: "text", text }],
+                        };
+                    }
+                    const payload = { codebaseRoot: allowedRoot, ...envelope };
+                    const serialized = JSON.stringify(payload);
                     if (Buffer.byteLength(serialized, "utf8") > hardLimit) {
                         return symbolContextErrorResponse({
                             code: "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
@@ -797,21 +873,14 @@ export const readFileTool: McpTool = {
             // Publication-bound authorization: the file must be in the current
             // published searchable-file manifest OR admitted by the live-path
             // source policy (changed/untracked, in-scope, non-ignored). Both
-            // paths open through the shared descriptor-bound helper; existence,
-            // file-type, and symlink checks stay behind authorization so
-            // unpublished paths expose no existence/type/symlink-target oracle.
+            // paths use the shared descriptor-bound open. The earlier final-symlink
+            // check runs after workspace and root authorization and gives the same
+            // denial for every destination. Unpublished regular and missing paths
+            // get the same denial from the publication gate.
             const publishedRelativePaths = resolvePublishedRelativePaths(allowedRoot, ctx);
             const requestedRelativePath = normalizeRelativePath(path.relative(allowedRoot, absolutePath));
-            const isFinalSymlink = (() => {
-                try {
-                    return fs.lstatSync(resolvedPath).isSymbolicLink();
-                } catch {
-                    return false;
-                }
-            })();
             if (
-                !isFinalSymlink
-                && requestedRelativePath.length > 0
+                requestedRelativePath.length > 0
                 && !publishedRelativePaths.has(requestedRelativePath)
                 && await isLivePathAdmittedForRead(allowedRoot, requestedRelativePath, ctx)
             ) {
@@ -952,7 +1021,24 @@ export const readFileTool: McpTool = {
                 }
 
                 const selectedLines = totalLines === 0 ? [] : lines.slice(startLine - 1, endLine);
-                const shouldCompact = !input.open_symbol && (
+                const nextStartLine = addContinuationHint ? endLine + 1 : undefined;
+                if (input.format === "text" && mode === "plain") {
+                    const text = renderOrdinaryRangeText({
+                        absolutePath,
+                        ...(allowedRoot ? { codebaseRoot: allowedRoot } : {}),
+                        startLine,
+                        endLine,
+                        lines: selectedLines,
+                        ...(nextStartLine !== undefined ? { nextStartLine } : {}),
+                    });
+                    return {
+                        content: [{
+                            type: "text",
+                            text,
+                        }],
+                    };
+                }
+                const shouldCompact = input.format !== "text" && !input.open_symbol && (
                     input.presentation === "compact"
                     || (
                         input.presentation !== "full"
@@ -964,13 +1050,22 @@ export const readFileTool: McpTool = {
                 const compactEnvelope = shouldCompact
                     ? compactSourceRange(selectedLines, startLine, endLine, absolutePath)
                     : undefined;
-                const selected = totalLines === 0
-                    ? content
-                    : compactEnvelope
-                        ? JSON.stringify(compactEnvelope)
-                        : selectedLines.join("\n");
-                const nextStartLine = addContinuationHint ? endLine + 1 : undefined;
-                const hint = addContinuationHint
+                const selected = input.format === "text"
+                    ? renderOrdinaryRangeText({
+                        absolutePath,
+                        ...(allowedRoot ? { codebaseRoot: allowedRoot } : {}),
+                        mode,
+                        startLine,
+                        endLine,
+                        lines: selectedLines,
+                        ...(nextStartLine !== undefined ? { nextStartLine } : {}),
+                    })
+                    : totalLines === 0
+                        ? content
+                        : compactEnvelope
+                            ? JSON.stringify(compactEnvelope)
+                            : selectedLines.join("\n");
+                const hint = input.format !== "text" && addContinuationHint
                     ? `\n\n(File truncated at line ${endLine}. To read more, call read_file with path="${absolutePath}" and start_line=${nextStartLine}.)`
                     : "";
                 const contentWithHint = `${selected}${hint}`;
@@ -986,13 +1081,13 @@ export const readFileTool: McpTool = {
             }
 
             const supportedByExtension = isOutlineSupportedFile(absolutePath);
-            const resolvedRoot = resolveCodebaseRootForFile(absolutePath, ctx);
+            const resolvedRoot = allowedRoot;
             const relativeFile = resolvedRoot
                 ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
                 : undefined;
             let outlineStatus: ReadFileAnnotatedOutlineStatus = supportedByExtension ? "requires_reindex" : "unsupported";
             let outlineReason: ReadFileAnnotatedResponseEnvelope["outlineReason"];
-            let outline: { symbols: unknown[] } | null = null;
+            let outline: FileOutlineResponseEnvelope["outline"] = null;
             let hasMore = false;
             let warnings: string[] | undefined;
             let hints: Record<string, unknown> | undefined;
@@ -1061,11 +1156,23 @@ export const readFileTool: McpTool = {
                 ...(warnings && warnings.length > 0 ? { warnings } : {}),
                 ...(hints ? { hints } : {})
             };
+            if (input.format === "text") {
+                const annotations = [
+                    `Outline: ${outlineStatus}${outlineReason ? ` (${outlineReason})` : ""}`,
+                    ...(outline?.symbols.map((symbol) => `- ${symbol.symbolLabel} (${symbol.span.startLine}-${symbol.span.endLine}) [${symbol.symbolId}]`) ?? []),
+                    ...(hasMore ? ["More symbols are available through file_outline."] : []),
+                    ...(warnings ?? []),
+                    ...(hints ? [`Hints: ${JSON.stringify(hints)}`] : []),
+                ];
+                return {
+                    content: [{ type: "text", text: `${contentWithHint}\n\n${annotations.join("\n")}` }],
+                };
+            }
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify(payload, null, 2)
-                }]
+                    text: JSON.stringify(payload, null, 2),
+                }],
             };
             }
         } catch (error) {

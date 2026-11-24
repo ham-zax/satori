@@ -566,6 +566,7 @@ test("ordinary grouped evidence publishes a bounded deterministic target", () =>
         buildSearchGroupRecommendedAction("/repo", result.visibleResults[0]!)?.args,
         {
             path: "/repo/src/large.ts",
+            codebaseRoot: "/repo",
             start_line: 100,
             end_line: 139,
         },
@@ -627,7 +628,7 @@ test("large declaration search targets matched evidence while retaining exact sy
         assert.match(result.preview, /missing dependency/);
         assert.deepEqual(owner.span, { startLine: 39, endLine: 7901 });
         assert.deepEqual(buildSearchGroupRecommendedAction("/repo", result)?.args, {
-            path: "/repo/src/rule-tests.ts", start_line: 409, end_line: 425,
+            path: "/repo/src/rule-tests.ts", codebaseRoot: "/repo", start_line: 409, end_line: 425,
         });
 
         const exact = buildExactRegistryGroupResult({

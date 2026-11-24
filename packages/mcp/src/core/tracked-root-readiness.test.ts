@@ -108,3 +108,96 @@ test('a failed create with no tracked root reads as index_failed, not not_indexe
     const never = await new TrackedRootReadiness(host(undefined)).prepareTrackedRootForRead('/repo', 'semantic');
     assert.equal(never.state, 'not_indexed');
 });
+
+test('prepareTrackedRootForRead attaches searchableRead during reindex only when previous publication is compatible and collection is ready', async () => {
+    const root = '/repo';
+    const buildHost = (
+        action: 'create' | 'sync' | 'reindex',
+        proofOutcome: 'valid' | 'policy_incompatible',
+        collectionState: 'ready' | 'missing' | 'unknown',
+        observedCollection = 'collection-1',
+    ): TrackedRootReadinessHost => ({
+        isPathWithinCodebase: (targetPath: string, rootPath: string) => targetPath === rootPath,
+        listTrackedRoots: () => [{
+            path: root,
+            info: { status: 'indexing' as const },
+        }],
+        getIndexingOperation: () => ({ action, phase: 'vector', generation: 4 }),
+        hasSearchableGeneration: () => action !== 'create',
+        validateCompletionProof: async () => (
+            proofOutcome === 'valid'
+                ? {
+                    outcome: 'valid' as const,
+                    publication: publication(root),
+                    navigationStatus: 'valid' as const,
+                }
+                : {
+                    outcome: 'policy_incompatible' as const,
+                    reason: 'runtime_policy_incompatible' as const,
+                }
+        ),
+        probeLocalSearchCollectionState: async (_root: string, selectedCollection?: string) => ({
+            state: collectionState,
+            collectionName: (assert.equal(selectedCollection, 'collection-1'), observedCollection),
+        }),
+    } as unknown as TrackedRootReadinessHost);
+
+    const compatibleReindex = await new TrackedRootReadiness(
+        buildHost('reindex', 'valid', 'ready'),
+    ).prepareTrackedRootForRead(root, 'semantic');
+    assert.equal(compatibleReindex.state, 'indexing');
+    if (compatibleReindex.state === 'indexing') {
+        assert.equal(compatibleReindex.searchableGenerationAvailable, true);
+        assert.equal(compatibleReindex.operation?.action, 'reindex');
+        assert.equal(compatibleReindex.searchableRead?.publication.id, 'publication-1');
+    }
+
+    const incompatibleReindex = await new TrackedRootReadiness(
+        buildHost('reindex', 'policy_incompatible', 'ready'),
+    ).prepareTrackedRootForRead(root, 'semantic');
+    assert.equal(incompatibleReindex.state, 'indexing');
+    if (incompatibleReindex.state === 'indexing') {
+        assert.equal(incompatibleReindex.searchableGenerationAvailable, true);
+        assert.equal(incompatibleReindex.searchableRead, undefined);
+    }
+
+    const missingCollectionReindex = await new TrackedRootReadiness(
+        buildHost('reindex', 'valid', 'missing'),
+    ).prepareTrackedRootForRead(root, 'semantic');
+    assert.equal(missingCollectionReindex.state, 'indexing');
+    if (missingCollectionReindex.state === 'indexing') {
+        assert.equal(missingCollectionReindex.searchableGenerationAvailable, true);
+        assert.equal(missingCollectionReindex.searchableRead, undefined);
+    }
+
+    for (const [collectionState, collectionName] of [['unknown', 'collection-1'], ['ready', 'another-collection']] as const) {
+        const unproven = await new TrackedRootReadiness(
+            buildHost('reindex', 'valid', collectionState, collectionName),
+        ).prepareTrackedRootForRead(root, 'semantic');
+        assert.equal(unproven.state, 'indexing');
+        assert.equal(unproven.searchableRead, undefined);
+    }
+
+    const nested = await new TrackedRootReadiness({
+        ...buildHost('reindex', 'valid', 'ready'),
+        isPathWithinCodebase: (target, parent) => target === parent || target.startsWith(`${parent}/`),
+        listTrackedRoots: () => [
+            { path: '/repo', info: { status: 'indexed' } },
+            { path: '/repo/nested', info: { status: 'indexing' } },
+        ],
+        validateCompletionProof: async (selectedRoot) => ({
+            outcome: 'valid', publication: publication(selectedRoot), navigationStatus: 'valid',
+        }),
+    }).prepareTrackedRootForRead('/repo/nested/src');
+    assert.equal(nested.state, 'indexing');
+    assert.equal(nested.searchableRead?.root.path, '/repo/nested');
+
+    const initialCreate = await new TrackedRootReadiness(
+        buildHost('create', 'valid', 'ready'),
+    ).prepareTrackedRootForRead(root, 'semantic');
+    assert.equal(initialCreate.state, 'indexing');
+    if (initialCreate.state === 'indexing') {
+        assert.equal(initialCreate.searchableGenerationAvailable, false);
+        assert.equal(initialCreate.searchableRead, undefined);
+    }
+});

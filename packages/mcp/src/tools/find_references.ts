@@ -19,7 +19,7 @@ export const findReferencesInputSchema = z.object({
         "ABSOLUTE filesystem path to the indexed codebase root. Exact occurrence search is scoped separately with subtree/includePaths/excludePaths.",
     ),
     symbolRef: callGraphSymbolRefSchema.describe(
-        "Canonical published symbol target. Use file + symbolId from file_outline/search navigation.",
+        "Canonical published symbol target. Use file + symbolId or file + symbolLabel from file_outline/search navigation.",
     ),
     subtree: repoRelativePathPrefixSchema(
         "Optional repo-relative subtree prefix. Only published files inside this subtree are inspected.",
@@ -63,7 +63,7 @@ function formatWorkspaceAuthorizationError(
 export const findReferencesTool: McpTool = {
     name: "find_references",
     description: () =>
-        "Find exact textual occurrences of one canonical published symbol across the validated Publication source universe. This is a ranking-independent observational floor: it scans eligible published files directly and does not use semantic retrieval, lexical top-N candidate selection, reranking, or must: budgets. Results include exact file/span, owning symbol when mechanically available, occurrence kind, matched member/text, and evidenceClass=published_source_text, or current_source_text for files edited since the Publication (scanned from current bytes, no owning symbol). Textual matches are observational only and never become authoritative CALLS without normal relationship proof. coverage=complete means every eligible source file was inspected, its current bytes matched the Publication content hash, and every match was returned; changed source is still scanned but reports source_changed; unreadable/oversized/replaced/changed/unverified source or output truncation yields coverage=partial with concrete reasons. Freshness metadata is also surfaced when available. Use subtree/includePaths/excludePaths for deterministic source scope. When output is truncated, pass nextCursor as cursor (hints.nextPage) to read the next page in the same deterministic source order.",
+        "Find exact textual occurrences of one published symbol across the Publication source universe. Ranking-independent and observational (does not promote matches into authoritative CALLS). coverage=complete means every eligible file matched its Publication content hash and all hits were returned; changed/unverified source, unreadable files, or truncation yield coverage=partial with reasons. Filter with subtree/includePaths/excludePaths; page with cursor=nextCursor.",
     inputSchemaZod: () => findReferencesInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = findReferencesInputSchema.safeParse(args || {});

@@ -44,7 +44,7 @@ function authorizationFailure(path: string, error: WorkspaceAuthorizationError):
 export const tracePathTool: McpTool = {
     name: 'trace_path',
     description: () =>
-        'Find one deterministic shortest directed path between two exact published symbol IDs through selected persisted CALLS, IMPORTS, EXPORTS, or TESTS relationships. Reads one admitted Publication only. A nested path excludes outside nodes and relationship evidence, including paths that leave and re-enter. Depth, visited-node, and traversed-edge limits are hard; coverage reports budget truncation. An empty result means no path found within the requested Publication, scope, kinds, and budgets, not proof that no path exists globally. The returned result limit is one path. Edges are persisted relationship facts with their original site and confidence, including heuristic records; unresolved target candidates are never traversed. For CALLS, targetProofBacked reports authoritative direct-binding or origin-flow proof separately from confidence; a proved cross-file target may still have low confidence because that value reflects file locality.',
+        'Find one shortest directed path between two exact published symbol IDs across persisted CALLS, IMPORTS, EXPORTS, or TESTS edges within the current Publication (a subdirectory path confines all nodes and edges). Enforces hard depth, visited-node, and edge limits; empty means no path found within bounds, not proof of absence. For CALLS, targetProofBacked distinguishes semantic proof from heuristic locality confidence.',
     inputSchemaZod: () => tracePathInputSchema,
     execute: async (args, ctx) => {
         const parsed = tracePathInputSchema.safeParse(args ?? {});

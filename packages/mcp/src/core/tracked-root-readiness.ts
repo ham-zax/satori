@@ -118,7 +118,7 @@ export type TrackedRootReadinessHost = {
     getFailedIndexOperation?(codebasePath: string): TrackedRootFailedIndexOperation | undefined;
     hasSearchableGeneration?(codebasePath: string): boolean;
     validateCompletionProof(codebasePath: string): Promise<CompletionProofValidationResult>;
-    probeLocalSearchCollectionState(codebasePath: string): Promise<{
+    probeLocalSearchCollectionState(codebasePath: string, selectedCollection?: string): Promise<{
         state: "ready" | "missing" | "unknown";
         collectionName?: string;
     }>;
@@ -386,21 +386,19 @@ export class TrackedRootReadiness {
         onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
         options?: { allowAutomaticCreate?: boolean },
     ): Promise<TrackedRootReadinessState> {
-        const { searchableRoot, indexingRoot } = this.measurePhase(
+        const root = this.measurePhase(
             "tracked_root_resolution",
-            () => ({
-                searchableRoot: this.resolveTrackedRoot(absolutePath, ["indexed"]),
-                indexingRoot: this.resolveTrackedRoot(absolutePath, ["indexing"]),
-            }),
+            () => this.resolveTrackedRoot(absolutePath, ["indexed", "indexing"]),
             onPhase,
         );
 
-        if (!searchableRoot && indexingRoot) {
+        if (root?.info.status === "indexing") {
+            const indexingRoot = root;
             const operation = this.host.getIndexingOperation?.(indexingRoot.path);
             const searchableGenerationAvailable =
                 this.host.hasSearchableGeneration?.(indexingRoot.path) ?? false;
             let searchableRead: Extract<TrackedRootReadinessState, { state: "ready" }> | undefined;
-            if (searchableGenerationAvailable && operation?.action === "sync") {
+            if (searchableGenerationAvailable && (operation?.action === "sync" || operation?.action === "reindex")) {
                 const evaluated = await this.evaluateRootReadinessCoalesced(indexingRoot, accessMode, onPhase);
                 if (evaluated.state === "ready") {
                     searchableRead = evaluated;
@@ -415,7 +413,7 @@ export class TrackedRootReadiness {
             };
         }
 
-        if (!searchableRoot) {
+        if (!root) {
             const failed = this.host.getFailedIndexOperation?.(absolutePath);
             if (failed) {
                 return {
@@ -446,7 +444,7 @@ export class TrackedRootReadiness {
             };
         }
 
-        return this.evaluateRootReadinessCoalesced(searchableRoot, accessMode, onPhase);
+        return this.evaluateRootReadinessCoalesced(root, accessMode, onPhase);
     }
 
     private resolveAutomaticCreateTarget(absolutePath: string): string | null {
@@ -466,7 +464,7 @@ export class TrackedRootReadiness {
         accessMode: "semantic" | "navigation",
         onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
     ): Promise<TrackedRootReadinessState> {
-        const key = `${targetRoot.path}\0${accessMode}`;
+        const key = `${targetRoot.path}\0${targetRoot.info.status}\0${accessMode}`;
         const existing = this.evaluationFlights.get(key);
         if (existing) return existing;
 
@@ -583,9 +581,13 @@ export class TrackedRootReadiness {
         const collectionName = completionProof.publication.publication.vector.collectionName;
         const collectionState = await this.measureAsyncPhase(
             "collection_probe",
-            () => this.host.probeLocalSearchCollectionState(effectiveRoot),
+            () => this.host.probeLocalSearchCollectionState(effectiveRoot, collectionName),
             onPhase,
         );
+        if (targetRoot.info.status === "indexing" && (collectionState.state !== "ready"
+            || collectionState.collectionName !== collectionName)) {
+            return { state: "stale_local", codebasePath: effectiveRoot, reason: "probe_failed" };
+        }
         if (collectionState.state === "missing") {
             const indexing = await this.scheduleAutomaticReindex(
                 effectiveRoot,

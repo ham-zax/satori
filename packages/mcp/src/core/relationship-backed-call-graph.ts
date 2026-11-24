@@ -19,6 +19,7 @@ import type {
     CallGraphNoteResult as CallGraphNote,
     CallGraphSourceReferenceResult as CallGraphSourceReference,
     CallGraphTestReferenceResult as CallGraphTestReference,
+    CallGraphTestSiteProvenance,
     InboundCoverageEvidence,
     InboundCoverageReason,
 } from "./search-types.js";
@@ -440,7 +441,11 @@ export class RelationshipBackedCallGraph {
             if (!source) {
                 continue;
             }
+            const hasRecordedCallSite = record.span?.startLine !== undefined;
             const startLine = record.span?.startLine ?? source.span.startLine;
+            const siteProvenance: CallGraphTestSiteProvenance = hasRecordedCallSite
+                ? "recorded_call_site"
+                : "symbol_start_fallback";
             const reference: CallGraphTestReference = {
                 file: source.file,
                 symbolId: source.symbolInstanceId,
@@ -454,6 +459,7 @@ export class RelationshipBackedCallGraph {
                     startLine,
                     ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
                 },
+                siteProvenance,
                 targetSymbolId,
                 kind: "call",
                 confidence: this.mapRelationshipConfidence(record.confidence),
@@ -465,7 +471,10 @@ export class RelationshipBackedCallGraph {
                 reference.site.file,
                 reference.site.startLine,
             ].join("\0");
-            referencesByKey.set(key, reference);
+            const existing = referencesByKey.get(key);
+            if (!existing || (existing.siteProvenance === "symbol_start_fallback" && siteProvenance === "recorded_call_site")) {
+                referencesByKey.set(key, reference);
+            }
         }
         return this.sortTestReferences([...referencesByKey.values()]);
     }

@@ -1163,3 +1163,139 @@ test("a shifted current span never removes a published call site", async () => {
         false,
     );
 });
+
+test("buildTestReferences distinguishes recorded call sites from symbol-start fallbacks", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "typescript",
+        kind: "function",
+        qualifiedName: "target",
+        name: "target",
+        label: "function target()",
+        span: { startLine: 1, endLine: 3 },
+        parentQualifiedNamePath: [],
+        file: "src/target.ts",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const recordedTest = {
+        ...target,
+        symbolKey: "test-recorded-key",
+        symbolInstanceId: "test-recorded-id",
+        qualifiedName: "testRecorded",
+        name: "testRecorded",
+        label: "function testRecorded()",
+        span: { startLine: 10, endLine: 16 },
+        file: "tests/target.test.ts",
+    } as SymbolRecord;
+    const fallbackTest = {
+        ...target,
+        symbolKey: "test-fallback-key",
+        symbolInstanceId: "test-fallback-id",
+        qualifiedName: "testFallback",
+        name: "testFallback",
+        label: "function testFallback()",
+        span: { startLine: 20, endLine: 25 },
+        file: "tests/target.test.ts",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([
+            [target.file, [target]],
+            ["tests/target.test.ts", [recordedTest, fallbackTest]],
+        ]),
+        symbolsByInstanceId: new Map([
+            [target.symbolInstanceId, target],
+            [recordedTest.symbolInstanceId, recordedTest],
+            [fallbackTest.symbolInstanceId, fallbackTest],
+        ]),
+    } as unknown as SymbolRegistry;
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-11-23T00:00:00.000Z",
+        providerCoverage: [],
+        files: [],
+    };
+    const records: RelationshipRecord[] = [
+        {
+            sourceKey: recordedTest.symbolKey,
+            sourceInstanceId: recordedTest.symbolInstanceId,
+            targetKey: target.symbolKey,
+            targetInstanceId: target.symbolInstanceId,
+            type: "TESTS",
+            confidence: "high",
+            resolutionAuthority: "direct_binding",
+            strategy: "rule",
+            file: "tests/target.test.ts",
+            span: { startLine: 13, endLine: 13 },
+        },
+        {
+            sourceKey: fallbackTest.symbolKey,
+            sourceInstanceId: fallbackTest.symbolInstanceId,
+            targetKey: target.symbolKey,
+            targetInstanceId: target.symbolInstanceId,
+            type: "TESTS",
+            confidence: "medium",
+            resolutionAuthority: "heuristic_reference",
+            strategy: "heuristic",
+            file: "tests/target.test.ts",
+        },
+    ];
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records,
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result.testReferences, [
+        {
+            file: "tests/target.test.ts",
+            symbolId: "test-recorded-id",
+            symbolLabel: "function testRecorded()",
+            span: { startLine: 10, endLine: 16 },
+            site: { file: "tests/target.test.ts", startLine: 13, endLine: 13 },
+            siteProvenance: "recorded_call_site",
+            targetSymbolId: "target-id",
+            kind: "call",
+            confidence: 0.95,
+        },
+        {
+            file: "tests/target.test.ts",
+            symbolId: "test-fallback-id",
+            symbolLabel: "function testFallback()",
+            span: { startLine: 20, endLine: 25 },
+            site: { file: "tests/target.test.ts", startLine: 20 },
+            siteProvenance: "symbol_start_fallback",
+            targetSymbolId: "target-id",
+            kind: "call",
+            confidence: 0.65,
+        },
+    ]);
+});

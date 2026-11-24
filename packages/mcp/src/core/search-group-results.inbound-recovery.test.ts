@@ -235,7 +235,7 @@ test("same-file registry ownership is demoted when the symbol does not own the e
     assert.deepEqual(result.navigation, { graph: "stale_symbol_ref" });
 });
 
-test("oversized exact registry symbols publish a bounded first-read window", () => {
+test("oversized exact registry symbols route to open_symbol without a synthetic 40-line window", () => {
     const result = buildExactRegistryGroupResult({
         symbol: makeSymbol({ span: { startLine: 10, endLine: 2000 } }),
         indexedAt: "2026-01-01T00:00:00.000Z",
@@ -247,13 +247,18 @@ test("oversized exact registry symbols publish a bounded first-read window", () 
     });
 
     assert.ok(result);
-    assert.deepEqual(result.evidenceSpan, { startLine: 10, endLine: 49 });
+    assert.equal(result.evidenceSpan, undefined);
     assert.deepEqual(
         buildSearchGroupRecommendedAction("/repo", result)?.args,
         {
             path: "/repo/src/gate.ts",
-            start_line: 10,
-            end_line: 49,
+            mode: "plain",
+            codebaseRoot: "/repo",
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: "syminst_check",
+                context: { preset: "definition" },
+            },
         },
     );
 });

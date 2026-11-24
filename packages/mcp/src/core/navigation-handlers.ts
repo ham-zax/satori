@@ -4,6 +4,7 @@ import * as path from "path";
 import {
     analyzeGoSymbolStructure,
     analyzePythonSymbolStructure,
+    compareContractStrings,
     getSupportedExtensionsForCapability,
     JsonNavigationStore,
     isProofBackedAuthoritativeCall,
@@ -87,6 +88,7 @@ import { ToolResponseBuilders } from "./tool-response-builders.js";
 import type { FreshnessDecision } from "./sync.js";
 import { buildFreshnessWarningCodes } from "./warnings.js";
 import type {
+    AmbiguousSymbolCandidate,
     CallGraphDirection,
     CallGraphEdgeResult as CallGraphEdge,
     CallGraphHint,
@@ -96,11 +98,223 @@ import type {
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
 } from "./search-types.js";
-import { requireAbsoluteFilesystemPath, requireRepoRelativeFilePath, trackCodebasePath } from "../utils.js";
+import {
+    requireAbsoluteFilesystemPath,
+    requireRepoRelativeFilePath,
+    trackCodebasePath,
+    type RepoRelativeFileResult,
+} from "../utils.js";
+
+const AMBIGUOUS_SYMBOL_CANDIDATES_LIMIT = 20;
+
+function canonicalizeBoundaryRoot(inputPath: string): string {
+    const resolved = path.resolve(inputPath);
+    try {
+        return fs.realpathSync.native(resolved);
+    } catch {
+        return resolved;
+    }
+}
+
+/**
+ * Canonicalize existing ancestor directories while preserving the final path
+ * component untouched so a final symlink is never dereferenced when mapping
+ * an in-root absolute path to a repo-relative path.
+ */
+function canonicalizeParentPreservingBasename(resolvedPath: string): string {
+    const parentDir = path.dirname(resolvedPath);
+    if (parentDir === resolvedPath) {
+        return resolvedPath;
+    }
+    const missingParts: string[] = [];
+    let current = parentDir;
+    for (;;) {
+        try {
+            const real = fs.realpathSync.native(current);
+            return missingParts.length === 0
+                ? path.join(real, path.basename(resolvedPath))
+                : path.join(real, ...missingParts.reverse(), path.basename(resolvedPath));
+        } catch {
+            const nextParent = path.dirname(current);
+            if (nextParent === current) {
+                return resolvedPath;
+            }
+            missingParts.push(path.basename(current));
+            current = nextParent;
+        }
+    }
+}
+
+function isBoundaryPathInsideRoot(targetPath: string, rootPath: string): boolean {
+    return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
+}
+
+type BoundaryFileInputValidation =
+    | { ok: true; isAbsolute: false; relativePath: string }
+    | { ok: true; isAbsolute: true; rawPath: string }
+    | { ok: false; path: string; message: string };
+
+function validateBoundaryFileInput(inputPath: unknown, fieldName: string): BoundaryFileInputValidation {
+    if (typeof inputPath !== "string" || inputPath.trim().length === 0) {
+        return {
+            ok: false,
+            path: typeof inputPath === "string" ? inputPath : "",
+            message: `${fieldName} is required.`,
+        };
+    }
+    const trimmed = inputPath.trim();
+    if (trimmed.includes("\0")) {
+        return {
+            ok: false,
+            path: trimmed,
+            message: `Error: '${fieldName}' must not contain NUL bytes.`,
+        };
+    }
+    if (trimmed.split(/[\\/]/).includes("..")) {
+        return {
+            ok: false,
+            path: trimmed,
+            message: `Error: '${fieldName}' must stay inside the codebase root (path escape segments are not allowed).`,
+        };
+    }
+    if (/^[A-Za-z]:(?![\\/])/.test(trimmed)) {
+        return {
+            ok: false,
+            path: trimmed,
+            message: `Error: '${fieldName}' must be a repo-relative path or an absolute path inside the codebase root, not a drive-relative path.`,
+        };
+    }
+    if (path.isAbsolute(trimmed)) {
+        const resolved = path.resolve(trimmed);
+        if (path.basename(resolved).length === 0) {
+            return {
+                ok: false,
+                path: trimmed,
+                message: `Error: '${fieldName}' must point to a file inside the codebase root.`,
+            };
+        }
+        return { ok: true, isAbsolute: true, rawPath: trimmed };
+    }
+    const rel = requireRepoRelativeFilePath(trimmed, fieldName);
+    if (!rel.ok) {
+        return rel;
+    }
+    return { ok: true, isAbsolute: false, relativePath: rel.relativePath };
+}
+
+function resolveBoundaryFileToRepoRelative(
+    inputPath: unknown,
+    rootPath: string,
+    fieldName: string,
+): RepoRelativeFileResult {
+    const validated = validateBoundaryFileInput(inputPath, fieldName);
+    if (!validated.ok) {
+        return validated;
+    }
+    if (!validated.isAbsolute) {
+        return { ok: true, relativePath: validated.relativePath };
+    }
+    const resolvedFile = path.resolve(validated.rawPath);
+    const canonicalRoot = canonicalizeBoundaryRoot(rootPath);
+    const canonicalParentFile = canonicalizeParentPreservingBasename(resolvedFile);
+    if (canonicalParentFile === canonicalRoot || !isBoundaryPathInsideRoot(canonicalParentFile, canonicalRoot)) {
+        return {
+            ok: false,
+            path: validated.rawPath,
+            message: `Error: '${fieldName}' must resolve inside the indexed codebase root '${rootPath}'.`,
+        };
+    }
+    const relativePath = path.relative(canonicalRoot, canonicalParentFile).replace(/\\/g, "/");
+    return requireRepoRelativeFilePath(relativePath, fieldName);
+}
+
+function projectAmbiguousSymbolCandidates(
+    symbols: readonly SymbolRecord[],
+    fallbackFile: string,
+): AmbiguousSymbolCandidate[] {
+    const sorted = [...symbols].sort((a, b) => {
+        const lineCmp = a.span.startLine - b.span.startLine;
+        if (lineCmp !== 0) return lineCmp;
+        return compareContractStrings(a.symbolInstanceId, b.symbolInstanceId);
+    });
+    return sorted.slice(0, AMBIGUOUS_SYMBOL_CANDIDATES_LIMIT).map((symbol) => ({
+        symbolId: symbol.symbolInstanceId,
+        symbolLabel: symbol.label,
+        kind: symbol.kind,
+        file: symbol.file || fallbackFile,
+        span: {
+            startLine: symbol.span.startLine,
+            endLine: symbol.span.endLine,
+        },
+    }));
+}
+
+type SymbolRefResolutionResult =
+    | { status: "resolved"; symbol: SymbolRecord }
+    | { status: "missing" }
+    | { status: "ambiguous"; candidates: AmbiguousSymbolCandidate[]; totalCandidateCount: number };
+
+function resolveSymbolRefInFile(input: {
+    symbols: SymbolRecord[];
+    symbolId?: string;
+    symbolLabel?: string;
+    file: string;
+}): SymbolRefResolutionResult {
+    const symbolId = typeof input.symbolId === "string" ? input.symbolId.trim() : "";
+    const symbolLabel = typeof input.symbolLabel === "string" ? input.symbolLabel.trim() : "";
+    if (symbolId.length > 0) {
+        const exactById = findExactRegistrySymbols({
+            symbols: input.symbols,
+            symbolIdExact: symbolId,
+        });
+        if (exactById.length === 1) {
+            return { status: "resolved", symbol: exactById[0]! };
+        }
+        if (exactById.length === 0) {
+            return { status: "missing" };
+        }
+        return {
+            status: "ambiguous",
+            candidates: projectAmbiguousSymbolCandidates(exactById, input.file),
+            totalCandidateCount: exactById.length,
+        };
+    }
+
+    if (symbolLabel.length === 0) {
+        return { status: "missing" };
+    }
+
+    let labelMatches = findExactRegistrySymbols({
+        symbols: input.symbols,
+        symbolLabelExact: symbolLabel,
+    });
+    if (labelMatches.length === 0) {
+        const hasExtractedSymbols = input.symbols.some((symbol) => symbol.kind !== "file");
+        labelMatches = input.symbols.filter((symbol) => {
+            if (hasExtractedSymbols && symbol.kind === "file") {
+                return false;
+            }
+            return symbol.name === symbolLabel || symbol.qualifiedName === symbolLabel;
+        });
+    }
+
+    if (labelMatches.length === 1) {
+        return { status: "resolved", symbol: labelMatches[0]! };
+    }
+    if (labelMatches.length === 0) {
+        return { status: "missing" };
+    }
+    return {
+        status: "ambiguous",
+        candidates: projectAmbiguousSymbolCandidates(labelMatches, input.file),
+        totalCandidateCount: labelMatches.length,
+    };
+}
 
 export type NavigationSourceOptions = {
     publishedSource?: Buffer;
     requireCurrentSource?: boolean;
+    signal?: AbortSignal;
 };
 
 type ToolArgs = Record<string, unknown>;
@@ -966,10 +1180,10 @@ export class NavigationHandlers {
             ? requireAbsoluteFilesystemPath(args.path, "path")
             : { ok: false as const, path: "", message: "path is required." };
         const rawSymbolRef = args.symbolRef as CallGraphSymbolRef | undefined;
-        const symbolFileResult = typeof rawSymbolRef?.file === "string"
-            ? requireRepoRelativeFilePath(rawSymbolRef.file, "symbolRef.file")
-            : { ok: false as const, path: "", message: "symbolRef.file is required." };
-        if (!absolutePathResult.ok || !symbolFileResult.ok || !rawSymbolRef?.symbolId) {
+        const symbolFileValidation = validateBoundaryFileInput(rawSymbolRef?.file, "symbolRef.file");
+        const rawSymbolId = typeof rawSymbolRef?.symbolId === "string" ? rawSymbolRef.symbolId.trim() : "";
+        const rawSymbolLabel = typeof rawSymbolRef?.symbolLabel === "string" ? rawSymbolRef.symbolLabel.trim() : "";
+        if (!absolutePathResult.ok || !rawSymbolRef || !symbolFileValidation.ok || (!rawSymbolId && !rawSymbolLabel)) {
             return {
                 content: [{
                     type: "text",
@@ -979,9 +1193,9 @@ export class NavigationHandlers {
                         path: absolutePathResult.ok ? absolutePathResult.absolutePath : (typeof args.path === "string" ? args.path : ""),
                         message: !absolutePathResult.ok
                             ? absolutePathResult.message
-                            : !symbolFileResult.ok
-                                ? symbolFileResult.message
-                                : "symbolRef with { file, symbolId } is required.",
+                            : !symbolFileValidation.ok
+                                ? symbolFileValidation.message
+                                : "symbolRef with { file, symbolId } or { file, symbolLabel } is required.",
                     }),
                 }],
                 isError: true,
@@ -989,6 +1203,27 @@ export class NavigationHandlers {
         }
 
         const requestedRoot = absolutePathResult.absolutePath;
+        if (symbolFileValidation.isAbsolute) {
+            const preliminaryFileResult = resolveBoundaryFileToRepoRelative(
+                symbolFileValidation.rawPath,
+                requestedRoot,
+                "symbolRef.file",
+            );
+            if (!preliminaryFileResult.ok) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "error",
+                            reason: "invalid_request",
+                            path: requestedRoot,
+                            message: preliminaryFileResult.message,
+                        }),
+                    }],
+                    isError: true,
+                };
+            }
+        }
         trackCodebasePath(requestedRoot);
         const limit = Number.isFinite(args.limit)
             ? Math.max(1, Math.min(500, Math.floor(Number(args.limit))))
@@ -1051,13 +1286,62 @@ export class NavigationHandlers {
                 };
             }
 
-            const normalizedSymbolFile = this.host.normalizeRelativeFilePath(symbolFileResult.relativePath);
+            const resolvedSymbolFile = resolveBoundaryFileToRepoRelative(
+                rawSymbolRef.file,
+                leasedRootState.root.path,
+                "symbolRef.file",
+            );
+            if (!resolvedSymbolFile.ok) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "error",
+                            reason: "invalid_request",
+                            path: leasedRootState.root.path,
+                            message: resolvedSymbolFile.message,
+                        }),
+                    }],
+                    isError: true,
+                };
+            }
+            const normalizedSymbolFile = this.host.normalizeRelativeFilePath(resolvedSymbolFile.relativePath);
+            const resolvedInputSymbolRef: CallGraphSymbolRef = {
+                file: normalizedSymbolFile,
+                ...(rawSymbolId ? { symbolId: rawSymbolId } : {}),
+                ...(rawSymbolLabel ? { symbolLabel: rawSymbolLabel } : {}),
+                ...(rawSymbolRef.span ? { span: rawSymbolRef.span } : {}),
+            };
+            const canonicalRequestedRoot = canonicalizeBoundaryRoot(requestedRoot);
+            const canonicalIndexedRoot = canonicalizeBoundaryRoot(leasedRootState.root.path);
+            const requestedSubdirectory = isBoundaryPathInsideRoot(canonicalRequestedRoot, canonicalIndexedRoot)
+                ? resolveRequestedSearchSubdirectory({
+                    indexedRoot: canonicalIndexedRoot,
+                    requestedPath: canonicalRequestedRoot,
+                })
+                : null;
+            if (!candidateWithinRequestedSubdirectory(normalizedSymbolFile, requestedSubdirectory)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_found",
+                            reason: "symbol_outside_scope",
+                            path: leasedRootState.root.path,
+                            symbolRef: resolvedInputSymbolRef,
+                            message: `Symbol '${normalizedSymbolFile}' is outside the requested find_references path scope '${requestedRoot}'.`,
+                        }),
+                    }],
+                };
+            }
             const symbolsInFile = manifest.registry.symbolsByFile.get(normalizedSymbolFile) ?? [];
-            const exactSymbols = findExactRegistrySymbols({
+            const symbolResolution = resolveSymbolRefInFile({
                 symbols: symbolsInFile,
-                symbolIdExact: rawSymbolRef.symbolId,
+                symbolId: rawSymbolId || undefined,
+                symbolLabel: rawSymbolLabel || undefined,
+                file: normalizedSymbolFile,
             });
-            if (exactSymbols.length !== 1) {
+            if (symbolResolution.status === "missing") {
                 return {
                     content: [{
                         type: "text",
@@ -1065,18 +1349,46 @@ export class NavigationHandlers {
                             status: "not_found",
                             reason: "missing_symbol",
                             path: leasedRootState.root.path,
-                            symbolRef: rawSymbolRef,
-                            message: exactSymbols.length === 0
-                                ? "No exact canonical symbol matched symbolRef."
-                                : "symbolRef matched more than one canonical symbol.",
+                            symbolRef: resolvedInputSymbolRef,
+                            message: "No exact canonical symbol matched symbolRef.",
+                        }),
+                    }],
+                };
+            }
+            if (symbolResolution.status === "ambiguous") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_found",
+                            reason: "ambiguous_symbol",
+                            path: leasedRootState.root.path,
+                            symbolRef: resolvedInputSymbolRef,
+                            candidates: symbolResolution.candidates,
+                            totalCandidateCount: symbolResolution.totalCandidateCount,
+                            message: rawSymbolLabel
+                                ? `Ambiguous symbolLabel '${rawSymbolLabel}' in '${normalizedSymbolFile}' matched ${symbolResolution.totalCandidateCount} symbols. Re-run with one of the candidate symbolId values.`
+                                : `Ambiguous symbolId '${rawSymbolId}' in '${normalizedSymbolFile}' matched ${symbolResolution.totalCandidateCount} symbols. Re-run with one of the candidate symbolId values.`,
                         }),
                     }],
                 };
             }
 
+            const resolvedSymbol = symbolResolution.symbol;
+            const canonicalSymbolRef: CallGraphSymbolRef = {
+                file: normalizedSymbolFile,
+                symbolId: resolvedSymbol.symbolInstanceId,
+                ...(resolvedSymbol.label
+                    ? { symbolLabel: resolvedSymbol.label }
+                    : rawSymbolLabel
+                        ? { symbolLabel: rawSymbolLabel }
+                        : {}),
+                ...(resolvedInputSymbolRef.span ? { span: resolvedInputSymbolRef.span } : {}),
+            };
+
             const cursorIdentity: FindReferencesCursorIdentity = {
                 publicationId: lease.id,
-                symbolId: exactSymbols[0]!.symbolInstanceId,
+                symbolId: resolvedSymbol.symbolInstanceId,
                 scopeIdentity: findReferencesScopeIdentity(scope),
             };
             let offset = 0;
@@ -1092,7 +1404,7 @@ export class NavigationHandlers {
                                 status: "not_found",
                                 reason: "invalid_continuation",
                                 path: leasedRootState.root.path,
-                                symbolRef: rawSymbolRef,
+                                symbolRef: canonicalSymbolRef,
                                 message: error.message,
                             }),
                         }],
@@ -1107,7 +1419,7 @@ export class NavigationHandlers {
             // The matcher only matches the literal identifier, so bytes without
             // it cannot contribute an occurrence. Searching the raw bytes keeps
             // the UTF-8 decode off the path for every non-matching file.
-            const targetIdentifier = exactSymbols[0]!.name.trim();
+            const targetIdentifier = resolvedSymbol.name.trim();
             const identifierBytes = targetIdentifier.length > 0
                 ? Buffer.from(targetIdentifier, "utf8")
                 : null;
@@ -1155,7 +1467,7 @@ export class NavigationHandlers {
                         return {
                             status: "skipped",
                             code: "source_unreadable",
-                            detail: error instanceof Error ? error.message : String(error),
+                            detail: error.code,
                         };
                     }
                     throw error;
@@ -1164,7 +1476,7 @@ export class NavigationHandlers {
 
             const result = await findExactPublishedSourceReferences({
                 registry: manifest.registry,
-                target: exactSymbols[0]!,
+                target: resolvedSymbol,
                 scope,
                 limit,
                 offset,
@@ -1202,7 +1514,7 @@ export class NavigationHandlers {
                                     tool: "find_references",
                                     args: {
                                         path: requestedRoot,
-                                        symbolRef: rawSymbolRef,
+                                        symbolRef: canonicalSymbolRef,
                                         ...scope,
                                         limit,
                                         cursor: nextCursor,
@@ -1237,6 +1549,8 @@ export class NavigationHandlers {
         workspacePolicy: SessionWorkspacePolicy,
         sourceOptions?: NavigationSourceOptions,
     ): Promise<ToolTextResponse> {
+        const signal = sourceOptions?.signal;
+        signal?.throwIfAborted();
         const limitSymbols = Number.isFinite(args?.limitSymbols)
             ? Math.max(1, Number(args.limitSymbols))
             : 500;
@@ -1268,15 +1582,12 @@ export class NavigationHandlers {
                 };
             }
             const absoluteRoot = absoluteRootResult.absolutePath;
-            const relativeFileResult = requireRepoRelativeFilePath(
-                typeof args.file === "string" ? args.file : "",
-                "file",
-            );
-            if (!relativeFileResult.ok) {
+            const fileValidation = validateBoundaryFileInput(args.file, "file");
+            if (!fileValidation.ok) {
                 const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
                     absoluteRoot,
-                    relativeFileResult.path,
-                    relativeFileResult.message,
+                    fileValidation.path,
+                    fileValidation.message,
                     "not_found",
                 );
                 return {
@@ -1284,7 +1595,30 @@ export class NavigationHandlers {
                     isError: true,
                 };
             }
-            const normalizedFile = this.host.normalizeRelativeFilePath(relativeFileResult.relativePath);
+            let normalizedFile: string;
+            if (fileValidation.isAbsolute) {
+                const preliminaryRelative = resolveBoundaryFileToRepoRelative(
+                    fileValidation.rawPath,
+                    absoluteRoot,
+                    "file",
+                );
+                if (!preliminaryRelative.ok) {
+                    const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
+                        absoluteRoot,
+                        fileValidation.rawPath,
+                        preliminaryRelative.message,
+                        "not_found",
+                        "invalid_request",
+                    );
+                    return {
+                        content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                        isError: true,
+                    };
+                }
+                normalizedFile = this.host.normalizeRelativeFilePath(preliminaryRelative.relativePath);
+            } else {
+                normalizedFile = this.host.normalizeRelativeFilePath(fileValidation.relativePath);
+            }
             if (
                 (detail === "analysis" || detail === "relationships")
                 && (resolveMode !== "exact" || !symbolIdExact)
@@ -1361,6 +1695,7 @@ export class NavigationHandlers {
                 isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
             });
             const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
+            signal?.throwIfAborted();
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
                     ...args,
@@ -1429,6 +1764,46 @@ export class NavigationHandlers {
             };
             const matchedRoot = leasedRootState.root;
             effectiveRoot = matchedRoot.path;
+            const effectiveFileResult = resolveBoundaryFileToRepoRelative(
+                args.file,
+                effectiveRoot,
+                "file",
+            );
+            if (!effectiveFileResult.ok) {
+                const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
+                    effectiveRoot,
+                    normalizedFile,
+                    effectiveFileResult.message,
+                    "not_found",
+                    "invalid_request",
+                );
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                    isError: true,
+                };
+            }
+            normalizedFile = this.host.normalizeRelativeFilePath(effectiveFileResult.relativePath);
+            const canonicalRequestedOutlineRoot = canonicalizeBoundaryRoot(absoluteRoot);
+            const canonicalEffectiveOutlineRoot = canonicalizeBoundaryRoot(effectiveRoot);
+            const requestedSubdirectory = isBoundaryPathInsideRoot(canonicalRequestedOutlineRoot, canonicalEffectiveOutlineRoot)
+                ? resolveRequestedSearchSubdirectory({
+                    indexedRoot: canonicalEffectiveOutlineRoot,
+                    requestedPath: canonicalRequestedOutlineRoot,
+                })
+                : null;
+            if (!candidateWithinRequestedSubdirectory(normalizedFile, requestedSubdirectory)) {
+                const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
+                    effectiveRoot,
+                    normalizedFile,
+                    `File '${normalizedFile}' is outside the requested file_outline path scope '${absoluteRoot}'.`,
+                    "not_found",
+                    "invalid_request",
+                );
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                    isError: true,
+                };
+            }
             const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
 
             const proofDebugHint = leasedRootState.proofDebugHint;
@@ -1457,6 +1832,7 @@ export class NavigationHandlers {
                 leasedRootState,
                 normalizedFile,
             );
+            signal?.throwIfAborted();
             if (registryState.status !== "ok") {
                 // No navigation publication authority exists for this root.
                 // Fail closed through the session workspace policy before any
@@ -1514,6 +1890,7 @@ export class NavigationHandlers {
                         fallbackMessage: `File '${normalizedFile}' is not readable under codebase root '${effectiveRoot}'.`,
                     });
                 }
+                signal?.throwIfAborted();
                 return await this.buildFileOutlineFromAuthorizedFile({
                     args,
                     effectiveRoot,
@@ -1571,6 +1948,7 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
             });
+            signal?.throwIfAborted();
             return outcome.status === 'stale'
                 ? {
                     content: [{ type: "text" as const, text: this.host.stringifyToolJson(
@@ -1579,6 +1957,7 @@ export class NavigationHandlers {
                 }
                 : outcome.result;
         } catch (error: unknown) {
+            signal?.throwIfAborted();
             const pathResult = typeof args?.path === "string"
                 ? requireAbsoluteFilesystemPath(args.path)
                 : null;
@@ -1602,6 +1981,30 @@ export class NavigationHandlers {
         signal?: AbortSignal,
         sourceOptions?: NavigationSourceOptions,
     ): Promise<ToolTextResponse> {
+        const result = await this.executeCallGraph(args, workspacePolicy, signal, sourceOptions, true);
+        return {
+            content: [{ type: "text", text: this.host.stringifyToolJson(result.payload) }],
+            ...(result.isError ? { isError: true } : {}),
+        };
+    }
+
+    public async resolveUnprojectedCallGraph(
+        args: ToolArgs,
+        workspacePolicy: SessionWorkspacePolicy,
+        signal?: AbortSignal,
+        sourceOptions?: NavigationSourceOptions,
+    ): Promise<CallGraphResponseEnvelope> {
+        const result = await this.executeCallGraph(args, workspacePolicy, signal, sourceOptions, false);
+        return result.payload;
+    }
+
+    private async executeCallGraph(
+        args: ToolArgs,
+        workspacePolicy: SessionWorkspacePolicy,
+        signal: AbortSignal | undefined,
+        sourceOptions: NavigationSourceOptions | undefined,
+        projectEvidence: boolean,
+    ): Promise<{ payload: CallGraphResponseEnvelope; isError?: boolean }> {
         signal?.throwIfAborted();
         const rawDirection = args?.direction;
         const direction: CallGraphDirection = rawDirection === "callers" || rawDirection === "callees" || rawDirection === "both"
@@ -1626,20 +2029,32 @@ export class NavigationHandlers {
             }
             : undefined;
         const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
-        const symbolFileResult = typeof symbolRef?.file === "string"
-            ? requireRepoRelativeFilePath(symbolRef.file, "symbolRef.file")
-            : { ok: false as const, path: "", message: "symbolRef.file is required." };
-        const normalizedSymbolRef: CallGraphSymbolRef = {
-            file: symbolFileResult.ok
-                ? this.host.normalizeRelativeFilePath(symbolFileResult.relativePath)
-                : (typeof symbolRef?.file === "string" ? this.host.normalizeRelativeFilePath(symbolRef.file) : ""),
-            symbolId: typeof symbolRef?.symbolId === "string" ? symbolRef.symbolId : "",
-            ...(typeof symbolRef?.symbolLabel === "string" ? { symbolLabel: symbolRef.symbolLabel } : {}),
-            ...(symbolRef?.span ? { span: symbolRef.span } : {}),
-        };
+        const symbolFileValidation = validateBoundaryFileInput(symbolRef?.file, "symbolRef.file");
+        const rawSymbolId = typeof symbolRef?.symbolId === "string" ? symbolRef.symbolId.trim() : "";
+        const rawSymbolLabel = typeof symbolRef?.symbolLabel === "string" ? symbolRef.symbolLabel.trim() : "";
         const absolutePathResult = typeof args?.path === "string"
             ? requireAbsoluteFilesystemPath(args.path, "path")
             : { ok: false as const, path: "", message: "path is required." };
+        const preliminarySymbolFile = (!symbolFileValidation.ok)
+            ? (typeof symbolRef?.file === "string" ? this.host.normalizeRelativeFilePath(symbolRef.file) : "")
+            : !symbolFileValidation.isAbsolute
+                ? this.host.normalizeRelativeFilePath(symbolFileValidation.relativePath)
+                : absolutePathResult.ok
+                    ? (() => {
+                        const rel = resolveBoundaryFileToRepoRelative(
+                            symbolFileValidation.rawPath,
+                            absolutePathResult.absolutePath,
+                            "symbolRef.file",
+                        );
+                        return rel.ok ? this.host.normalizeRelativeFilePath(rel.relativePath) : symbolFileValidation.rawPath;
+                    })()
+                    : symbolFileValidation.rawPath;
+        const normalizedSymbolRef: CallGraphSymbolRef = {
+            file: preliminarySymbolFile,
+            ...(rawSymbolId ? { symbolId: rawSymbolId } : {}),
+            ...(rawSymbolLabel ? { symbolLabel: rawSymbolLabel } : {}),
+            ...(symbolRef?.span ? { span: symbolRef.span } : {}),
+        };
         const invalidSymbolRefContext = {
             path: absolutePathResult.ok ? absolutePathResult.absolutePath : (typeof args?.path === "string" ? args.path : ""),
             symbolRef: normalizedSymbolRef,
@@ -1655,36 +2070,44 @@ export class NavigationHandlers {
                 "not_indexed",
                 "not_indexed",
             );
-            return {
-                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                isError: true,
-            };
+            return { payload, isError: true };
         }
 
-        if (!symbolFileResult.ok) {
+        if (!symbolFileValidation.ok) {
             const payload = this.host.toolResponseBuilders.buildInvalidCallGraphRequestPayload(
                 invalidSymbolRefContext,
-                symbolFileResult.message,
+                symbolFileValidation.message,
                 "not_found",
                 "invalid_symbol_ref",
             );
-            return {
-                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                isError: true,
-            };
+            return { payload, isError: true };
         }
 
-        if (!symbolRef || typeof symbolRef.file !== "string" || typeof symbolRef.symbolId !== "string") {
+        if (symbolFileValidation.isAbsolute) {
+            const preliminaryBoundaryCheck = resolveBoundaryFileToRepoRelative(
+                symbolFileValidation.rawPath,
+                absolutePathResult.absolutePath,
+                "symbolRef.file",
+            );
+            if (!preliminaryBoundaryCheck.ok) {
+                const payload = this.host.toolResponseBuilders.buildInvalidCallGraphRequestPayload(
+                    invalidSymbolRefContext,
+                    preliminaryBoundaryCheck.message,
+                    "not_found",
+                    "invalid_symbol_ref",
+                );
+                return { payload, isError: true };
+            }
+        }
+
+        if (!symbolRef || typeof symbolRef.file !== "string" || (!rawSymbolId && !rawSymbolLabel)) {
             const payload = this.host.toolResponseBuilders.buildInvalidCallGraphRequestPayload(
                 invalidSymbolRefContext,
-                "symbolRef with { file, symbolId } is required.",
+                "symbolRef with { file, symbolId } or { file, symbolLabel } is required.",
                 "not_found",
                 "invalid_symbol_ref",
             );
-            return {
-                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                isError: true,
-            };
+            return { payload, isError: true };
         }
 
         let effectiveRoot = "";
@@ -1703,10 +2126,7 @@ export class NavigationHandlers {
                     "not_indexed",
                     "not_indexed",
                 );
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                    isError: true,
-                };
+                return { payload, isError: true };
             }
 
             const stat = fs.statSync(absolutePath);
@@ -1723,10 +2143,7 @@ export class NavigationHandlers {
                     "not_indexed",
                     "not_indexed",
                 );
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                    isError: true,
-                };
+                return { payload, isError: true };
             }
 
             trackCodebasePath(absolutePath);
@@ -1740,7 +2157,7 @@ export class NavigationHandlers {
                 ),
                 isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
             });
-            const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
+            const outcome = await session.read(async (trackedRootState, lease): Promise<{ payload: CallGraphResponseEnvelope; isError?: boolean }> => {
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.toolResponseBuilders.buildRequiresReindexCallGraphPayload(
                     trackedRootState.codebasePath,
@@ -1753,9 +2170,7 @@ export class NavigationHandlers {
                         limit,
                     },
                 );
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (trackedRootState.state === "indexing") {
@@ -1766,9 +2181,7 @@ export class NavigationHandlers {
                     depth,
                     limit,
                 });
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (trackedRootState.state === "index_failed") {
@@ -1779,9 +2192,7 @@ export class NavigationHandlers {
                     depth,
                     limit,
                 }, trackedRootState.info);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (trackedRootState.state === "not_indexed") {
@@ -1792,9 +2203,7 @@ export class NavigationHandlers {
                     depth,
                     limit,
                 });
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (trackedRootState.state === "stale_local") {
@@ -1811,9 +2220,7 @@ export class NavigationHandlers {
                         reason: trackedRootState.reason,
                     },
                 );
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (trackedRootState.state === "missing_collection") {
@@ -1828,9 +2235,7 @@ export class NavigationHandlers {
                     },
                     trackedRootState.collectionName,
                 ), trackedRootState.proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             if (lease === null) {
@@ -1865,18 +2270,42 @@ export class NavigationHandlers {
                     },
                     "partial_index_navigation_unavailable",
                 ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
-            const normalizedSymbolFile = this.host.normalizeRelativeFilePath(symbolRef.file);
+            const resolvedSymbolFile = resolveBoundaryFileToRepoRelative(
+                symbolRef.file,
+                effectiveRoot,
+                "symbolRef.file",
+            );
+            if (!resolvedSymbolFile.ok) {
+                const payload = this.host.toolResponseBuilders.buildInvalidCallGraphRequestPayload(
+                    {
+                        path: absolutePath,
+                        symbolRef: normalizedSymbolRef,
+                        direction,
+                        depth,
+                        limit,
+                    },
+                    resolvedSymbolFile.message,
+                    "not_found",
+                    "invalid_symbol_ref",
+                );
+                return { payload, isError: true };
+            }
+            const normalizedSymbolFile = this.host.normalizeRelativeFilePath(resolvedSymbolFile.relativePath);
+            const resolvedInputSymbolRef: CallGraphSymbolRef = {
+                file: normalizedSymbolFile,
+                ...(rawSymbolId ? { symbolId: rawSymbolId } : {}),
+                ...(rawSymbolLabel ? { symbolLabel: rawSymbolLabel } : {}),
+                ...(symbolRef.span ? { span: symbolRef.span } : {}),
+            };
             if (!candidateWithinRequestedSubdirectory(normalizedSymbolFile, requestedSubdirectory)) {
                 const payload = withNavigationFreshness(this.host.withProofDebugHint({
                     status: "not_found" as const,
                     path: absolutePath,
                     codebaseRoot: effectiveRoot,
-                    symbolRef,
+                    symbolRef: resolvedInputSymbolRef,
                     supported: false,
                     reason: "symbol_outside_scope",
                     message: `Symbol '${normalizedSymbolFile}' is outside the requested call_graph path scope '${absolutePath}'.`,
@@ -1887,9 +2316,7 @@ export class NavigationHandlers {
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
                 } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
             const registryState = await this.host.loadPreparedNavigationSymbolsByFile(
                 leasedRootState,
@@ -1904,27 +2331,27 @@ export class NavigationHandlers {
                     `Symbol registry is ${registryState.status}: ${registryState.reason}`,
                     {
                         path: absolutePath,
-                        symbolRef,
+                        symbolRef: resolvedInputSymbolRef,
                         direction,
                         depth,
                         limit,
                     },
                     reason,
                 ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
-            const exactRegistrySymbols = findExactRegistrySymbols({
+            const symbolResolution = resolveSymbolRefInFile({
                 symbols: registryState.symbols,
-                symbolIdExact: symbolRef.symbolId,
+                symbolId: rawSymbolId || undefined,
+                symbolLabel: rawSymbolLabel || undefined,
+                file: normalizedSymbolFile,
             });
-            if (exactRegistrySymbols.length === 0) {
+            if (symbolResolution.status === "missing") {
                 const payload = withNavigationFreshness(this.host.withProofDebugHint({
                     status: "not_found" as const,
                     path: effectiveRoot,
-                    symbolRef,
+                    symbolRef: resolvedInputSymbolRef,
                     supported: false,
                     reason: "missing_symbol",
                     message: "No exact symbol match found in relationship-backed navigation state.",
@@ -1935,19 +2362,21 @@ export class NavigationHandlers {
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
                 } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
-            if (exactRegistrySymbols.length > 1) {
+            if (symbolResolution.status === "ambiguous") {
                 const payload = withNavigationFreshness(this.host.withProofDebugHint({
                     status: "not_found" as const,
                     path: effectiveRoot,
-                    symbolRef,
+                    symbolRef: resolvedInputSymbolRef,
                     supported: false,
-                    reason: "missing_symbol",
-                    message: "Ambiguous exact symbol reference. Use symbolInstanceId for deterministic traversal.",
+                    reason: "ambiguous_symbol",
+                    candidates: symbolResolution.candidates,
+                    totalCandidateCount: symbolResolution.totalCandidateCount,
+                    message: rawSymbolLabel
+                        ? `Ambiguous symbolLabel '${rawSymbolLabel}' in '${normalizedSymbolFile}' matched ${symbolResolution.totalCandidateCount} symbols. Re-run with one of the candidate symbolId values.`
+                        : `Ambiguous symbolId '${rawSymbolId}' in '${normalizedSymbolFile}' matched ${symbolResolution.totalCandidateCount} symbols. Re-run with one of the candidate symbolId values.`,
                     nodes: [],
                     edges: [],
                     notes: [],
@@ -1955,10 +2384,20 @@ export class NavigationHandlers {
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
                 } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
+
+            const exactSeedSymbol = symbolResolution.symbol;
+            const canonicalSymbolRef: CallGraphSymbolRef = {
+                file: normalizedSymbolFile,
+                symbolId: exactSeedSymbol.symbolInstanceId,
+                ...(exactSeedSymbol.label
+                    ? { symbolLabel: exactSeedSymbol.label }
+                    : rawSymbolLabel
+                        ? { symbolLabel: rawSymbolLabel }
+                        : {}),
+                ...(resolvedInputSymbolRef.span ? { span: resolvedInputSymbolRef.span } : {}),
+            };
 
             const publishedRelativePaths = new Set(
                 registryState.registry.manifest.files.map((file) => file.path),
@@ -2070,19 +2509,17 @@ export class NavigationHandlers {
                     codebaseRoot: effectiveRoot,
                     context: {
                         path: absolutePath,
-                        symbolRef,
+                        symbolRef: canonicalSymbolRef,
                         direction,
                         depth,
                         limit,
                     },
                     message: `Symbol reference points at '${normalizedSymbolFile}', but the current file is unavailable or not authorized. Refresh the index before using exact call graph navigation.`,
                 }), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             } else {
                 const fileFreshness = this.host.getRegistryFileFreshness({
-                    symbols: exactRegistrySymbols,
+                    symbols: [exactSeedSymbol],
                     absoluteFile: absoluteSymbolFile,
                     sourceBytes: symbolSourceBytes,
                 });
@@ -2093,20 +2530,18 @@ export class NavigationHandlers {
                         `Symbol registry contains inconsistent file hashes for '${normalizedSymbolFile}'.`,
                         {
                             path: absolutePath,
-                            symbolRef,
+                            symbolRef: canonicalSymbolRef,
                             direction,
                             depth,
                             limit,
                         },
                         "incompatible_symbol_registry",
                     ), proofDebugHint);
-                    return {
-                        content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                    };
+                    return { payload };
                 }
                 const witnessFreshness = sourceOptions?.publishedSource !== undefined
                     ? this.host.getRegistryFileFreshness({
-                        symbols: exactRegistrySymbols,
+                        symbols: [exactSeedSymbol],
                         absoluteFile: absoluteSymbolFile,
                         sourceBytes: sourceOptions.publishedSource,
                     }).status : undefined;
@@ -2116,31 +2551,29 @@ export class NavigationHandlers {
                         codebaseRoot: effectiveRoot,
                         context: {
                             path: absolutePath,
-                            symbolRef,
+                            symbolRef: canonicalSymbolRef,
                             direction,
                             depth,
                             limit,
                         },
                         message: `Symbol reference for '${normalizedSymbolFile}' is stale relative to the current file contents. Refresh the index before using exact call graph navigation.`,
                     }), proofDebugHint);
-                    return {
-                        content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                    };
+                    return { payload };
                 }
             }
 
             // Repair only hash-matched bytes. Dirty bytes cannot change published identity or spans.
             const resolvedSymbolRepair = seedSourceState === "fresh" ? repairSourceBackedPythonSpan({
-                codebaseRoot: effectiveRoot, symbol: exactRegistrySymbols[0],
+                codebaseRoot: effectiveRoot, symbol: exactSeedSymbol,
                 sourceLines: symbolSourceBytes!.toString("utf8").split(/\r?\n/),
             }) : undefined;
-            const resolvedSymbol = resolvedSymbolRepair?.symbol ?? exactRegistrySymbols[0];
+            const resolvedSymbol = resolvedSymbolRepair?.symbol ?? exactSeedSymbol;
 
             if (!this.host.isCallGraphLanguageSupported(resolvedSymbol.language, resolvedSymbol.file)) {
                 const payload = this.host.withProofDebugHint({
                     status: "unsupported" as const,
                     path: effectiveRoot,
-                    symbolRef,
+                    symbolRef: canonicalSymbolRef,
                     supported: false,
                     reason: "unsupported_language",
                     message: `Language '${resolvedSymbol.language}' does not support relationship-backed call graph traversal.`,
@@ -2151,9 +2584,7 @@ export class NavigationHandlers {
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
                 } satisfies CallGraphResponseEnvelope, proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             const compatibility = await this.host.loadPreparedNavigationCompatibility(
@@ -2169,16 +2600,14 @@ export class NavigationHandlers {
                     `Relationship navigation is ${compatibility.relationships.status}: ${compatibility.relationships.reason}`,
                     {
                         path: absolutePath,
-                        symbolRef,
+                        symbolRef: canonicalSymbolRef,
                         direction,
                         depth,
                         limit,
                     },
                     reason,
                 ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             const servingNavigation = this.host.getPublicationNavigationAddress(lease);
@@ -2188,15 +2617,13 @@ export class NavigationHandlers {
                     "Publication navigation identity is unavailable for call-graph traversal.",
                     {
                         path: absolutePath,
-                        symbolRef,
+                        symbolRef: canonicalSymbolRef,
                         direction,
                         depth,
                         limit,
                     },
                 ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             const relationshipBackedGraph = await this.host.buildRelationshipBackedCallGraph({
@@ -2220,15 +2647,13 @@ export class NavigationHandlers {
                     "Relationship-backed call graph traversal could not load a compatible navigation snapshot.",
                     {
                         path: absolutePath,
-                        symbolRef,
+                        symbolRef: canonicalSymbolRef,
                         direction,
                         depth,
                         limit,
                     },
                 ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                };
+                return { payload };
             }
 
             const fileFreshnessByPath = new Map<string, NonNullable<CallGraphResponseEnvelope["nodes"][number]["freshness"]>>();
@@ -2277,24 +2702,22 @@ export class NavigationHandlers {
                 status: "ok" as const,
                 path: absolutePath,
                 codebaseRoot: effectiveRoot,
-                symbolRef,
+                symbolRef: canonicalSymbolRef,
                 ...(navigationAuthority ? { navigationAuthority } : {}),
                 ...relationshipBackedGraph,
             } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
-            const payload = projectCallGraphEvidence(fullPayload, evidenceRequest);
-            return {
-                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-            };
+            const payload = projectEvidence
+                ? projectCallGraphEvidence(fullPayload, evidenceRequest)
+                : fullPayload;
+            return { payload };
             });
             return outcome.status === 'stale'
                 ? {
-                    content: [{ type: "text" as const, text: this.host.stringifyToolJson(
-                        buildSourceStateUnverifiedCallGraphPayload(
-                            this.host,
-                            effectiveRoot,
-                            { symbolRef, direction, depth, limit, requestedPath: absolutePath },
-                        ),
-                    ) }],
+                    payload: buildSourceStateUnverifiedCallGraphPayload(
+                        this.host,
+                        effectiveRoot,
+                        { symbolRef: normalizedSymbolRef, direction, depth, limit, requestedPath: absolutePath },
+                    ),
                 }
                 : outcome.result;
         } catch (error: unknown) {
@@ -2318,7 +2741,7 @@ export class NavigationHandlers {
                 invalidEvidenceContinuation ? "invalid_evidence_continuation" : undefined,
             );
             return {
-                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                payload,
                 isError: true,
             };
         }

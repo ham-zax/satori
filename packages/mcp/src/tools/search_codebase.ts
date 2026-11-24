@@ -272,6 +272,7 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     limit: z.number().int().positive().max(ctx.capabilities.getMaxSearchResultTotal()).optional().meta({ default: ctx.capabilities.getDefaultSearchLimit() }).describe(`Grouped mode: total frozen result-set bound across continuation pages, default ${ctx.capabilities.getDefaultSearchLimit()}. Raw mode: maximum returned chunk count, default ${ctx.capabilities.getDefaultSearchLimit("raw")}. It is not the initial grouped page size.`),
     disclosureLimit: z.number().int().positive().max(ctx.capabilities.getMaxSearchPageSize()).optional().describe(`Initial grouped-result page size only, default ${SEARCH_DEFAULT_DISCLOSURE_LIMIT}, bounded by limit. For example, limit=100 and disclosureLimit=20 returns up to 20 initially and freezes up to 100 total for continuation. Customize later pages with continue_search.limit. Retrieval depth and reranker admission are independent.`),
     includeResultIndex: z.boolean().optional().describe("Optional grouped-mode compact index over the frozen ranked results. Defaults to false when omitted."),
+    hydrateExact: z.boolean().optional().describe("Opt in to inline bounded source on clean, unique exact symbol hits in grouped symbol mode."),
     debugMode: z.enum(["summary", "ranking", "freshness", "full"]).optional().describe("Bounded diagnostic projection."),
     debugCandidateLimit: z.number().int().positive().max(SEARCH_MAX_DIAGNOSTIC_CANDIDATES).optional().describe("Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings."),
     flags: z.record(z.string(), z.boolean()).optional().describe("Experimental search flags for candidate expansion or retrieval ablation. Set repo_vocab=true to try source-grounded repository vocabulary expansion."),
@@ -280,21 +281,21 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
 }).strict().superRefine((value, refinementContext) => {
     if (value.debugCandidateLimit !== undefined && value.debugMode !== "full") {
         refinementContext.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["debugCandidateLimit"],
             message: "debugCandidateLimit requires debugMode=full.",
         });
     }
     if (value.disclosureLimit !== undefined && value.resultMode === "raw") {
         refinementContext.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["disclosureLimit"],
             message: "disclosureLimit is available only with grouped results.",
         });
     }
     if (value.includeResultIndex !== undefined && value.resultMode === "raw") {
         refinementContext.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["includeResultIndex"],
             message: "includeResultIndex is available only with grouped results.",
         });
@@ -303,14 +304,14 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     if (value.disclosureLimit !== undefined
         && value.disclosureLimit > effectiveRequestedTotal) {
         refinementContext.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["disclosureLimit"],
             message: "disclosureLimit cannot exceed limit.",
         });
     }
     if (parseSearchOperators(value.query).semanticQuery.trim().length === 0) {
         refinementContext.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["query"],
             message: "Operator-only search requires semantic text or a positive must:, path:, or lang: value.",
         });
@@ -320,7 +321,7 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
 export const searchCodebaseTool: McpTool = {
     name: "search_codebase",
     description: () =>
-        `Hybrid repository search for unfamiliar behavior, ownership, symbols, configuration, or related implementation. It combines exact/lexical and semantic evidence with a runtime-first scope="runtime" default. For a plain-English question, also pass up to ${SEARCH_ALT_TERMS_MAX} likely code identifiers in alt_terms: grounded guesses raise owner recall, unrelated ones rank worse than none. Query prefixes support lang:, path:, -path:, must:, and exclude:. Recall is bounded, not exhaustive. Grouped results expose canonical targets, bounded source previews, freshness/readiness, graph navigation state, recommendedNextAction, and recovery hints. Use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics. Follow recommendedNextAction; use continue_search only when a continuation is returned.`,
+        `Hybrid repository search combining lexical and semantic evidence with a runtime-first scope="runtime" default. For plain-English queries, pass up to ${SEARCH_ALT_TERMS_MAX} grounded code terms in alt_terms to boost recall. Supports lang:, path:, -path:, must:, and exclude: prefixes. Recall is bounded, not exhaustive. Grouped results return canonical targets, previews, graph state, recommendedNextAction, and hints; use .satoriignore + manage_index sync to remove noise, debugMode=summary|ranking|freshness|full for diagnostics, and continue_search only with a returned handle.`,
     inputSchemaZod: (ctx: ToolContext) => buildSearchSchema(ctx),
     execute: async (args: unknown, ctx: ToolContext) => {
         const schema = buildSearchSchema(ctx);

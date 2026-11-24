@@ -21,7 +21,9 @@ import {
 import type {
     SearchDebugMode,
     SearchFreshnessSummary,
+    SearchGroupResult,
     SearchGroupedResponseEnvelope,
+    SearchHydratedExactSource,
     SearchResponseHints,
     SearchResponseEnvelope,
     SearchSpan,
@@ -40,6 +42,99 @@ import {
     SEARCH_RESULT_SET_HANDLE_PLACEHOLDER,
 } from "./search-constants.js";
 import type { FinalizedSearchResults } from "./search-result-finalization.js";
+
+export const EXACT_HYDRATION_MAX_SOURCE_BYTES = 12_288;
+export const EXACT_HYDRATION_MAX_LINES = 200;
+
+export function attachHydratedExactSource(
+    envelope: SearchGroupedResponseEnvelope,
+    hydratedExactSource: SearchHydratedExactSource | undefined,
+    maxResponseBytes: number,
+): SearchGroupedResponseEnvelope {
+    if (
+        !hydratedExactSource
+        || envelope.status !== "ok"
+        || envelope.continuation
+        || envelope.results.length !== 1
+        || envelope.results[0]?.target.symbolId !== hydratedExactSource.symbolId
+        || envelope.results[0]?.target.file !== hydratedExactSource.file
+    ) return envelope;
+    const candidate = { ...envelope, hydratedExactSource };
+    return Buffer.byteLength(JSON.stringify(candidate), "utf8") <= maxResponseBytes ? candidate : envelope;
+}
+
+export function buildHydratedExactSource(input: {
+    symbol: SymbolRecord;
+    sourceContent: string;
+    maxSourceBytes?: number;
+    maxLines?: number;
+}): SearchHydratedExactSource | undefined {
+    const symbolId = input.symbol.symbolInstanceId?.trim();
+    if (!symbolId || input.symbol.kind === "file") {
+        return undefined;
+    }
+    const { startLine, endLine } = input.symbol.span;
+    if (
+        !Number.isSafeInteger(startLine)
+        || !Number.isSafeInteger(endLine)
+        || startLine < 1
+        || endLine < startLine
+    ) {
+        return undefined;
+    }
+    if (input.sourceContent.length === 0) {
+        return undefined;
+    }
+    const maxSourceBytes = input.maxSourceBytes ?? EXACT_HYDRATION_MAX_SOURCE_BYTES;
+    const maxLines = input.maxLines ?? EXACT_HYDRATION_MAX_LINES;
+    const lines = input.sourceContent.split(/\r\n?|\n/);
+    if (lines.length !== endLine - startLine + 1) {
+        return undefined;
+    }
+
+    const totalBytes = Buffer.byteLength(input.sourceContent, "utf8");
+    if (lines.length <= maxLines && totalBytes <= maxSourceBytes) {
+        return {
+            file: input.symbol.file,
+            symbolId,
+            span: { startLine, endLine },
+            returnedSpan: { startLine, endLine },
+            completeSymbolReturned: true,
+            truncated: false,
+            content: input.sourceContent,
+            sourceAuthority: "publication_hash_matched",
+        };
+    }
+
+    const candidateMaxLines = Math.min(lines.length, maxLines);
+    let includedLines = 0;
+    let usedBytes = 0;
+    for (let index = 0; index < candidateMaxLines; index += 1) {
+        const lineBytes = Buffer.byteLength(lines[index], "utf8") + (index > 0 ? 1 : 0);
+        if (usedBytes + lineBytes > maxSourceBytes) {
+            break;
+        }
+        usedBytes += lineBytes;
+        includedLines = index + 1;
+    }
+    if (includedLines === 0) {
+        return undefined;
+    }
+
+    return {
+        file: input.symbol.file,
+        symbolId,
+        span: { startLine, endLine },
+        returnedSpan: {
+            startLine,
+            endLine: startLine + includedLines - 1,
+        },
+        completeSymbolReturned: false,
+        truncated: true,
+        content: lines.slice(0, includedLines).join("\n"),
+        sourceAuthority: "publication_hash_matched",
+    };
+}
 
 export type BuildExactRegistryHitEnvelopeInput = {
     codebaseRoot: string;
@@ -153,6 +248,73 @@ export function buildExactRegistryHitEnvelope(
         returnedGroupCount: 0,
     });
     const eligibleResults = visibleGroupedResults.slice(0, frozenCounts.effectiveFrozenTotal);
+    const buildCandidateEnvelope = (
+        results: readonly SearchGroupResult[],
+        disclosure?: SearchGroupedResponseEnvelope["disclosure"],
+    ): SearchGroupedResponseEnvelope => {
+        const resultCounts = resolveSearchGroupedResultCounts({
+            requestedTotal: input.limit,
+            availableGroupCount: visibleGroupedResults.length,
+            returnedGroupCount: results.length,
+        });
+        const projectedDebugSearch = input.debugSearch && input.candidateSurvival
+            ? (() => {
+                const debugSearch = structuredClone(input.debugSearch);
+                const candidateSurvival = structuredClone(input.candidateSurvival);
+                candidateSurvival.stages = candidateSurvival.stages.filter(
+                    (stage) => stage.stage !== "disclosed",
+                );
+                appendGroupedCandidateStage(candidateSurvival, "disclosed", results);
+                return { ...debugSearch, candidateSurvival };
+            })()
+            : input.debugSearch;
+        const noiseMitigationHint = input.buildNoiseMitigationHint(
+            results.map((result) => result.target.file),
+        );
+        const generatedArtifactsHint = input.buildGeneratedArtifactsVerificationHint(
+            results.map((result) => ({
+                file: result.target.file,
+                span: result.target.span,
+            })),
+        );
+        const envelope = buildGroupedSearchEnvelope({
+            actionIntent: input.actionIntent,
+            codebaseRoot: input.codebaseRoot,
+            absolutePath: input.absolutePath,
+            query: input.query,
+            scope: input.scope,
+            groupBy: input.groupBy,
+            limit: input.limit,
+            debugMode: input.debugMode,
+            freshnessDecision: input.freshnessDecision,
+            freshnessSummary: input.freshnessSummary,
+            warnings: resultCounts.remainingGroupCount > 0
+                ? [
+                    ...finalizedSearchWarnings,
+                    WARNING_CODES.SEARCH_RESULT_SET_NOT_CACHE_ADMISSIBLE,
+                ]
+                : finalizedSearchWarnings,
+            ...(input.debugSummary ? { debugSummary: input.debugSummary } : {}),
+            ...(projectedDebugSearch ? { debugSearch: projectedDebugSearch } : {}),
+            proofDebugHint: input.proofDebugHint,
+            noiseMitigationHint,
+            generatedArtifactsHint,
+            resultCounts,
+            ...(disclosure ? { disclosure } : {}),
+            results: [...results],
+        }) as SearchGroupedResponseEnvelope;
+        return resultCounts.remainingGroupCount > 0
+            ? {
+                ...envelope,
+                rankedSetDigest: SEARCH_RESULT_SET_DIGEST_PLACEHOLDER,
+                continuation: {
+                    handle: SEARCH_RESULT_SET_HANDLE_PLACEHOLDER,
+                    nextOffset: results.length,
+                    remainingGroupCount: resultCounts.remainingGroupCount,
+                },
+            }
+            : envelope;
+    };
     const projection = projectGroupedDisclosure({
         orderedResults: visibleGroupedResults,
         callerLimit: frozenCounts.effectiveFrozenTotal,
@@ -160,70 +322,7 @@ export function buildExactRegistryHitEnvelope(
         maxResponseBytes: input.maxResponseBytes,
         includeSummary: input.disclosureLimit < frozenCounts.effectiveFrozenTotal
             || visibleGroupedResults.length > frozenCounts.effectiveFrozenTotal,
-        buildEnvelope: (results, disclosure) => {
-            const resultCounts = resolveSearchGroupedResultCounts({
-                requestedTotal: input.limit,
-                availableGroupCount: visibleGroupedResults.length,
-                returnedGroupCount: results.length,
-            });
-            const projectedDebugSearch = input.debugSearch && input.candidateSurvival
-                ? (() => {
-                    const debugSearch = structuredClone(input.debugSearch);
-                    const candidateSurvival = structuredClone(input.candidateSurvival);
-                    candidateSurvival.stages = candidateSurvival.stages.filter(
-                        (stage) => stage.stage !== "disclosed",
-                    );
-                    appendGroupedCandidateStage(candidateSurvival, "disclosed", results);
-                    return { ...debugSearch, candidateSurvival };
-                })()
-                : input.debugSearch;
-            const noiseMitigationHint = input.buildNoiseMitigationHint(
-                results.map((result) => result.target.file),
-            );
-            const generatedArtifactsHint = input.buildGeneratedArtifactsVerificationHint(
-                results.map((result) => ({
-                    file: result.target.file,
-                    span: result.target.span,
-                })),
-            );
-            const envelope = buildGroupedSearchEnvelope({
-                actionIntent: input.actionIntent,
-                codebaseRoot: input.codebaseRoot,
-                absolutePath: input.absolutePath,
-                query: input.query,
-                scope: input.scope,
-                groupBy: input.groupBy,
-                limit: input.limit,
-                debugMode: input.debugMode,
-                freshnessDecision: input.freshnessDecision,
-                freshnessSummary: input.freshnessSummary,
-                warnings: resultCounts.remainingGroupCount > 0
-                    ? [
-                        ...finalizedSearchWarnings,
-                        WARNING_CODES.SEARCH_RESULT_SET_NOT_CACHE_ADMISSIBLE,
-                    ]
-                    : finalizedSearchWarnings,
-                ...(input.debugSummary ? { debugSummary: input.debugSummary } : {}),
-                ...(projectedDebugSearch ? { debugSearch: projectedDebugSearch } : {}),
-                proofDebugHint: input.proofDebugHint,
-                noiseMitigationHint,
-                generatedArtifactsHint,
-                resultCounts,
-                ...(disclosure ? { disclosure } : {}),
-                results: [...results],
-            }) as SearchGroupedResponseEnvelope;
-            return resultCounts.remainingGroupCount > 0
-                ? {
-                    ...envelope,
-                    rankedSetDigest: SEARCH_RESULT_SET_DIGEST_PLACEHOLDER,
-                    continuation: {
-                        handle: SEARCH_RESULT_SET_HANDLE_PLACEHOLDER,
-                        nextOffset: results.length,
-                        remainingGroupCount: resultCounts.remainingGroupCount,
-                    },
-                }
-                : envelope;
-        },
+        buildEnvelope: (results, disclosure) => buildCandidateEnvelope(results, disclosure),
     });
     if (projection.status === "page_too_large") {
         const authorityEnvelope = { ...projection.envelope };
@@ -239,7 +338,8 @@ export function buildExactRegistryHitEnvelope(
             },
         };
     }
-    const resultSet = projection.envelope.continuation || input.includeResultIndex
+    const finalEnvelope = projection.envelope;
+    const resultSet = finalEnvelope.continuation || input.includeResultIndex
         ? {
             orderedResults: eligibleResults.map(projectGroupedResultV2),
             recommendedActions: eligibleResults.map((result) => (
@@ -250,7 +350,7 @@ export function buildExactRegistryHitEnvelope(
         : undefined;
     return {
         kind: "ok",
-        envelope: projection.envelope,
+        envelope: finalEnvelope,
         ...(resultSet ? { resultSet } : {}),
     };
 }

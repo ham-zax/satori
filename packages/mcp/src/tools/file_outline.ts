@@ -6,8 +6,8 @@ import {
     ToolResponse,
     absoluteFilesystemPathSchema,
     formatZodError,
-    repoRelativeFilePathSchema,
 } from './types.js';
+import { navigationBoundaryFilePathSchema } from './call_graph.js';
 import { resolveVectorBackedToolContext } from './provider-context.js';
 import {
     WorkspaceAuthorizationError,
@@ -16,7 +16,7 @@ import {
 
 const fileOutlineInputSchema = z.object({
     path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root (relative paths are rejected).'),
-    file: repoRelativeFilePathSchema('Repo-relative file path inside the codebase root (not absolute; resolved only against that root).'),
+    file: navigationBoundaryFilePathSchema('Repo-relative file path inside the codebase root, or an absolute file path inside that root.'),
     start_line: z.number().int().positive().optional().describe('Optional start line filter (1-based, inclusive).'),
     end_line: z.number().int().positive().optional().describe('Optional end line filter (1-based, inclusive).'),
     limitSymbols: z.number().int().positive().optional().meta({ default: 500 }).describe('Maximum number of returned symbols that start inside the line window; enclosing symbols that start before start_line repeat on every page and are not counted.'),
@@ -28,14 +28,14 @@ const fileOutlineInputSchema = z.object({
     if (input.resolveMode === 'exact') {
         if (!input.symbolIdExact && !input.symbolLabelExact) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ['symbolIdExact'],
                 message: 'resolveMode=\"exact\" requires symbolIdExact or symbolLabelExact.'
             });
         }
     } else if (input.symbolIdExact || input.symbolLabelExact) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: [input.symbolIdExact ? 'symbolIdExact' : 'symbolLabelExact'],
             message: 'symbolIdExact and symbolLabelExact require resolveMode=\"exact\"; outline mode does not filter by symbol.'
         });
@@ -45,7 +45,7 @@ const fileOutlineInputSchema = z.object({
         && (input.resolveMode !== 'exact' || !input.symbolIdExact)
     ) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ['detail'],
             message: `detail=\"${input.detail}\" requires resolveMode=\"exact\" and symbolIdExact.`
         });
@@ -88,7 +88,7 @@ function formatWorkspaceAuthorizationError(
 
 export const fileOutlineTool: McpTool = {
     name: 'file_outline',
-    description: () => 'Return indexed symbols for one published file, with call_graph jump handles when available. Readable edited files retain published IDs and coordinates with source-drift warnings; a symbol whose current declaration was proven against the current bytes also carries currentSpan with the current coordinates and the current source hash, while the published span and ID stay unchanged. analysis refuses stale source. If the file is published but structural extraction was unavailable, returns status="not_ready" with reason="structural_evidence_unavailable" plus read_file and structural-coverage hints. Use detail="summary" for structure, detail="analysis" for Python or Go structural metrics, detail="relationships" for direct metadata on one exact symbol, or detail="relationship_coverage" for file-wide observed call-construct calibration from persisted ResolutionClaims. analysis/relationships require an exact canonical symbol; relationship_coverage does not.',
+    description: () => 'Return indexed symbols for one published file with call_graph jump handles when available. Edited files keep published IDs/spans with source-drift warnings (plus currentSpan when proven). Use detail="summary" (default), detail="analysis" (Python or Go structural metrics; requires exact symbol, refuses stale source), detail="relationships" (exact symbol metadata), or detail="relationship_coverage" (file-wide call-construct calibration).',
     inputSchemaZod: () => fileOutlineInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = fileOutlineInputSchema.safeParse(args || {});

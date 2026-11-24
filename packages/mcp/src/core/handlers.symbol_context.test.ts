@@ -8,6 +8,7 @@ type SnapshotAdapterHost = {
     acquirePublicationLease(codebasePath: string): PublicationLease | undefined;
     isPublicationLeaseAdmitted(lease: PublicationLease): Promise<boolean>;
     context: {
+        getPublicationSourceCheckpoint(lease: PublicationLease): { fileHashes: [string, string][] };
         getPublicationNavigationAddress(lease: PublicationLease): {
             publicationId: string;
             navigationRoot: string;
@@ -93,6 +94,7 @@ test("symbol-context handler adapter binds prepared navigation and relationship 
         },
         isPublicationLeaseAdmitted: async () => leaseAdmitted,
         context: {
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [["src/example.ts", "0".repeat(64)]] }),
             getPublicationNavigationAddress: () => ({
                 publicationId,
                 navigationRoot: "/state/publication-1/navigation",

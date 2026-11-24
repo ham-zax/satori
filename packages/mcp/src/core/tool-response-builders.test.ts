@@ -57,12 +57,45 @@ test("not-ready search payload tells agents to keep working instead of sleeping 
         const message = envelope.message ?? "";
         assert.match(message, autoIndexing ? /auto-indexing/ : /currently indexing/);
         assert.match(message, /Do not sleep or poll in a loop/);
+        assert.match(message, /manage_index status/);
         assert.match(message, /read entry files \(for example with read_file\)/);
         assert.match(message, /search with rg\/grep/);
+        assert.match(message, new RegExp(`retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms`));
         assert.match(envelope.recommendedNextAction?.reason ?? "", /Do not sleep or poll in a loop/);
         assert.match(envelope.recommendedNextAction?.reason ?? "", /read entry files \(for example with read_file\)/);
         assert.match(envelope.recommendedNextAction?.reason ?? "", /search with rg\/grep/);
+        assert.match(envelope.recommendedNextAction?.reason ?? "", new RegExp(`retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms`));
     }
+});
+
+test("not-ready search payload includes progress and phase details when available", () => {
+    const builders = new ToolResponseBuilders({
+        buildManageIndexRecommendedAction: (_action: string, _codebasePath: string, rationale: string) => ({
+            tool: "manage_index",
+            args: { action: "status", path: "/repo" },
+            reason: rationale,
+        }),
+        buildStatusHint: () => ({ tool: "manage_index", args: { action: "status", path: "/repo" } }),
+        buildIndexingMetadata: () => ({
+            progressPct: 42,
+            lastUpdated: "2026-11-24T00:00:00.000Z",
+            phase: "embedding",
+            autoIndexing: true,
+        }),
+    } as unknown as ToolResponseBuildersHost);
+
+    const envelope = builders.buildNotReadySearchPayload("/repo", {
+        path: "/repo",
+        query: "owner",
+        scope: "runtime",
+        groupBy: "symbol",
+        resultMode: "grouped",
+        limit: 5,
+    });
+    assert.equal(envelope.status, "not_ready");
+    assert.equal(envelope.reason, "indexing");
+    assert.equal(envelope.retryAfterMs, DEFAULT_MANAGE_RETRY_AFTER_MS);
+    assert.match(envelope.message ?? "", /42% complete, phase: embedding/);
 });
 
 test("manage response includes the supplied process-lifetime mutation operation", () => {

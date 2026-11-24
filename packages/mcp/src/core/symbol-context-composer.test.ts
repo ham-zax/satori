@@ -604,9 +604,16 @@ test("source continuations revalidate their fingerprint and return only the requ
 test("relationship continuations resume after canonical cursors and reject cross-direction cursors", async () => {
     const source = "class Parent {\n  target() { return true; }\n}\n";
     const data = fixture(source);
+    const deps = dependencies({ source, symbols: data.symbols, relationships: {
+        status: "available",
+        authority: "remote_generation_proven",
+        manifestIdentity: "relationship-manifest",
+        callers: preparedDirection([caller(2), caller(0), caller(1), caller(3)]),
+        callees: preparedDirection([callee(2), callee(0), callee(1)]),
+    } });
     const initial = await composeSymbolContext(
         request({ include: { source: false, siblings: false, callers: true, callees: true } }),
-        dependencies({ source, symbols: data.symbols }),
+        deps,
     );
     assert.equal(initial.status, "ok");
     if (initial.status !== "ok") return;
@@ -625,7 +632,7 @@ test("relationship continuations resume after canonical cursors and reject cross
                 pageSize: 1,
             },
         }),
-        dependencies({ source, symbols: data.symbols }),
+        deps,
     );
     assert.equal(continued.status, "ok");
     if (continued.status !== "ok") return;
@@ -633,6 +640,21 @@ test("relationship continuations resume after canonical cursors and reject cross
     if (continued.context.relationships.callers.status !== "ok") return;
     assert.equal(continued.context.relationships.callers.returnedCount, 1);
     assert.equal(continued.context.relationships.callers.items[0]?.symbolId, "caller-2");
+
+    const compactPage = await composeSymbolContext(
+        request({
+            include: { source: false, siblings: false, callers: true, callees: false },
+            budgets: { ...request().budgets, maxSerializedResponseBytes: 200 },
+            measureResponseBytes: (context) => 100 + ("returnedCount" in context.relationships.callers
+                ? context.relationships.callers.returnedCount * 100 : 0),
+            continuation: { kind: "caller_page", fingerprint: callerHandle.fingerprint, cursor: callerHandle.cursor, pageSize: 2 },
+        }),
+        deps,
+    );
+    assert.equal(compactPage.status, "ok");
+    assert.equal(compactPage.context.relationships.callers.status, "ok");
+    assert.deepEqual(compactPage.context.relationships.callers.items, continued.context.relationships.callers.items);
+    assert.ok(compactPage.context.continuations.some((entry) => entry.kind === "caller_page"));
 
     const crossDirection = await composeSymbolContext(
         request({
@@ -644,7 +666,7 @@ test("relationship continuations resume after canonical cursors and reject cross
                 pageSize: 1,
             },
         }),
-        dependencies({ source, symbols: data.symbols }),
+        deps,
     );
     assert.deepEqual(crossDirection, {
         status: "invalid_relationship_continuation",

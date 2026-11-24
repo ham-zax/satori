@@ -358,9 +358,6 @@ export function buildExactRegistryGroupResult(input: {
     const graphEvidence = input.graphUnavailableReasonOverride
         ? undefined
         : buildGraphEvidence(callGraphHint);
-    const exactEvidenceSpan = target.span.endLine - target.span.startLine + 1 >= OVERSIZED_SYMBOL_LINE_THRESHOLD
-        ? boundSearchEvidenceSpan(target.span)
-        : undefined;
 
     return {
         target,
@@ -379,7 +376,6 @@ export function buildExactRegistryGroupResult(input: {
             semantic: "medium",
         },
         preview: input.preview ?? "",
-        ...(exactEvidenceSpan ? { evidenceSpan: exactEvidenceSpan } : {}),
         navigation: buildSearchGraphNavigation(
             callGraphHint,
             input.symbol.name,

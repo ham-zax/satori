@@ -247,7 +247,7 @@ export function createSessionWorkspacePolicy(input: {
         if (!allowBroadRoots && (isBroadPath(canonicalPath) || isBlockedStateSubpath)) {
             throw new WorkspaceAuthorizationError(
                 "BROAD_ROOT_NOT_ALLOWED",
-                `Broad path is not authorized: ${canonicalPath}`,
+                "Broad path is not authorized.",
             );
         }
         for (const root of roots) {
@@ -273,7 +273,7 @@ export function createSessionWorkspacePolicy(input: {
         }
         throw new WorkspaceAuthorizationError(
             "ROOT_NOT_AUTHORIZED",
-            `Path is not inside any authorized workspace root: ${canonicalPath}`,
+            "Path is not inside any authorized workspace root.",
         );
     };
 

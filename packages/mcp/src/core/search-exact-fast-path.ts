@@ -15,7 +15,7 @@ import {
 } from "./search-constants.js";
 import { resolveFrozenSearchResultLimit } from "./search-policy.js";
 import { classifyPathCategory } from "./search-ranking-policy.js";
-import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
+import { buildExactRegistryHitEnvelope, buildHydratedExactSource } from "./search-exact-registry-hit.js";
 import type { FinalizedSearchResults } from "./search-result-finalization.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
@@ -85,6 +85,7 @@ export type SearchExactFastPathInput = {
     limit: number;
     disclosureLimit: number;
     includeResultIndex: boolean;
+    hydrateExact?: boolean;
     debugMode: "none" | "summary" | "ranking" | "freshness" | "full";
     rankingMode: "default" | "auto_changed_first";
     semanticQuery: string;
@@ -118,6 +119,7 @@ type SearchExactFastPathHandled = {
     searchSymbolRegistryManifestHash: string;
     exactRegistryFallbackForTrackedLexical: boolean;
     finalized: FinalizedSearchResults;
+    hydratedExactSource?: ReturnType<typeof buildHydratedExactSource>;
     resultsBeforeFilter: number;
     resultsAfterFilter: number;
 };
@@ -142,6 +144,7 @@ export type SearchExactFastPathHost = {
         run: () => Promise<T>,
     ) => Promise<T>;
     loadRegistryManifest: (normalizedRootPath: string) => Promise<RegistryManifestState>;
+    isPublishedSource: (symbol: SymbolRecord) => boolean;
     loadRegistryValidatedRelationshipNavigation: (input: {
         codebaseRoot: string;
         registryManifestHash?: string;
@@ -431,7 +434,7 @@ export async function runExactRegistryFastPath(
     }
 
     const exactMatches = await perfSpan('search.exact_source_preview', () => Promise.all(resultSymbols.map(async (symbol) => {
-        const sourceEvidence = publicationOnlyStaleRead
+        const sourceEvidence = publicationOnlyStaleRead || !host.isPublishedSource(symbol)
             ? undefined
             : (symbol.symbolInstanceId === exactRegistrySymbol.symbolInstanceId
                 ? (currentSourceEvidence ??= await readCurrentSourceEvidence(input.effectiveRoot, symbol.file))
@@ -445,11 +448,26 @@ export async function runExactRegistryFastPath(
             : undefined;
         return {
             symbol,
+            sourceContent,
             preview: sourceContent === undefined
                 ? ""
                 : buildSearchGroupPreview(symbol.label, sourceContent, input.previewMaxBytes),
         };
     })));
+    const hydrationEligible = input.hydrateExact === true
+        && exactRegistryMatch.status === "hit"
+        && resultSymbols.length === 1
+        && exactMatches.length === 1
+        && !relationshipPassUsed
+        && !exactTargetWasDirty
+        && !publicationOnlyStaleRead
+        && typeof exactMatches[0]?.sourceContent === "string";
+    const hydratedExactSource = hydrationEligible
+        ? buildHydratedExactSource({
+            symbol: exactMatches[0].symbol,
+            sourceContent: exactMatches[0].sourceContent!,
+        })
+        : undefined;
     const exactPassesUsed = relationshipPassUsed
         ? ["exact_registry", "relationships"]
         : ["exact_registry"];
@@ -613,7 +631,7 @@ export async function runExactRegistryFastPath(
         freshnessDecision: input.freshnessDecision,
         freshnessSummary: input.freshnessSummary,
         proofDebugHint: input.proofDebugHint,
-        matches: exactMatches,
+        matches: exactMatches.map(({ symbol, preview }) => ({ symbol, preview })),
         indexedAt: registryState.registry.manifest.builtAt || null,
         navigationState: callGraphNavigationState,
         navigationWarning: callGraphNavigationState.warning,
@@ -654,6 +672,7 @@ export async function runExactRegistryFastPath(
         searchSymbolRegistryManifestHash: registryState.manifestHash,
         exactRegistryFallbackForTrackedLexical: true,
         finalized,
+        ...(hydratedExactSource ? { hydratedExactSource } : {}),
         resultsBeforeFilter: exactRegistryMatch.debug.inspectedSymbolCount,
         resultsAfterFilter: resultSymbols.length,
     };

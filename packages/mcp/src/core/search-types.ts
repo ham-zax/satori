@@ -32,9 +32,17 @@ export type NavigationToolHints = Record<string, unknown>;
 
 export interface CallGraphSymbolRef {
     file: string;
-    symbolId: string;
+    symbolId?: string;
     symbolLabel?: string;
     span?: SearchSpan;
+}
+
+export interface AmbiguousSymbolCandidate {
+    symbolId: string;
+    symbolLabel: string;
+    kind: SymbolKind;
+    file: string;
+    span: SearchSpan;
 }
 
 export type NavigationRegistryUnavailableReason =
@@ -865,6 +873,17 @@ interface SearchBaseResponseEnvelope {
     };
 }
 
+export interface SearchHydratedExactSource {
+    file: string;
+    symbolId: string;
+    span: SearchSpan;
+    returnedSpan: SearchSpan;
+    completeSymbolReturned: boolean;
+    truncated: boolean;
+    content: string;
+    sourceAuthority: "publication_hash_matched";
+}
+
 export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelope {
     resultMode: "grouped";
     rankedSetDigest?: string;
@@ -885,6 +904,8 @@ export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelop
      * `resultCounts.availableGroupCount`.
      */
     pagination?: SearchPaginationEvidence;
+    /** Optional bounded source body for a clean, unique, hash-matched exact symbol hit when opted in. */
+    hydratedExactSource?: SearchHydratedExactSource;
     /** Results are already in authoritative relevance order. */
     results: SearchGroupedResultV2[];
 }
@@ -1106,6 +1127,7 @@ export type CallGraphResponseStatus =
 export type CallGraphResponseReason =
     | NavigationUnavailableReason
     | "symbol_outside_scope"
+    | "ambiguous_symbol"
     | "invalid_symbol_ref"
     | "invalid_evidence_continuation"
     | "indexing"
@@ -1199,6 +1221,8 @@ export interface CallGraphSourceReferenceResult {
     };
 }
 
+export type CallGraphTestSiteProvenance = "recorded_call_site" | "symbol_start_fallback";
+
 export interface CallGraphTestReferenceResult {
     file: string;
     symbolId: string;
@@ -1209,6 +1233,7 @@ export interface CallGraphTestReferenceResult {
         startLine: number;
         endLine?: number;
     };
+    siteProvenance?: CallGraphTestSiteProvenance;
     targetSymbolId: string;
     kind: CallGraphEdgeKind;
     confidence: number;
@@ -1315,6 +1340,8 @@ export interface CallGraphTraversalResponseEnvelope {
     nodes: CallGraphNodeResult[];
     edges: CallGraphEdgeResult[];
     notes: CallGraphNoteResult[];
+    candidates?: AmbiguousSymbolCandidate[];
+    totalCandidateCount?: number;
     warnings?: string[];
     inboundCoverageEvidence?: InboundCoverageEvidence;
     exactReferences?: CallGraphExactReferenceResult[];

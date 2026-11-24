@@ -164,14 +164,24 @@ export async function prepareInspectableSource(input: {
     } catch {
         return { status: "unavailable", reason: "source_descriptor_unavailable" };
     }
+    if (canonicalRoot !== path.resolve(input.codebaseRoot)) return rootBindingFailure();
     const logicalFile = path.resolve(canonicalRoot, input.relativeFile);
     if (!isRelativeFileInsideRoot(input.relativeFile, logicalFile, canonicalRoot)) {
         return rootBindingFailure();
     }
 
+    const relativeFile = path.relative(canonicalRoot, logicalFile).replace(/\\/g, "/");
+    const openPublishedPath = async () => {
+        const file = await openRegularFileWithIdentityInsideRoot(logicalFile, canonicalRoot, {
+            rejectFinalSymlink: true,
+        });
+        if (file.identity.canonicalRelativePath === relativeFile) return file;
+        await file.handle.close();
+        throw new RootBoundFileError("root_binding_invalid", "Opened source differs from its published path.");
+    };
     let opened: Awaited<ReturnType<typeof openRegularFileWithIdentityInsideRoot>>;
     try {
-        opened = await openRegularFileWithIdentityInsideRoot(logicalFile, canonicalRoot);
+        opened = await openPublishedPath();
     } catch (error) {
         return mapRootBoundFailure(error)
             ?? { status: "unavailable", reason: "source_descriptor_unavailable" };
@@ -274,7 +284,7 @@ export async function prepareInspectableSource(input: {
                 await finalizeInput.validatePreparedAuthority?.();
 
                 try {
-                    rebound = await openRegularFileWithIdentityInsideRoot(logicalFile, canonicalRoot);
+                    rebound = await openPublishedPath();
                 } catch (error) {
                     finishPartial();
                     return mapRootBoundFailure(error)

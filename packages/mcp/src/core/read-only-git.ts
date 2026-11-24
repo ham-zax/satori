@@ -62,10 +62,11 @@ export function execReadOnlyGitTextSync(
 export async function execReadOnlyGitText(
     codebaseRoot: string,
     subcommandArgs: readonly string[],
-    options: ReadOnlyGitOptions = {},
+    options: ReadOnlyGitOptions & { signal?: AbortSignal } = {},
 ): Promise<string> {
     const result = await execFileAsync("git", buildReadOnlyGitArgs(codebaseRoot, subcommandArgs), {
         encoding: "utf8",
+        signal: options.signal,
         timeout: options.timeoutMs ?? DEFAULT_READ_ONLY_GIT_TIMEOUT_MS,
         maxBuffer: options.maxBufferBytes ?? DEFAULT_READ_ONLY_GIT_MAX_BUFFER_BYTES,
     });
@@ -76,10 +77,11 @@ export async function execReadOnlyGitText(
 export async function execReadOnlyGitBuffer(
     codebaseRoot: string,
     subcommandArgs: readonly string[],
-    options: ReadOnlyGitOptions = {},
+    options: ReadOnlyGitOptions & { signal?: AbortSignal } = {},
 ): Promise<Buffer> {
     const result = await execFileAsync("git", buildReadOnlyGitArgs(codebaseRoot, subcommandArgs), {
         encoding: "buffer",
+        signal: options.signal,
         timeout: options.timeoutMs ?? DEFAULT_READ_ONLY_GIT_TIMEOUT_MS,
         maxBuffer: options.maxBufferBytes ?? DEFAULT_READ_ONLY_GIT_MAX_BUFFER_BYTES,
     });

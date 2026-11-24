@@ -4,8 +4,11 @@ import { compareContractStrings } from "@satori-code/core";
 import type {
     CallGraphEdgeResult,
     CallGraphResponseEnvelope,
+    CallGraphTestReferenceResult,
+    CallGraphTestSiteProvenance,
     FileOutlineResponseEnvelope,
     CallGraphNodeResult,
+    SearchSpan,
 } from "./search-types.js";
 import { areaForFile } from "./architecture-overview.js";
 import { execReadOnlyGitBuffer, execReadOnlyGitText } from "./read-only-git.js";
@@ -54,19 +57,30 @@ type ImpactNode = CallGraphNodeResult & {
     causalPath: ImpactPathEdge[];
 };
 
+export type DirectSeedTestReference = {
+    seedSymbolId: string;
+    file: string;
+    symbolId: string;
+    symbolLabel?: string;
+    span: SearchSpan;
+    siteProvenance: CallGraphTestSiteProvenance;
+    callSite?: CallGraphTestReferenceResult["site"];
+    confidence: number;
+};
+
 function isProofBackedImpactEdge(edge: ImpactPathEdge): boolean {
     return edge.resolutionAuthority === "direct_binding"
         || edge.resolutionAuthority === "origin_flow";
 }
 
 /** Read-only diff -> current-file symbol seeds -> bounded transitive callers. */
-export async function detectChangeImpact(input: ChangeImpactInput, ports: ChangeImpactPorts) {
+export async function detectChangeImpact(input: ChangeImpactInput, ports: ChangeImpactPorts, signal?: AbortSignal) {
     // Navigation reads resolve `file` against the indexed root, so git runs
     // there too and `path` only narrows the diff. One coordinate system keeps
     // diff paths, outline files and publishedSourceByFile keys equal.
     const scope = path.relative(input.codebaseRoot, input.path);
     const scopePathspec = scope === "" ? "." : `:(literal)${scope.split(path.sep).join("/")}`;
-    const git = async (args: string[]) => execReadOnlyGitText(input.codebaseRoot, args);
+    const git = async (args: string[]) => execReadOnlyGitText(input.codebaseRoot, args, { signal });
     // Resolve the revision separately: revision strings never become options
     // or a pathspec. All subsequent operations use the immutable commit ID.
     const baseCommit = (await git(["rev-parse", "--verify", "--end-of-options", `${input.baseRef}^{commit}`])).trim();
@@ -98,17 +112,21 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     const candidatesByFile: Array<{ file: string; candidates: Array<CallGraphNodeResult & { codebaseRoot: string }> }> = [];
     const publishedSourceByFile = new Map<string, Buffer>();
     for (const file of changedFiles.slice(0, 50)) {
+        signal?.throwIfAborted();
         const source = renamedFrom.get(file);
         let outline = await ports.outline(file);
+        signal?.throwIfAborted();
         // An edited file's outline is stale until a sync publishes it. When the
         // base revision's bytes are the published bytes (the outline's registry
         // hash check decides), the old side of the diff is in published
         // coordinates and maps to published symbol spans.
         let publishedSource: Buffer | undefined;
         if (outline.status !== "ok" && outline.reason === "stale_symbol_ref" && !source) {
-            const baseBytes = await execReadOnlyGitBuffer(input.codebaseRoot, ["show", `${baseCommit}:./${file}`])
+            const baseBytes = await execReadOnlyGitBuffer(input.codebaseRoot, ["show", `${baseCommit}:./${file}`], { signal })
                 .then(result => result, () => undefined);
+            signal?.throwIfAborted();
             const published = baseBytes && await ports.outline(file, baseBytes);
+            signal?.throwIfAborted();
             if (published && published.status === "ok" && published.outline) {
                 outline = published;
                 publishedSource = baseBytes;
@@ -244,10 +262,13 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         providerVersion: string;
         calleeText: string;
     }>();
+    const directSeedTestReferences = new Map<string, DirectSeedTestReference>();
     const unavailableSeeds: Array<{ symbolId: string; reason: string }> = [];
     const warningCounts = new Map<string, number>();
     for (const seed of seeds) {
+        signal?.throwIfAborted();
         const graph = await ports.callers(seed.codebaseRoot, seed, publishedSourceByFile.get(seed.file));
+        signal?.throwIfAborted();
         if (graph.status !== "ok") {
             unavailableSeeds.push({ symbolId: seed.symbolId, reason: graph.reason ?? graph.status });
             continue;
@@ -288,6 +309,37 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 providerId: reference.providerId,
                 providerVersion: reference.providerVersion,
                 calleeText: reference.calleeText,
+            });
+        }
+        for (const reference of graph.testReferences ?? []) {
+            const siteProvenance: CallGraphTestSiteProvenance = reference.siteProvenance ?? "symbol_start_fallback";
+            const callSite = siteProvenance === "recorded_call_site" && reference.site
+                ? {
+                    file: reference.site.file,
+                    startLine: reference.site.startLine,
+                    ...(reference.site.endLine !== undefined ? { endLine: reference.site.endLine } : {}),
+                }
+                : undefined;
+            const key = [
+                seed.symbolId,
+                reference.symbolId,
+                reference.file,
+                siteProvenance,
+                callSite?.file ?? "",
+                callSite ? String(callSite.startLine) : "",
+            ].join("\0");
+            directSeedTestReferences.set(key, {
+                seedSymbolId: seed.symbolId,
+                file: reference.file,
+                symbolId: reference.symbolId,
+                ...(reference.symbolLabel ? { symbolLabel: reference.symbolLabel } : {}),
+                span: {
+                    startLine: reference.span.startLine,
+                    endLine: reference.span.endLine,
+                },
+                siteProvenance,
+                ...(callSite ? { callSite } : {}),
+                confidence: reference.confidence,
             });
         }
         const nodesById = new Map(graph.nodes.map((node) => [node.symbolId, node]));
@@ -423,6 +475,13 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         || a.startLine - b.startLine
         || compareContractStrings(a.seedSymbolId, b.seedSymbolId)
         || compareContractStrings(a.sourceSymbolId ?? "", b.sourceSymbolId ?? ""));
+    const directSeedTestValues = [...directSeedTestReferences.values()].sort((a, b) =>
+        compareContractStrings(a.file, b.file)
+        || a.span.startLine - b.span.startLine
+        || compareContractStrings(a.symbolId, b.symbolId)
+        || compareContractStrings(a.seedSymbolId, b.seedSymbolId)
+        || compareContractStrings(a.callSite?.file ?? "", b.callSite?.file ?? "")
+        || (a.callSite?.startLine ?? Number.POSITIVE_INFINITY) - (b.callSite?.startLine ?? Number.POSITIVE_INFINITY));
     const seedValues = seeds.map((seed) => ({
         ...seed,
         spanBasis: publishedSourceByFile.has(seed.file) ? "published" as const : "current" as const,
@@ -482,6 +541,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
 
     // Visible prefix lengths for the byte-budgeted lists; the full arrays
     // stay available for areaImpact and completeness counts above.
+    let visibleDirectSeedTestCount = 0;
     let visibleUncertainCount = uncertainValues.length;
     let visibleImpactedCount = impactedValues.length;
     let visibleSeedCount = seedValues.length;
@@ -491,11 +551,13 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     // so omitted.seeds + seeds.length always equals the total seed
     // candidates and matches the seedOmittedFiles list.
     const seedBudgetOmittedCount = seedOmittedFiles.reduce((sum, entry) => sum + entry.omittedSeedCount, 0);
-    const renderPayload = () => {
+    const renderPayload = (includeTests = false) => {
+        const omittedTests = directSeedTestValues.length - visibleDirectSeedTestCount;
         const omitted = {
             changedFiles: changedFiles.length - visibleChangedFileCount,
             impacted: impactedValues.length - visibleImpactedCount,
             uncertainCallReferences: uncertainValues.length - visibleUncertainCount,
+            ...(includeTests ? { directSeedTestReferences: omittedTests } : {}),
             seeds: seedBudgetOmittedCount + (seedValues.length - visibleSeedCount),
         };
         const finalWarnings = new Set(warnings);
@@ -510,6 +572,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         const byteBudgetTrimmed = changedFiles.length - visibleChangedFileCount > 0
             || impactedValues.length - visibleImpactedCount > 0
             || uncertainValues.length - visibleUncertainCount > 0
+            || (includeTests && omittedTests > 0)
             || seedValues.length - visibleSeedCount > 0;
         if (byteBudgetTrimmed) {
             finalTruncated = true;
@@ -542,34 +605,42 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 unavailableFileCount: unavailableFiles.length,
                 unavailableSeedCount: unavailableSeeds.length,
                 uncertainReferenceCount: uncertainValues.length,
+                ...(includeTests ? { directSeedTestReferenceCount: directSeedTestValues.length } : {}),
                 heuristicImpactCount,
             },
+            ...(includeTests ? { testReferenceCoverage: {
+                scope: "direct_seed_persisted_tests_only" as const,
+                exhaustive: false as const,
+                supportedLanguages: ["javascript", "typescript", "python", "go"] as const,
+                totalCandidateCount: directSeedTestValues.length,
+                returnedCount: visibleDirectSeedTestCount,
+                omittedCount: directSeedTestValues.length - visibleDirectSeedTestCount,
+                disclosure: "Direct seed candidate test/fixture references from persisted TESTS edges only (JS/TS/Python/Go). Transitive caller tests and dynamic test discovery are excluded; edited or deleted test files may invalidate published locations; an empty list does not prove no tests cover the change.",
+            } } : {}),
             changedFiles: changedFiles.slice(0, visibleChangedFileCount),
             seeds: visibleSeeds,
             impacted: impactedValues.slice(0, visibleImpactedCount),
             areaImpact,
             uncertainCallReferences: uncertainValues.slice(0, visibleUncertainCount),
+            ...(includeTests ? { directSeedTestReferences: directSeedTestValues.slice(0, visibleDirectSeedTestCount) } : {}),
             unavailableFiles, unavailableSeeds, warnings: [...finalWarnings].sort(),
             seedOmittedFiles, omitted,
         };
     };
     const responseFits = (candidate: unknown) =>
         Buffer.byteLength(JSON.stringify(candidate), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES;
+    const longestFittingCount = (total: number, fitsCount: (count: number) => boolean): number => {
+        let low = 0;
+        let high = total;
+        while (low < high) {
+            const mid = Math.ceil((low + high) / 2);
+            if (fitsCount(mid)) low = mid;
+            else high = mid - 1;
+        }
+        return low;
+    };
     if (!responseFits(renderPayload())) {
-        // Shrink in order, longest fitting prefix each (binary searched):
-        // uncertainCallReferences, impacted, changedFiles (only the first 50 are
-        // analysed), then seeds last, since seeds are the answer itself. Every
-        // trim is counted in omitted.
-        const longestFittingCount = (total: number, fitsCount: (count: number) => boolean): number => {
-            let low = 0;
-            let high = total;
-            while (low < high) {
-                const mid = Math.ceil((low + high) / 2);
-                if (fitsCount(mid)) low = mid;
-                else high = mid - 1;
-            }
-            return low;
-        };
+        // Preserve seeds last when trimming the primary CALLS projection.
         const fits = () => responseFits(renderPayload());
         const trimStages: Array<{ total: number; set: (count: number) => void }> = [
             { total: uncertainValues.length, set: (count) => { visibleUncertainCount = count; } },
@@ -587,12 +658,28 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         }
         // Omitted-count digit growth can overshoot the binary search by a few
         // bytes; close any remaining gap one entry at a time, seeds last.
-        const counts = () => [visibleUncertainCount, visibleImpactedCount, visibleChangedFileCount, visibleSeedCount];
+        const counts = () => [
+            visibleUncertainCount,
+            visibleImpactedCount,
+            visibleChangedFileCount,
+            visibleSeedCount,
+        ];
         while (!fits()) {
             const stageIndex = counts().findIndex((count) => count > 0);
             if (stageIndex < 0) break;
             trimStages[stageIndex].set(counts()[stageIndex] - 1);
         }
     }
-    return renderPayload();
+    // Optional TESTS metadata and rows share the space left by the frozen projection.
+    const baseline = renderPayload();
+    visibleDirectSeedTestCount = directSeedTestValues.length;
+    const complete = renderPayload(true);
+    if (responseFits(complete)) return complete;
+    visibleDirectSeedTestCount = 0;
+    if (!responseFits(renderPayload(true))) return baseline;
+    visibleDirectSeedTestCount = longestFittingCount(directSeedTestValues.length, (count) => {
+        visibleDirectSeedTestCount = count;
+        return responseFits(renderPayload(true));
+    });
+    return renderPayload(true);
 }

@@ -304,6 +304,14 @@ export class ToolResponseBuilders {
             autoIndexing?: boolean;
         };
         const isAuto = indexing?.autoIndexing === true;
+        const progressParts: string[] = [];
+        if (typeof indexing?.progressPct === "number" && Number.isFinite(indexing.progressPct)) {
+            progressParts.push(`${indexing.progressPct.toFixed(0)}% complete`);
+        }
+        if (typeof indexing?.phase === "string" && indexing.phase.trim().length > 0) {
+            progressParts.push(`phase: ${indexing.phase.trim()}`);
+        }
+        const progressDetail = progressParts.length > 0 ? ` (${progressParts.join(", ")})` : "";
         return {
             formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_ready",
@@ -317,14 +325,14 @@ export class ToolResponseBuilders {
             resultMode: searchContext.resultMode,
             limit: searchContext.limit,
             message: isAuto
-                ? `Codebase '${codebasePath}' is auto-indexing in the background. Do not sleep or poll in a loop: read entry files (for example with read_file) or search with rg/grep while indexing runs, then retry.`
-                : `Codebase '${codebasePath}' is currently indexing. Do not sleep or poll in a loop: read entry files (for example with read_file) or search with rg/grep while indexing runs in the background, then retry.`,
+                ? `Codebase '${codebasePath}' is auto-indexing in the background${progressDetail}. Do not sleep or poll in a loop (including manage_index status): read entry files (for example with read_file) or search with rg/grep while indexing runs, then retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms.`
+                : `Codebase '${codebasePath}' is currently indexing${progressDetail}. Do not sleep or poll in a loop (including manage_index status): read entry files (for example with read_file) or search with rg/grep while indexing runs in the background, then retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms.`,
             recommendedNextAction: this.host.buildManageIndexRecommendedAction(
                 "status",
                 codebasePath,
                 isAuto
-                    ? "Auto-indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then check status or retry."
-                    : "Indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then check progress before retrying search.",
+                    ? `Auto-indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms (or check manage_index status once).`
+                    : `Indexing runs in the background. Do not sleep or poll in a loop; read entry files (for example with read_file) or search with rg/grep, then retry search_codebase after ${DEFAULT_MANAGE_RETRY_AFTER_MS}ms (or check manage_index status once).`,
             ),
             hints: {
                 status: this.host.buildStatusHint(codebasePath),

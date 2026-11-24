@@ -133,6 +133,7 @@ test("runExactRegistryFastPath serves clean targets from the publication and def
     const host: SearchExactFastPathHost = {
         searchQuerySupport: support,
         measureSearchPhase: async (_phase, run) => run(),
+        isPublishedSource: () => true,
         loadRegistryManifest: async () => ({
             status: "ok",
             registry: mockRegistry,
@@ -259,6 +260,7 @@ test("runExactRegistryFastPath defers relationships with dirty peers to the over
     const host: SearchExactFastPathHost = {
         searchQuerySupport: support,
         measureSearchPhase: async (_phase, run) => run(),
+        isPublishedSource: () => true,
         loadRegistryManifest: async () => ({
             status: "ok",
             registry: mockRegistry,
@@ -368,6 +370,7 @@ test("runExactRegistryFastPath answers an ambiguous exact name with every declar
             gitignoreForceReloadEveryN: 1000,
         }),
         measureSearchPhase: async (_phase, run) => run(),
+        isPublishedSource: () => true,
         loadRegistryManifest: async () => ({ status: "ok", registry, manifestHash: "man-1" }),
         loadRegistryValidatedRelationshipNavigation: async () => ({ relationshipReady: true }),
         buildRelationshipBackedCallGraph: async () => null,

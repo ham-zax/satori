@@ -1,5 +1,6 @@
 import type { PublicationLease, SymbolRecord, SymbolRegistry } from '@satori-code/core';
 import { ToolHandlers } from '../core/handlers.js';
+import { ToolResponseBuilders } from "../core/tool-response-builders.js";
 import { NavigationHandlers } from '../core/navigation-handlers.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,28 +45,6 @@ test('call_graph rejects relative path', async () => {
 
     assert.equal(response.isError, true);
     assert.match(response.content[0]?.text || '', /absolute filesystem path|Invalid arguments for 'call_graph'/i);
-});
-
-test('call_graph rejects absolute symbolRef.file', async () => {
-    const ctx = {
-        workspacePolicy: REPO_WORKSPACE_POLICY,
-        toolHandlers: {
-            handleCallGraph: async () => {
-                throw new Error('handler must not run');
-            }
-        }
-    } as unknown as ToolContext;
-
-    const response = await callGraphTool.execute({
-        path: '/repo',
-        symbolRef: {
-            file: '/abs/runtime.ts',
-            symbolId: 'sym_runtime_run'
-        },
-    }, ctx);
-
-    assert.equal(response.isError, true);
-    assert.match(response.content[0]?.text || '', /repo-relative|Invalid arguments for 'call_graph'/i);
 });
 
 test('call_graph rejects Windows drive-relative symbolRef.file C:secret.ts', async () => {
@@ -522,4 +501,243 @@ test("call_graph cancellation stops source scanning and releases the publication
     assert.equal(released, true);
     assert.equal(published, false);
     assert.equal(sourceReads, 1);
+});
+
+test("call_graph rejects symbolRef missing both symbolId and symbolLabel", async () => {
+    const ctx = {
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error("handler must not run");
+            },
+        },
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: "/repo",
+        symbolRef: { file: "src/runtime.ts" },
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || "", /symbolId or symbolLabel|Invalid arguments for 'call_graph'/i);
+});
+
+test("call_graph resolves unique symbolLabel (bare name and formatted label) and in-root absolute symbolRef.file", async (t) => {
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "satori-call-graph-label-"));
+    t.after(() => fs.rmSync(tmpBase, { recursive: true, force: true }));
+    const realRoot = path.join(tmpBase, "real-repo");
+    const linkRoot = path.join(tmpBase, "link-repo");
+    fs.mkdirSync(path.join(realRoot, "src"), { recursive: true });
+    fs.symlinkSync(realRoot, linkRoot, "dir");
+
+    const sourceText = "export function runTarget() {\n  return 1;\n}\n";
+    const absFile = path.join(realRoot, "src", "target.ts");
+    fs.writeFileSync(absFile, sourceText);
+
+    const targetSymbol = {
+        symbolInstanceId: "syminst_run_target",
+        name: "runTarget",
+        file: "src/target.ts",
+        language: "typescript",
+        kind: "function",
+        label: "function runTarget()",
+        qualifiedName: "runTarget",
+        parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 3 },
+        symbolKey: "key_run_target",
+        fileHash: "hash_target",
+        extractorVersion: "1.0.0",
+    } as SymbolRecord;
+    const registry = {
+        manifest: {
+            builtAt: "2026-01-01T00:00:00.000Z",
+            files: [{ path: "src/target.ts" }],
+        },
+        symbolsByFile: new Map([["src/target.ts", [targetSymbol]]]),
+    } as unknown as SymbolRegistry;
+    const lease = {
+        id: "publication-1",
+        publication: { id: "publication-1", canonicalRoot: fs.realpathSync(realRoot), createdAt: "2026-01-01T00:00:00.000Z" },
+        release: () => {},
+    } as PublicationLease;
+    const canonicalRoot = fs.realpathSync(realRoot);
+    const policy = buildWorkspacePolicy([canonicalRoot, linkRoot]);
+    const traversedIds: string[] = [];
+
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: canonicalRoot }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        isCallGraphLanguageSupported: () => true,
+        loadPreparedNavigationSymbolsByFile: async () => ({
+            status: "ok",
+            registry,
+            symbols: [targetSymbol],
+            manifestHash: "manifest-hash-1",
+        }),
+        loadPreparedNavigationCompatibility: async () => ({
+            relationships: { status: "ok", manifestHash: "rel-hash-1", manifest: { builtAt: "2026-01-01T00:00:00.000Z" } },
+        }),
+        getRegistryFileFreshness: () => ({ status: "fresh" }),
+        getPublicationNavigationAddress: () => ({ publicationId: lease.id, navigationRoot: canonicalRoot }),
+        buildRelationshipBackedCallGraph: async (input: { resolvedSymbol: SymbolRecord }) => {
+            traversedIds.push(input.resolvedSymbol.symbolInstanceId);
+            return {
+                supported: true,
+                nodes: [{
+                    symbolId: input.resolvedSymbol.symbolInstanceId,
+                    symbolLabel: input.resolvedSymbol.label,
+                    file: input.resolvedSymbol.file,
+                    language: input.resolvedSymbol.language,
+                    span: input.resolvedSymbol.span,
+                }],
+                edges: [],
+                notes: [],
+                notesTruncated: false,
+                totalNoteCount: 0,
+                returnedNoteCount: 0,
+            };
+        },
+        toolResponseBuilders: { buildInvalidCallGraphRequestPayload: ToolResponseBuilders.prototype.buildInvalidCallGraphRequestPayload },
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+
+    const ctx = {
+        workspacePolicy: policy,
+        toolHandlers: {
+            navigationHandlers,
+            handleCallGraph: ToolHandlers.prototype.handleCallGraph,
+        } as unknown as ToolHandlers,
+    } as unknown as ToolContext;
+
+    // 1. Bare symbol name with repo-relative file
+    const byName = await callGraphTool.execute({
+        path: linkRoot,
+        symbolRef: { file: "src/target.ts", symbolLabel: "runTarget" },
+    }, ctx);
+    assert.equal(byName.isError, undefined);
+    const byNamePayload = JSON.parse(byName.content[0]!.text);
+    assert.equal(byNamePayload.status, "ok");
+    assert.equal(byNamePayload.symbolRef.symbolId, "syminst_run_target");
+    assert.equal(byNamePayload.symbolRef.file, "src/target.ts");
+
+    // 2. Formatted symbolLabel with symlinked-workspace absolute symbolRef.file
+    const byFormatted = await callGraphTool.execute({
+        path: linkRoot,
+        symbolRef: { file: path.join(linkRoot, "src", "target.ts"), symbolLabel: "function runTarget()" },
+    }, ctx);
+    assert.equal(byFormatted.isError, undefined);
+    const byFormattedPayload = JSON.parse(byFormatted.content[0]!.text);
+    assert.equal(byFormattedPayload.status, "ok");
+    assert.equal(byFormattedPayload.symbolRef.symbolId, "syminst_run_target");
+    assert.equal(byFormattedPayload.symbolRef.file, "src/target.ts");
+    assert.deepEqual(traversedIds, ["syminst_run_target", "syminst_run_target"]);
+
+    for (const [requestRoot, fileRoot] of [[linkRoot, canonicalRoot], [canonicalRoot, linkRoot]]) {
+        const mixed = await callGraphTool.execute({
+            path: requestRoot,
+            symbolRef: { file: path.join(fileRoot, "src", "target.ts"), symbolLabel: "function runTarget()" },
+        }, ctx);
+        assert.equal(mixed.isError, undefined, mixed.content[0]!.text);
+        assert.deepEqual(JSON.parse(mixed.content[0]!.text), byFormattedPayload);
+    }
+    const outside = await callGraphTool.execute({
+        path: linkRoot,
+        symbolRef: { file: path.join(tmpBase, "outside.ts"), symbolLabel: "runTarget" },
+    }, ctx);
+    assert.equal(outside.isError, true);
+    const outsidePayload = JSON.parse(outside.content[0]!.text);
+    assert.equal(outsidePayload.reason, "invalid_symbol_ref");
+    assert.match(outsidePayload.message, /must resolve inside the indexed codebase root/);
+    assert.deepEqual(traversedIds, Array(4).fill("syminst_run_target"));
+});
+
+test("call_graph fails closed with ambiguous_symbol and capped deterministic candidates when symbolLabel matches multiple symbols", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-call-graph-ambig-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, "overloads.ts"), "export function parse(a: string): string;\nexport function parse(a: number): number;\n");
+
+    const symbols: SymbolRecord[] = Array.from({ length: 25 }, (_, index) => ({
+        symbolInstanceId: `syminst_parse_${String(25 - index).padStart(2, "0")}`,
+        name: "parse",
+        file: "overloads.ts",
+        language: "typescript",
+        kind: "function",
+        label: `function parse(v${index})`,
+        qualifiedName: "parse",
+        parentQualifiedNamePath: [],
+        span: { startLine: index + 1, endLine: index + 1 },
+        symbolKey: `key_parse_${index}`,
+        fileHash: "hash_overloads",
+        extractorVersion: "1.0.0",
+    } as SymbolRecord));
+
+    const registry = {
+        manifest: { builtAt: "2026-01-01T00:00:00.000Z", files: [{ path: "overloads.ts" }] },
+        symbolsByFile: new Map([["overloads.ts", symbols]]),
+    } as unknown as SymbolRegistry;
+    const lease = {
+        id: "publication-1",
+        publication: { id: "publication-1", canonicalRoot: fs.realpathSync(root) },
+        release: () => {},
+    } as PublicationLease;
+    const canonicalRoot = fs.realpathSync(root);
+    let traversalCalled = false;
+
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: canonicalRoot }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        loadPreparedNavigationSymbolsByFile: async () => ({
+            status: "ok",
+            registry,
+            symbols,
+            manifestHash: "manifest-hash-1",
+        }),
+        buildRelationshipBackedCallGraph: async () => {
+            traversalCalled = true;
+            throw new Error("traversal must not run on ambiguous_symbol");
+        },
+        normalizeRelativeFilePath: (file: string) => file,
+        stringifyToolJson: JSON.stringify,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+
+    const ctx = {
+        workspacePolicy: buildWorkspacePolicy([canonicalRoot]),
+        toolHandlers: {
+            navigationHandlers,
+            handleCallGraph: ToolHandlers.prototype.handleCallGraph,
+        } as unknown as ToolHandlers,
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: canonicalRoot,
+        symbolRef: { file: "overloads.ts", symbolLabel: "parse" },
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    const payload = JSON.parse(response.content[0]!.text);
+    assert.equal(payload.status, "not_found");
+    assert.equal(payload.reason, "ambiguous_symbol");
+    assert.equal(payload.supported, false);
+    assert.deepEqual(payload.nodes, []);
+    assert.deepEqual(payload.edges, []);
+    assert.equal(traversalCalled, false);
+    assert.equal(payload.totalCandidateCount, 25);
+    assert.equal(payload.candidates.length, 20);
+    assert.deepEqual(payload.candidates[0], {
+        symbolId: "syminst_parse_25",
+        symbolLabel: "function parse(v0)",
+        kind: "function",
+        file: "overloads.ts",
+        span: { startLine: 1, endLine: 1 },
+    });
 });

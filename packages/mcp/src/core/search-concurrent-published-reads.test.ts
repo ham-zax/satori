@@ -274,7 +274,7 @@ test('SearchRequestCoordinator preserves pinned reader A on Gen N across Gen N+1
                 getTrackedRootReadiness: () => ({} as any),
                 isPartialIndexNavigationUnavailable: () => false,
                 getIndexingOperationForReadiness: () => undefined,
-                probeLocalSearchCollectionState: async () => ({ state: 'ready' }),
+                probeLocalSearchCollectionState: async (_root, collectionName) => ({ state: 'ready', collectionName }),
             },
             hints: {
                 stringifyToolJson: (p) => JSON.stringify(p),
@@ -296,6 +296,7 @@ test('SearchRequestCoordinator preserves pinned reader A on Gen N across Gen N+1
                 sanitizeIndexedRelativeFilePath: (f) => f,
             },
             preparedRead: {
+                isPublishedSource: () => true,
                 loadPreparedNavigationManifest: async (): Promise<any> => ({ status: 'unavailable', reason: 'unsupported', rootPath: tempRoot }),
                 getPreparedAuthorityObservation: () => currentAuthorityObservation,
                 getPublicationNavigationAddress: (publication) => ({
@@ -497,7 +498,7 @@ test('coordinator characterization: five parallel stale reads stay pinned across
                 getTrackedRootReadiness: () => ({} as any),
                 isPartialIndexNavigationUnavailable: () => false,
                 getIndexingOperationForReadiness: () => undefined,
-                probeLocalSearchCollectionState: async () => ({ state: 'ready' }),
+                probeLocalSearchCollectionState: async (_root, collectionName) => ({ state: 'ready', collectionName }),
             },
             hints: {
                 stringifyToolJson: (p) => JSON.stringify(p),
@@ -519,6 +520,7 @@ test('coordinator characterization: five parallel stale reads stay pinned across
                 sanitizeIndexedRelativeFilePath: (f) => f,
             },
             preparedRead: {
+                isPublishedSource: () => true,
                 loadPreparedNavigationManifest: async (): Promise<any> => ({ status: 'unavailable', reason: 'unsupported', rootPath: tempRoot }),
                 getPreparedAuthorityObservation: () => currentAuthorityObservation,
                 getPublicationNavigationAddress: (publication) => ({

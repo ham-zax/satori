@@ -242,7 +242,7 @@ export async function runSearchFrontDoor(
         readable: Extract<TrackedRootReadinessState, { state: "ready" }>,
         operation: TrackedRootIndexingOperation | undefined,
     ): SearchFrontDoorReady | null => {
-        if (operation?.action !== "sync") return null;
+        if (operation?.action !== "sync" && operation?.action !== "reindex") return null;
         const freshnessDecision: FreshnessDecision = {
             mode: "served_previous_generation",
             checkedAt: new Date().toISOString(),

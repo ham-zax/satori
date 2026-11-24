@@ -355,8 +355,11 @@ export interface OpenedRootBoundRegularFile {
 export async function openRegularFileWithIdentityInsideRoot(
     filePath: string,
     rootDir: string,
+    options: { rejectFinalSymlink?: boolean } = {},
 ): Promise<OpenedRootBoundRegularFile> {
-    const opened = await openInsideRoot(filePath, rootDir, 'file');
+    const opened = options.rejectFinalSymlink
+        ? await openFileInsideRootNoFollow(filePath, rootDir)
+        : await openInsideRoot(filePath, rootDir, 'file');
     try {
         const identity = await observeRootBoundFileIdentity(
             opened.handle,
@@ -400,6 +403,10 @@ export async function openRegularFileInsideRootNoFollow(
     filePath: string,
     rootDir: string,
 ): Promise<fsp.FileHandle> {
+    return (await openFileInsideRootNoFollow(filePath, rootDir)).handle;
+}
+
+async function openFileInsideRootNoFollow(filePath: string, rootDir: string): Promise<OpenedInsideRoot> {
     const normalizedRoot = trimTrailingSeparators(path.normalize(rootDir));
     const normalizedPath = path.normalize(path.resolve(filePath));
     if (!isRealPathInsideRoot(normalizedPath, normalizedRoot)) {
@@ -426,8 +433,8 @@ export async function openRegularFileInsideRootNoFollow(
         if (!postStat.isFile() || !sameFileIdentity(preStat, postStat)) {
             throw new Error(`Opened descriptor drifted from verified path: ${filePath}`);
         }
-        await descriptorPathInsideRoot(handle, normalizedRoot);
-        return handle;
+        const realPath = await descriptorPathInsideRoot(handle, normalizedRoot);
+        return { handle, realPath };
     } catch (error) {
         await handle.close().catch(() => undefined);
         throw error;

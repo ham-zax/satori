@@ -143,7 +143,9 @@ export async function readAuthorizedPublishedSource(input: {
             );
             readSucceeded = true;
 
-            await verifyStableFileObservation(handle, absolutePath, codebaseRoot, observedStat);
+            await verifyStableFileObservation(handle, absolutePath, codebaseRoot, observedStat, {
+                rejectFinalSymlink: true,
+            });
 
             if (measurementObservation) {
                 finishSourceMeasurementObservation({

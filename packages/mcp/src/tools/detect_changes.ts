@@ -12,12 +12,15 @@ const MAX_OUTLINE_PAGES = 40;
  */
 export async function readCompleteFileOutline(
     fetchPage: (startLine: number | undefined) => Promise<FileOutlineResponseEnvelope>,
+    signal?: AbortSignal,
 ): Promise<FileOutlineResponseEnvelope> {
     let startLine: number | undefined;
     let merged: FileOutlineResponseEnvelope | undefined;
     const seen = new Set<string>();
     for (let page = 0; page < MAX_OUTLINE_PAGES; page += 1) {
+        signal?.throwIfAborted();
         const envelope = await fetchPage(startLine);
+        signal?.throwIfAborted();
         if (envelope.status !== "ok" || !envelope.outline) return merged ?? envelope;
         // Pages repeat enclosing symbols that overlap their window.
         const symbols = envelope.outline.symbols.filter(symbol => !seen.has(symbol.symbolId));
@@ -42,12 +45,13 @@ const inputSchema = z.object({
 
 export const detectChangesTool: McpTool = {
     name: "detect_changes",
-    description: () => "Compare a Git revision with the tracked working tree, map changed ranges to hash-matched indexed symbols, using published spans when the base bytes match the publication, and traverse bounded inbound CALLS. Each seed declares spanBasis=current or published. Mixed bases add IMPACT_MIXED_SYMBOL_SPANS. Seeds are labeled separately; graph-derived callers are labeled direct or transitive and retain causal CALLS paths back to the changed seed. Each impacted node declares evidenceClass=proof_backed or heuristic, and every causal-path edge preserves strategy, confidence, and resolution authority so heuristic CALLS are never presented as semantic proof. areaImpact breaks those evidence classes out explicitly. Persisted ambiguous/unresolved semantic references remain separate in uncertainCallReferences. completeness discloses depth, limit, unavailable-navigation, heuristic-path, and uncertainty bounds; this is advisory and never an exhaustive blast-radius proof.",
+    description: () => "Diff a Git revision against the tracked working tree, map changed lines to indexed symbols (reporting spanBasis=current|published), and traverse bounded inbound CALLS. Separates seeds from direct/transitive callers with causal paths and evidenceClass=proof_backed|heuristic, and reports uncertainCallReferences and completeness bounds. When space permits, includes candidate tests in directSeedTestReferences with testReferenceCoverage. Advisory, not exhaustive blast-radius proof.",
     inputSchemaZod: () => inputSchema,
     execute: async (args, ctx) => {
         const parsed = inputSchema.safeParse(args);
         if (!parsed.success) return { content: [{ type: "text", text: formatZodError("detect_changes", parsed.error) }], isError: true };
         try {
+            ctx.requestSignal?.throwIfAborted();
             const authorized = ctx.workspacePolicy.authorizePath(parsed.data.path);
             const resolved = await resolveVectorBackedToolContext(ctx, { tool: "detect_changes", path: authorized.canonicalPath });
             if (!resolved.ok) return resolved.response;
@@ -58,16 +62,29 @@ export const detectChangesTool: McpTool = {
             const result = await detectChangeImpact(input, {
                 outline: (file, publishedSource) => readCompleteFileOutline(async startLine => {
                     const response = await handlers.handleFileOutline({ path: input.path, file, limitSymbols: 500,
-                        ...(startLine === undefined ? {} : { start_line: startLine }) }, ctx.workspacePolicy, { requireCurrentSource: true, ...(publishedSource ? { publishedSource } : {}) });
+                        ...(startLine === undefined ? {} : { start_line: startLine }) }, ctx.workspacePolicy, {
+                        requireCurrentSource: true,
+                        signal: ctx.requestSignal,
+                        ...(publishedSource ? { publishedSource } : {}),
+                    });
                     return JSON.parse(response.content[0].text) as FileOutlineResponseEnvelope;
-                }),
+                }, ctx.requestSignal),
                 callers: async (root, symbol, publishedSource) => {
-                    const response = await handlers.handleCallGraph({ path: root,
+                    const callGraphArgs = {
+                        path: root,
                         symbolRef: { file: symbol.file, symbolId: symbol.symbolId },
-                        direction: "callers", depth: input.depth, limit: input.limit }, ctx.workspacePolicy, undefined, publishedSource ? { publishedSource } : undefined);
+                        direction: "callers",
+                        depth: input.depth,
+                        limit: input.limit,
+                    };
+                    const sourceOptions = publishedSource ? { publishedSource } : undefined;
+                    if (typeof handlers.resolveUnprojectedCallGraph === "function") {
+                        return handlers.resolveUnprojectedCallGraph(callGraphArgs, ctx.workspacePolicy, ctx.requestSignal, sourceOptions);
+                    }
+                    const response = await handlers.handleCallGraph(callGraphArgs, ctx.workspacePolicy, ctx.requestSignal, sourceOptions);
                     return JSON.parse(response.content[0].text) as CallGraphResponseEnvelope;
                 },
-            });
+            }, ctx.requestSignal);
             return { content: [{ type: "text", text: JSON.stringify(result) }] };
         } catch (error) {
             return { content: [{ type: "text", text: JSON.stringify({ status: "error", path: parsed.data.path,

@@ -154,6 +154,7 @@ export type ComposeSymbolContextInput = ExactSymbolTarget & {
     budgets: SymbolContextBudgets;
     query?: string;
     continuation?: SymbolContextContinuationRequest;
+    measureResponseBytes?: (context: ComposedSymbolContext) => number;
 };
 
 export type SourceSpanResolution =
@@ -619,21 +620,20 @@ function projectRelationshipPage(input: {
     };
 }
 
-function sourceContinuation(
+function sourceContinuations(
     source: SelectedSourceProjection,
     fingerprint: SourceContinuationFingerprint | undefined,
-): SymbolContextContinuation | undefined {
-    const firstOmission = source.omittedRanges[0];
-    if (!source.truncated || !firstOmission || !fingerprint || source.status === "unavailable") {
-        return undefined;
+): SymbolContextContinuation[] {
+    if (!source.truncated || !fingerprint || source.status === "unavailable") {
+        return [];
     }
-    return {
+    return source.omittedRanges.map((range) => ({
         kind: "source_range",
         domains: fingerprint.domains,
         fingerprint: fingerprint.fingerprint,
-        startLine: firstOmission.startLine,
-        endLine: firstOmission.endLine,
-    };
+        startLine: range.startLine,
+        endLine: range.endLine,
+    }));
 }
 
 function buildBaseContext(input: {
@@ -645,9 +645,6 @@ function buildBaseContext(input: {
     navigationAuthority: NavigationEvidenceAuthority;
     relationshipAuthority: RelationshipEvidenceAuthority | "not_requested";
 }): ComposedSymbolContext {
-    const sourceHandle = "selectionPolicyVersion" in input.source.source
-        ? sourceContinuation(input.source.source, input.source.continuationFingerprint)
-        : undefined;
     return {
         status: "ok",
         symbol: input.symbol,
@@ -673,7 +670,9 @@ function buildBaseContext(input: {
             },
             relationships: input.relationshipAuthority,
         },
-        continuations: sourceHandle ? [sourceHandle] : [],
+        continuations: "selectionPolicyVersion" in input.source.source
+            ? sourceContinuations(input.source.source, input.source.continuationFingerprint)
+            : [],
         limitations: [],
     };
 }
@@ -793,6 +792,13 @@ async function composeSource(input: {
         freshness: SourceFreshness;
         spanResolution: SourceSpanResolution;
     }): number;
+    measureCandidateContextBytes?: (input: {
+        symbol: SymbolRecord;
+        freshness: SourceFreshness;
+        spanResolution: SourceSpanResolution;
+        source: SelectedSourceProjection;
+        continuationFingerprint: SourceContinuationFingerprint;
+    }) => number;
 }): Promise<SourceComposition | ComposeSymbolContextResult> {
     if (!input.request.include.source) {
         return {
@@ -919,8 +925,7 @@ async function composeSource(input: {
             ...(input.request.query ? { query: input.request.query } : {}),
         });
         const continuationBytesForSource = (source: SelectedSourceProjection): number => {
-            const continuation = sourceContinuation(source, continuationFingerprint);
-            return continuation ? serializedBytes([continuation]) - serializedBytes([]) : 0;
+            return serializedBytes(sourceContinuations(source, continuationFingerprint)) - serializedBytes([]);
         };
         const selectMinimumRepresentableSource = (
             firstFailure?: Extract<ReturnType<typeof selectBoundedSource>, {
@@ -944,20 +949,34 @@ async function composeSource(input: {
         ): ComposeSymbolContextResult => {
             // The diagnostic is a retryable envelope size, not a lower-bound estimate.
             const minimum = selectMinimumRepresentableSource(firstFailure);
+            const minimumRequiredResponseBytes = input.measureCandidateContextBytes
+                ? input.measureCandidateContextBytes({
+                    symbol: resolvedSymbol,
+                    freshness: "current_at_final_observation",
+                    spanResolution: resolution.spanResolution,
+                    source: minimum.source,
+                    continuationFingerprint,
+                })
+                : reservedResponseBytes
+                    + minimum.serializedSourceBytes
+                    + continuationBytesForSource(minimum.source);
             return {
                 status: "resource_limit",
                 symbolId: resolvedSymbol.symbolInstanceId,
-                minimumRequiredResponseBytes: reservedResponseBytes
-                    + minimum.serializedSourceBytes
-                    + continuationBytesForSource(minimum.source),
+                minimumRequiredResponseBytes,
                 hardResponseLimitBytes: input.request.budgets.maxSerializedResponseBytes,
             };
         };
 
-        const maximumWithoutContinuation = Math.min(
-            input.request.budgets.source.maxSerializedSourceBytes,
-            input.request.budgets.maxSerializedResponseBytes - reservedResponseBytes,
-        );
+        const maximumWithoutContinuation = input.measureCandidateContextBytes
+            ? Math.min(
+                input.request.budgets.source.maxSerializedSourceBytes,
+                input.request.budgets.maxSerializedResponseBytes,
+            )
+            : Math.min(
+                input.request.budgets.source.maxSerializedSourceBytes,
+                input.request.budgets.maxSerializedResponseBytes - reservedResponseBytes,
+            );
         let selection: Extract<ReturnType<typeof selectBoundedSource>, { status: "selected" }>;
         try {
             if (maximumWithoutContinuation < 1) return minimumResourceLimit();
@@ -980,7 +999,56 @@ async function composeSource(input: {
                         candidate = selectWithBudget(selectionBudget);
                     }
                 }
-                if (candidate.status !== "selected") return minimumResourceLimit(candidate);
+                if (candidate.status !== "selected") {
+                    if (input.measureCandidateContextBytes) {
+                        const minimum = selectMinimumRepresentableSource(candidate);
+                        const minimumBytes = input.measureCandidateContextBytes({
+                            symbol: resolvedSymbol,
+                            freshness: "current_at_final_observation",
+                            spanResolution: resolution.spanResolution,
+                            source: minimum.source,
+                            continuationFingerprint,
+                        });
+                        if (minimumBytes <= input.request.budgets.maxSerializedResponseBytes) {
+                            fittingSelection = minimum;
+                            break;
+                        }
+                    }
+                    return minimumResourceLimit(candidate);
+                }
+
+                if (input.measureCandidateContextBytes) {
+                    const candidateBytes = input.measureCandidateContextBytes({
+                        symbol: resolvedSymbol,
+                        freshness: "current_at_final_observation",
+                        spanResolution: resolution.spanResolution,
+                        source: candidate.source,
+                        continuationFingerprint,
+                    });
+                    if (candidateBytes <= input.request.budgets.maxSerializedResponseBytes) {
+                        if (
+                            !fittingSelection
+                            || candidate.source.returnedBytes > fittingSelection.source.returnedBytes
+                            || (
+                                candidate.source.returnedBytes === fittingSelection.source.returnedBytes
+                                && candidate.serializedSourceBytes > fittingSelection.serializedSourceBytes
+                            )
+                        ) {
+                            fittingSelection = candidate;
+                        }
+                        break;
+                    }
+                    const excess = candidateBytes - input.request.budgets.maxSerializedResponseBytes;
+                    // Smaller excerpts can also remove expensive rendered continuation handles.
+                    // Ask the selector for its minimum even if this candidate's overhead consumes its budget.
+                    const nextBudget = Math.max(1, Math.min(
+                        selectionBudget - 1,
+                        candidate.serializedSourceBytes - excess,
+                    ));
+                    if (nextBudget === selectionBudget) break;
+                    selectionBudget = nextBudget;
+                    continue;
+                }
 
                 const continuationBytes = continuationBytesForSource(candidate.source);
                 const candidateBytes = reservedResponseBytes
@@ -1126,6 +1194,7 @@ export async function composeSymbolContext(
         returnedCount: 0,
         pageSize: input.budgets.maxEdgesPerDirection,
     });
+    const measureContextBytes = input.measureResponseBytes ?? serializedBytes;
     const reservedResponseBytesForSource = (resolvedSource: {
         symbol: SymbolRecord;
         freshness: SourceFreshness;
@@ -1141,6 +1210,17 @@ export async function composeSymbolContext(
             freshness: resolvedSource.freshness,
             spanResolution: resolvedSource.spanResolution,
         };
+        if (input.measureResponseBytes) {
+            return input.measureResponseBytes(buildBaseContext({
+                symbol: resolvedIdentity,
+                siblingsAvailable: allSiblings.length,
+                source: budgetedSource,
+                callers: emptyCallers,
+                callees: emptyCallees,
+                navigationAuthority: snapshot.navigationAuthority,
+                relationshipAuthority,
+            }));
+        }
         const sourceBudgetSkeleton: ComposedSymbolContext = {
             ...buildBaseContext({
                 symbol: resolvedIdentity,
@@ -1156,6 +1236,36 @@ export async function composeSymbolContext(
         };
         return serializedBytes(sourceBudgetSkeleton) - serializedBytes(null);
     };
+    const measureCandidateContextBytes = input.measureResponseBytes
+        ? (candidateInput: {
+            symbol: SymbolRecord;
+            freshness: SourceFreshness;
+            spanResolution: SourceSpanResolution;
+            source: SelectedSourceProjection;
+            continuationFingerprint: SourceContinuationFingerprint;
+        }): number => {
+            const resolvedIdentity = projectCanonicalSymbolIdentity({
+                symbol: candidateInput.symbol,
+                registry: registryView,
+            });
+            return input.measureResponseBytes!(buildBaseContext({
+                symbol: resolvedIdentity,
+                siblingsAvailable: allSiblings.length,
+                source: {
+                    source: candidateInput.source,
+                    freshness: candidateInput.freshness,
+                    spanResolution: candidateInput.spanResolution,
+                    continuationFingerprint: candidateInput.continuationFingerprint,
+                    resolvedSymbol: candidateInput.symbol,
+                    snapshotMatched: false,
+                },
+                callers: emptyCallers,
+                callees: emptyCallees,
+                navigationAuthority: snapshot.navigationAuthority,
+                relationshipAuthority,
+            }));
+        }
+        : undefined;
     const sourceResult = await composeSource({
         request: input,
         snapshot,
@@ -1165,6 +1275,7 @@ export async function composeSymbolContext(
             || validateCurrentSourceSymbolSpansFromEvidence,
         sourceContextEvidence: dependencies.sourceContextEvidence || sourceContextEvidenceOwner,
         reservedResponseBytesForSource,
+        ...(measureCandidateContextBytes ? { measureCandidateContextBytes } : {}),
     });
     if ("status" in sourceResult && (
         sourceResult.status === "stale"
@@ -1211,11 +1322,12 @@ export async function composeSymbolContext(
         navigationAuthority: snapshot.navigationAuthority,
         relationshipAuthority,
     });
-    if (serializedBytes(context) > input.budgets.maxSerializedResponseBytes) {
+    const baseContextBytes = measureContextBytes(context);
+    if (baseContextBytes > input.budgets.maxSerializedResponseBytes) {
         return {
             status: "resource_limit",
             symbolId: resolvedIdentity.symbolId,
-            minimumRequiredResponseBytes: serializedBytes(context),
+            minimumRequiredResponseBytes: baseContextBytes,
             hardResponseLimitBytes: input.budgets.maxSerializedResponseBytes,
         };
     }
@@ -1237,14 +1349,28 @@ export async function composeSymbolContext(
                 reason: "continuation_identity_changed",
             };
         }
-        let page: ReturnType<typeof projectRelationshipPage>;
-        try {
-            page = projectRelationshipPage({
+        const pageContext = (count: number) => withRelationshipPage({
+            context,
+            relationship: composition.relationship,
+            page: projectRelationshipPage({
                 composition,
-                returnedCount: relationshipContinuation.pageSize,
+                returnedCount: count,
                 pageSize: relationshipContinuation.pageSize,
                 cursor: relationshipContinuation.cursor,
-            });
+            }),
+        });
+        let fittedPage: ComposedSymbolContext | undefined;
+        let minimumRequiredResponseBytes = Infinity;
+        try {
+            for (let count = relationshipContinuation.pageSize; count >= 1; count -= 1) {
+                const candidate = pageContext(count);
+                const bytes = measureContextBytes(candidate);
+                if (bytes <= input.budgets.maxSerializedResponseBytes) {
+                    fittedPage = candidate;
+                    break;
+                }
+                minimumRequiredResponseBytes = Math.min(minimumRequiredResponseBytes, bytes);
+            }
         } catch (error) {
             if (error instanceof InvalidRelationshipContinuationError) {
                 return {
@@ -1254,16 +1380,11 @@ export async function composeSymbolContext(
             }
             throw error;
         }
-        context = withRelationshipPage({
-            context,
-            relationship: composition.relationship,
-            page,
-        });
-        if (serializedBytes(context) > input.budgets.maxSerializedResponseBytes) {
+        if (!fittedPage) {
             return {
                 status: "resource_limit",
                 symbolId: resolvedIdentity.symbolId,
-                minimumRequiredResponseBytes: serializedBytes(context),
+                minimumRequiredResponseBytes,
                 hardResponseLimitBytes: input.budgets.maxSerializedResponseBytes,
             };
         }
@@ -1273,15 +1394,15 @@ export async function composeSymbolContext(
         return {
             status: "ok",
             context: deepFreeze({
-                ...context,
-                continuations: [...context.continuations],
+                ...fittedPage,
+                continuations: [...fittedPage.continuations],
             }),
         };
     }
 
     for (const sibling of siblings) {
         const candidate = withSibling(context, sibling);
-        if (serializedBytes(candidate) > input.budgets.maxSerializedResponseBytes) break;
+        if (measureContextBytes(candidate) > input.budgets.maxSerializedResponseBytes) break;
         context = candidate;
     }
 
@@ -1301,7 +1422,7 @@ export async function composeSymbolContext(
                 relationship: composition.relationship,
                 page,
             });
-            if (serializedBytes(candidate) > input.budgets.maxSerializedResponseBytes) break;
+            if (measureContextBytes(candidate) > input.budgets.maxSerializedResponseBytes) break;
             context = candidate;
         }
     }

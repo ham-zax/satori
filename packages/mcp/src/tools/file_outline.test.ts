@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { PublicationLease, SymbolRecord, SymbolRegistry } from '@satori-code/core';
+import { ToolHandlers } from '../core/handlers.js';
+import { ToolResponseBuilders } from '../core/tool-response-builders.js';
+import { NavigationHandlers } from '../core/navigation-handlers.js';
 import { fileOutlineTool } from './file_outline.js';
 import { ToolContext } from './types.js';
 import {
@@ -59,16 +64,6 @@ test('file_outline rejects relative codebase path', async () => {
 
     assert.equal(response.isError, true);
     assert.match(response.content[0]?.text || '', /absolute filesystem path|Invalid arguments for 'file_outline'/i);
-});
-
-test('file_outline rejects absolute repo-relative file field', async () => {
-    const response = await fileOutlineTool.execute({
-        path: '/repo',
-        file: '/etc/passwd',
-    }, buildContext());
-
-    assert.equal(response.isError, true);
-    assert.match(response.content[0]?.text || '', /repo-relative|Invalid arguments for 'file_outline'/i);
 });
 
 test('file_outline rejects file path escape segments', async () => {
@@ -455,4 +450,172 @@ test('file_outline substitutes the authorized canonical path before handler disp
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test('file_outline accepts in-root absolute paths (including under symlinked workspace roots), enforces subdirectory scope, and still rejects final-component symlinks', async (t) => {
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'file-outline-boundary-abs-'));
+    t.after(() => fs.rmSync(tmpBase, { recursive: true, force: true }));
+
+    const realRoot = path.join(tmpBase, 'real-repo');
+    const linkRoot = path.join(tmpBase, 'link-repo');
+    const outsideFile = path.join(tmpBase, 'outside.ts');
+    fs.mkdirSync(path.join(realRoot, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(realRoot, 'other'), { recursive: true });
+    fs.symlinkSync(realRoot, linkRoot, 'dir');
+    fs.writeFileSync(outsideFile, 'export const secret = 1;\n');
+
+    const sourceA = 'export function alpha() {\n  return 42;\n}\n';
+    const sourceOther = 'export function beta() {\n  return 7;\n}\n';
+    const fileA = path.join(realRoot, 'src', 'a.ts');
+    const fileOther = path.join(realRoot, 'other', 'b.ts');
+    fs.writeFileSync(fileA, sourceA);
+    fs.writeFileSync(fileOther, sourceOther);
+
+    // Final-component symlinks inside the repo: one pointing inside, one pointing outside
+    const finalSymlinkInside = path.join(realRoot, 'src', 'link-inside.ts');
+    const finalSymlinkOutside = path.join(realRoot, 'src', 'link-outside.ts');
+    fs.symlinkSync(fileA, finalSymlinkInside);
+    fs.symlinkSync(outsideFile, finalSymlinkOutside);
+
+    const hashA = crypto.createHash('sha256').update(sourceA).digest('hex');
+    const hashOther = crypto.createHash('sha256').update(sourceOther).digest('hex');
+    const symbolA = {
+        symbolInstanceId: 'syminst_alpha',
+        name: 'alpha',
+        file: 'src/a.ts',
+        language: 'typescript',
+        kind: 'function',
+        label: 'function alpha()',
+        qualifiedName: 'alpha',
+        parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 3 },
+        symbolKey: 'key_alpha',
+        fileHash: hashA,
+        extractorVersion: '1.0.0',
+    } as SymbolRecord;
+
+    const canonicalRoot = fs.realpathSync(realRoot);
+    const registry = {
+        manifest: {
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: [
+                { path: 'src/a.ts', hash: hashA },
+                { path: 'other/b.ts', hash: hashOther },
+                // Even if manifest listed the symlink name, FINAL_SYMLINK_REJECTED must still block it
+                { path: 'src/link-inside.ts', hash: hashA },
+                { path: 'src/link-outside.ts', hash: hashA },
+            ],
+        },
+        symbolsByFile: new Map([
+            ['src/a.ts', [symbolA]],
+            ['src/link-inside.ts', [symbolA]],
+            ['src/link-outside.ts', [symbolA]],
+        ]),
+    } as unknown as SymbolRegistry;
+    const lease = {
+        id: 'publication-1',
+        publication: { id: 'publication-1', canonicalRoot },
+        release: () => {},
+    } as PublicationLease;
+    const policy = buildWorkspacePolicy([canonicalRoot, linkRoot]);
+
+    const navigationHandlers = new NavigationHandlers({
+        toolResponseBuilders: { buildInvalidFileOutlineRequestPayload: ToolResponseBuilders.prototype.buildInvalidFileOutlineRequestPayload },
+        prepareNavigationRead: async () => ({ state: 'ready', root: { path: canonicalRoot }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => 'valid',
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        loadPreparedNavigationSymbolsByFile: async (_state: unknown, relFile: string) => ({
+            status: 'ok',
+            registry,
+            symbols: registry.symbolsByFile.get(relFile) ?? [],
+            manifestHash: 'manifest-hash-1',
+        }),
+        getRegistryFileFreshness: () => ({ status: 'fresh' }),
+        loadRegistryValidatedRelationshipNavigation: async () => ({ relationshipReady: false }),
+        buildRegistrySymbolCallGraphHint: () => ({ supported: false, reason: 'missing_relationship_navigation' }),
+        buildOutlineSpanWarningCodes: () => [],
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+
+    const ctx = {
+        workspacePolicy: policy,
+        toolHandlers: {
+            navigationHandlers,
+            handleFileOutline: ToolHandlers.prototype.handleFileOutline,
+        } as unknown as ToolHandlers,
+    } as unknown as ToolContext;
+
+    // 1. Repo-relative baseline vs symlinked-workspace absolute path produce identical output
+    const relResponse = await fileOutlineTool.execute({
+        path: linkRoot,
+        file: 'src/a.ts',
+    }, ctx);
+    assert.equal(relResponse.isError, undefined);
+    const relPayload = JSON.parse(relResponse.content[0]!.text);
+
+    const absSymlinkRootResponse = await fileOutlineTool.execute({
+        path: linkRoot,
+        file: path.join(linkRoot, 'src', 'a.ts'),
+    }, ctx);
+    assert.equal(absSymlinkRootResponse.isError, undefined);
+    const absPayload = JSON.parse(absSymlinkRootResponse.content[0]!.text);
+    assert.deepEqual(absPayload, relPayload);
+    assert.equal(absPayload.file, 'src/a.ts');
+    assert.equal(absPayload.outline.symbols[0].symbolId, 'syminst_alpha');
+
+    for (const [requestRoot, fileRoot] of [[linkRoot, canonicalRoot], [canonicalRoot, linkRoot]]) {
+        const mixed = await fileOutlineTool.execute({ path: requestRoot, file: path.join(fileRoot, 'src', 'a.ts') }, ctx);
+        assert.equal(mixed.isError, undefined, mixed.content[0]!.text);
+        assert.deepEqual(JSON.parse(mixed.content[0]!.text), relPayload);
+    }
+
+    // 2. Nested subdirectory scope: resolves against matched indexed root (canonicalRoot),
+    // allows in-subdir file, and rejects sibling file outside requested subdirectory
+    const nestedOk = await fileOutlineTool.execute({
+        path: path.join(linkRoot, 'src'),
+        file: path.join(linkRoot, 'src', 'a.ts'),
+    }, ctx);
+    assert.equal(nestedOk.isError, undefined);
+    assert.equal(JSON.parse(nestedOk.content[0]!.text).file, 'src/a.ts');
+
+    const nestedSiblingDenied = await fileOutlineTool.execute({
+        path: path.join(linkRoot, 'src'),
+        file: path.join(linkRoot, 'other', 'b.ts'),
+    }, ctx);
+    assert.equal(nestedSiblingDenied.isError, true);
+
+    const outside = await fileOutlineTool.execute({ path: linkRoot, file: outsideFile }, ctx);
+    assert.equal(outside.isError, true);
+    const outsidePayload = JSON.parse(outside.content[0]!.text);
+    assert.equal(outsidePayload.reason, 'invalid_request');
+    assert.equal(outsidePayload.outline, null);
+    assert.match(outsidePayload.message, /must resolve inside the indexed codebase root/);
+
+    // 3. Final-component symlinks (both pointing inside repo and pointing outside repo) are rejected
+    for (const symlinkPath of [
+        path.join(linkRoot, 'src', 'link-inside.ts'),
+        path.join(linkRoot, 'src', 'link-outside.ts'),
+    ]) {
+        const symlinkResponse = await fileOutlineTool.execute({
+            path: linkRoot,
+            file: symlinkPath,
+        }, ctx);
+        assert.equal(symlinkResponse.isError, true);
+        const symlinkPayload = JSON.parse(symlinkResponse.content[0]!.text);
+        assert.equal(symlinkPayload.status, 'not_found');
+        assert.equal(symlinkPayload.outline, null);
+    }
+
+    // 4. Traversal segments inside an absolute file path are rejected
+    const traversalResponse = await fileOutlineTool.execute({
+        path: linkRoot,
+        file: `${linkRoot}/src/../../outside.ts`,
+    }, ctx);
+    assert.equal(traversalResponse.isError, true);
 });

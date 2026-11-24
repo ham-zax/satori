@@ -1,6 +1,6 @@
 # CBM definition extractor sources
 
-Pinned upstream commit: `1111d9a9e1380a0429ef2250f63223706af6289a` ([codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)).
+Pinned upstream commit: `9a4da7a314833d8d965b74612e1f25fef5371861` ([codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)).
 
 These files are copied from that commit. Grammar sources are read from the pinned checkout during the build.
 

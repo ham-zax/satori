@@ -7,7 +7,7 @@ import type {
     CallGraphResponseEnvelope,
 } from "./search-types.js";
 
-const CALL_GRAPH_EVIDENCE_CURSOR_FORMAT_VERSION = 2 as const;
+const CALL_GRAPH_EVIDENCE_CURSOR_FORMAT_VERSION = 3 as const;
 const MAX_CALL_GRAPH_EVIDENCE_CURSOR_BYTES = 1_024;
 
 export interface CallGraphEvidenceRequest {

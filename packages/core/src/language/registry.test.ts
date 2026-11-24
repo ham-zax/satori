@@ -245,6 +245,9 @@ test('content detection disambiguates .cls between ObjectScript UDL, Salesforce 
         detectLanguageId('Demo/Widget.cls', 'Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n'),
         'objectscript-udl',
     );
+    assert.equal(detectLanguageId('Indented.cls', '  Class Demo.Widget {}'), 'objectscript-udl');
+    assert.equal(detectLanguageId('Commented.cls', '/*\nVERSION 1.0 CLASS\n*/\npublic class Demo {}'), 'apex');
+    assert.equal(detectLanguageId('AttrOnly.cls', 'Attribute VB_Name = "Demo"'), 'text');
     assert.equal(detectLanguageId('Simple.cls', 'Class Simple Extends %Persistent\n{\n}\n'), 'objectscript-udl');
     assert.equal(detectLanguageId('Foo.cls', 'Class Foo { ClassMethod Bar() As %String {} }\n'), 'objectscript-udl');
     assert.equal(detectLanguageId('Multi.cls', 'Class Multi Extends (%Persistent, %XML.Adaptor)\n{\n}\n'), 'objectscript-udl');

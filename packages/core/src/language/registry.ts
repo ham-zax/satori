@@ -227,11 +227,11 @@ const SHEBANG_INTERPRETERS: Readonly<Record<string, string>> = {
 const OBJC_MARKERS = ['@interface', '@implementation', '@protocol', '@property', '#import', '@selector', '@encode', '@synthesize', '@dynamic'];
 const MAGMA_END_MARKERS = ['end function;', 'end procedure;', 'end intrinsic;', 'end if;', 'end for;', 'end while;'];
 const VB6_CLS_RE = /^(?:VERSION\s+1\.0\s+CLASS\b|Attribute\s+VB_(?:Name\s*=|GlobalNameSpace\b|Creatable\b)|BEGIN\r?\n[ \t]+MultiUse\s*=)/m;
-const UDL_CLASS_HEADER_RE = /^Class\s+(%?[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\b/m;
+const UDL_CLASS_HEADER_RE = /^[ \t]*Class\s+(%?[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\b/m;
 const UDL_EXTENDS_RE = /\bExtends\s+(?:%[A-Za-z0-9_.]+|[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+|\([^)]+\))/;
 const UDL_MEMBER_RE = /(?:^|[;{}])[ \t]*(?:(?:ClassMethod|Method|Property|Relationship)\s+[A-Za-z%][A-Za-z0-9]*[^\r\n{}]*\bAs\b|Parameter\s+[A-Za-z%][A-Za-z0-9]*(?:\s+As\s+[^\r\n=]+)?\s*=|Index\s+[A-Za-z%][A-Za-z0-9]*\s+On\b|Storage\s+Default\b|XData\s+[A-Za-z%][A-Za-z0-9]*\b)/m;
 
-function stripClsCommentsAndStrings(input: string): string {
+function stripClsCommentsAndStrings(input: string, stripStrings = true): string {
     let out = '';
     let i = 0;
     const len = input.length;
@@ -261,21 +261,23 @@ function stripClsCommentsAndStrings(input: string): string {
         }
         if (ch === "'" || ch === '"') {
             const quote = ch;
-            out += ' ';
+            const start = i;
+            out += stripStrings ? ' ' : '';
             i += 1;
             while (i < len && input[i] !== quote && input[i] !== '\n' && input[i] !== '\r') {
                 if (input[i] === '\\' && i + 1 < len && input[i + 1] !== '\n' && input[i + 1] !== '\r') {
-                    out += '  ';
+                    out += stripStrings ? '  ' : '';
                     i += 2;
                 } else {
-                    out += ' ';
+                    out += stripStrings ? ' ' : '';
                     i += 1;
                 }
             }
             if (i < len && input[i] === quote) {
-                out += ' ';
+                out += stripStrings ? ' ' : '';
                 i += 1;
             }
+            if (!stripStrings) out += input.slice(start, i);
             continue;
         }
         out += ch;
@@ -314,7 +316,7 @@ function disambiguateDotM(head: string): string {
 
 function disambiguateDotCls(head: string, fallback: string): string {
     const cleanHead = head.startsWith('\uFEFF') ? head.slice(1) : head;
-    if (VB6_CLS_RE.test(cleanHead)) return fallback;
+    if (VB6_CLS_RE.test(stripClsCommentsAndStrings(cleanHead, false))) return fallback;
     const stripped = stripClsCommentsAndStrings(cleanHead);
     const classHeader = UDL_CLASS_HEADER_RE.exec(stripped);
     if (classHeader) {

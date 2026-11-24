@@ -332,6 +332,9 @@ export class RelationshipBackedCallGraph {
 
     private sortExactReferences(references: CallGraphExactReference[]): CallGraphExactReference[] {
         return [...references].sort((a, b) => {
+            const aIsTest = isTestOrFixturePath(a.site.file) ? 1 : 0;
+            const bIsTest = isTestOrFixturePath(b.site.file) ? 1 : 0;
+            if (aIsTest !== bIsTest) return aIsTest - bIsTest;
             const fileCmp = compareNullableStringsAsc(a.site.file, b.site.file);
             if (fileCmp !== 0) return fileCmp;
             const startCmp = compareNullableNumbersAsc(a.site.startLine, b.site.startLine);

@@ -226,6 +226,13 @@ test("call graph evidence pages continue within the same publication", () => {
     assert.ok(first.evidencePage?.nextCursor);
     assert.equal(first.exactReferences, undefined);
 
+    const legacyCursor = JSON.stringify({ ...JSON.parse(first.evidencePage.nextCursor), formatVersion: 2 });
+    assert.throws(() => projectCallGraphEvidence(payload(), {
+        kind: "exact_references",
+        limit: 2,
+        cursor: legacyCursor,
+    }), InvalidCallGraphEvidenceContinuationError);
+
     const second = projectCallGraphEvidence(payload(), {
         kind: "exact_references",
         limit: 2,

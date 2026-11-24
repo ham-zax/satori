@@ -121,3 +121,80 @@ test('recordFilter constrains traversal without narrowing low-confidence qualifi
     assert.equal(result.records[0]?.confidence, 'medium');
     assert.equal(result.suppressedLowConfidenceRecords.length, 0);
 });
+
+test('getGraphNeighbors prioritizes production callers ahead of test callers under bounded limits', async () => {
+    const target = 'syminst_target';
+    const makeCall = (source: string, file: string, line: number): RelationshipRecord => ({
+        sourceKey: source,
+        sourceInstanceId: source,
+        targetKey: target,
+        targetInstanceId: target,
+        type: 'CALLS',
+        confidence: 'high',
+        file,
+        span: { startLine: line, endLine: line },
+    });
+    const records: RelationshipRecord[] = [
+        // Lexicographically earlier test callers outnumber the shared limit
+        ...Array.from({ length: 15 }, (_, i) =>
+            makeCall(`test-caller-${i}`, 'packages/mcp/src/core/alpha-target.test.ts', 10 + i),
+        ),
+        // Production caller sorts lexicographically after the test file
+        makeCall('runtime-caller', 'packages/mcp/src/core/zeta-coordinator.ts', 42),
+        // Outgoing callees to exercise direction="both" interleaving
+        ...Array.from({ length: 12 }, (_, i) => ({
+            sourceKey: target,
+            sourceInstanceId: target,
+            targetKey: `callee-${i}`,
+            targetInstanceId: `callee-${i}`,
+            type: 'CALLS' as const,
+            confidence: 'high' as const,
+            file: 'packages/mcp/src/core/alpha-target.ts',
+            span: { startLine: 100 + i, endLine: 100 + i },
+        })),
+    ];
+
+    const input: GetGraphNeighborsInput = {
+        normalizedRootPath: '/repo',
+        publicationId: 'fixture',
+        navigationRoot: '/fixture/navigation',
+        expectedSymbolRegistryManifestHash: 'fixture',
+        symbolInstanceId: target,
+        direction: 'both',
+        depth: 1,
+        allowedTypes: ['CALLS'],
+        limit: 10,
+        navigationStore: {
+            getManifest: async () => { throw new Error('unused'); },
+            getRelationships: async () => ({
+                status: 'ok',
+                rootPath: '/repo',
+                manifestHash: 'fixture',
+                records,
+                warnings: [],
+                manifest: {
+                    schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
+                    symbolRegistryManifestHash: 'fixture',
+                    relationshipVersion: 'fixture',
+                    builtAt: '2026-11-24',
+                    providerCoverage: [],
+                    files: [],
+                },
+            }),
+        },
+    };
+
+    const both = await getGraphNeighbors(input);
+    assert.equal(both.status, 'ok');
+    if (both.status !== 'ok') return;
+    assert.equal(both.records.length, 10);
+    assert.ok(
+        both.records.some((r) => r.sourceInstanceId === 'runtime-caller' && r.file === 'packages/mcp/src/core/zeta-coordinator.ts'),
+        'production caller must be preserved ahead of test callers under direction=both limit',
+    );
+
+    const callersOnly = await getGraphNeighbors({ ...input, direction: 'callers', limit: 3 });
+    assert.equal(callersOnly.status, 'ok');
+    if (callersOnly.status !== 'ok') return;
+    assert.equal(callersOnly.records[0]?.sourceInstanceId, 'runtime-caller');
+});

@@ -5,6 +5,7 @@ import type {
 } from '../symbols';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { isProofBackedAuthoritativeCall } from '../relationships/resolution';
+import { isTestOrFixturePath } from '../relationships/test-path';
 import {
     JsonNavigationStore,
     type NavigationRelationshipsState,
@@ -276,6 +277,23 @@ function prepareRelationshipIndex(records: RelationshipRecord[]): PreparedRelati
         }
         if (record.targetInstanceId) {
             appendToMap(incoming, record.targetInstanceId, record);
+        }
+    }
+    // Keep production callers ahead of test/fixture callers so bounded caller
+    // traversals (including `direction: "both"`) do not crowd out runtime callers.
+    for (const [targetId, list] of incoming) {
+        if (list.length <= 1) continue;
+        const production: RelationshipRecord[] = [];
+        const tests: RelationshipRecord[] = [];
+        for (const record of list) {
+            if (isTestOrFixturePath(record.file)) {
+                tests.push(record);
+            } else {
+                production.push(record);
+            }
+        }
+        if (production.length > 0 && tests.length > 0) {
+            incoming.set(targetId, [...production, ...tests]);
         }
     }
     const prepared = {

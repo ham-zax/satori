@@ -111,7 +111,7 @@ import {
 const AMBIGUOUS_SYMBOL_CANDIDATES_LIMIT = 20;
 
 function readBoundedLanguageProbe(absoluteFile: string, maxBytes: number = 4096): string | undefined {
-    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
     let fd: number | undefined;
     try {
         fd = fs.openSync(absoluteFile, flags);

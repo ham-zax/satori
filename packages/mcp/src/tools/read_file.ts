@@ -439,7 +439,7 @@ async function buildReadFileIgnoreMatcher(
 }
 
 function readBoundedLanguageProbe(absoluteFile: string, maxBytes: number = 4096): string | undefined {
-    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
     let fd: number | undefined;
     try {
         fd = fs.openSync(absoluteFile, flags);
@@ -476,6 +476,10 @@ async function isLivePathAdmittedForRead(
     if (!changed.available || !changed.files.has(relativePath)) {
         return false;
     }
+    const matcher = await buildReadFileIgnoreMatcher(codebaseRoot, ctx);
+    if (matcher(relativePath)) {
+        return false;
+    }
     const pathLanguage = pathDeterminedLanguageId(relativePath);
     if (pathLanguage !== undefined) {
         if (!isLanguageCapabilitySupportedForLanguage(pathLanguage, "search")) {
@@ -486,10 +490,6 @@ async function isLivePathAdmittedForRead(
         if (probe === undefined || !isSearchableLanguageSource(relativePath, probe)) {
             return false;
         }
-    }
-    const matcher = await buildReadFileIgnoreMatcher(codebaseRoot, ctx);
-    if (matcher(relativePath)) {
-        return false;
     }
     return true;
 }

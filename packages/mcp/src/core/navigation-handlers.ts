@@ -5,7 +5,9 @@ import {
     analyzeGoSymbolStructure,
     analyzePythonSymbolStructure,
     compareContractStrings,
+    detectLanguageId,
     getSupportedExtensionsForCapability,
+    isLanguageCapabilitySupportedForLanguage,
     JsonNavigationStore,
     isProofBackedAuthoritativeCall,
     summarizeResolutionConstructCoverage,
@@ -2936,6 +2938,22 @@ export class NavigationHandlers {
 
         const manifestFile = registryState.registry.manifest.files.find((file) => file.path === normalizedFile);
         if (manifestFile?.definitionStatus === "structural_unavailable") {
+            const detectedLanguage = detectLanguageId(normalizedFile, sourceBytes.toString("utf8"), "");
+            if (!detectedLanguage || !isLanguageCapabilitySupportedForLanguage(detectedLanguage, "fileOutline")) {
+                await this.host.touchWatchedCodebase(effectiveRoot);
+                const payload: FileOutlineResponseEnvelope = {
+                    status: "unsupported",
+                    reason: "unsupported_language",
+                    path: effectiveRoot,
+                    file: normalizedFile,
+                    outline: null,
+                    hasMore: false,
+                    message: `File '${normalizedFile}' (${detectedLanguage || "unknown"}) is not supported for sidecar outline.`,
+                };
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(this.host.withProofDebugHint(payload, proofDebugHint)) }],
+                };
+            }
             await this.host.touchWatchedCodebase(effectiveRoot);
             const payload = withNavigationFreshness({
                 status: "not_ready",

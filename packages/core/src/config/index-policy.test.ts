@@ -11,6 +11,7 @@ import {
     isIndexableFileByPolicy,
     isIndexableFileByPolicySync,
     isIndexableFileObservationByPolicy,
+    isIndexableFileObservationByPolicySync,
 } from './index-policy';
 import { ALL_TEXT_INDEX_MARKER, DEFAULT_SUPPORTED_EXTENSIONS } from './defaults';
 
@@ -139,4 +140,94 @@ test('the synchronous file probe admits exactly what the promise probe admits', 
             );
         }
     }
+});
+
+test('content-determined .cls policy rejects VB6 (including BOM) and admits Apex, ObjectScript UDL, empty .cls, and non-registry doc extensions', async () => {
+    const cases: Array<{ relativePath: string; content: string; expected: boolean }> = [
+        {
+            relativePath: 'vb6/Customer.cls',
+            content: 'VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = "Customer"\n',
+            expected: false,
+        },
+        {
+            relativePath: 'vb6/BomBegin.cls',
+            content: '\uFEFFBEGIN\n  MultiUse = -1\nEND\n',
+            expected: false,
+        },
+        {
+            relativePath: 'vb6/BomVersion.cls',
+            content: '\uFEFFVERSION 1.0 CLASS\n',
+            expected: false,
+        },
+        {
+            relativePath: 'classes/AccountService.cls',
+            content: 'public with sharing class AccountService {\n    public static void run() {}\n}\n',
+            expected: true,
+        },
+        {
+            relativePath: 'Demo/Widget.cls',
+            content: 'Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n',
+            expected: true,
+        },
+        {
+            relativePath: 'classes/Empty.cls',
+            content: '',
+            expected: true,
+        },
+        {
+            relativePath: 'docs/notes.txt',
+            content: 'plain text notes\n',
+            expected: true,
+        },
+    ];
+
+    for (const { relativePath, content, expected } of cases) {
+        const buffer = Buffer.from(content, 'utf8');
+        let syncProbed = false;
+        let asyncProbed = false;
+        const syncResult = isIndexableFileObservationByPolicySync(
+            relativePath,
+            buffer.length,
+            DEFAULT_SUPPORTED_EXTENSIONS,
+            () => {
+                syncProbed = true;
+                return buffer;
+            },
+        );
+        const asyncResult = await isIndexableFileObservationByPolicy(
+            relativePath,
+            buffer.length,
+            DEFAULT_SUPPORTED_EXTENSIONS,
+            async () => {
+                asyncProbed = true;
+                return buffer;
+            },
+        );
+
+        assert.equal(syncResult, expected, `sync ${relativePath}`);
+        assert.equal(asyncResult, expected, `async ${relativePath}`);
+        if (relativePath === 'docs/notes.txt') {
+            assert.equal(syncProbed, false, 'non-ambiguous .txt should not probe disk (sync)');
+            assert.equal(asyncProbed, false, 'non-ambiguous .txt should not probe disk (async)');
+        }
+    }
+
+    const throwingSync = isIndexableFileObservationByPolicySync(
+        'vb6/Missing.cls',
+        32,
+        DEFAULT_SUPPORTED_EXTENSIONS,
+        () => {
+            throw new Error('ENOENT');
+        },
+    );
+    const throwingAsync = await isIndexableFileObservationByPolicy(
+        'vb6/Missing.cls',
+        32,
+        DEFAULT_SUPPORTED_EXTENSIONS,
+        async () => {
+            throw new Error('ENOENT');
+        },
+    );
+    assert.equal(throwingSync, false);
+    assert.equal(throwingAsync, false);
 });

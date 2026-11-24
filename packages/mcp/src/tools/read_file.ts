@@ -4,8 +4,10 @@ import { z } from "zod";
 import {
     DEFAULT_IGNORE_PATTERNS,
     createIndexIgnoreMatcher,
+    detectLanguageId,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
+    isLanguageCapabilitySupportedForLanguage,
     observeIndexPolicyInputs,
     recordSourceProcessing,
 } from "@satori-code/core";
@@ -525,7 +527,11 @@ function buildRootDiscoveryNextSteps(absolutePath: string, ctx: ToolContext): Ar
     return nextSteps;
 }
 
-function isOutlineSupportedFile(absolutePath: string): boolean {
+function isOutlineSupportedFile(absolutePath: string, content?: string): boolean {
+    if (content !== undefined) {
+        const language = detectLanguageId(absolutePath, content, "");
+        return language !== "" && isLanguageCapabilitySupportedForLanguage(language, "fileOutline");
+    }
     const ext = path.extname(absolutePath).toLowerCase();
     return isLanguageCapabilitySupportedForExtension(ext, "fileOutline");
 }
@@ -1080,19 +1086,19 @@ export const readFileTool: McpTool = {
                 };
             }
 
-            const supportedByExtension = isOutlineSupportedFile(absolutePath);
+            const outlineSupported = isOutlineSupportedFile(absolutePath, content);
             const resolvedRoot = allowedRoot;
             const relativeFile = resolvedRoot
                 ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
                 : undefined;
-            let outlineStatus: ReadFileAnnotatedOutlineStatus = supportedByExtension ? "requires_reindex" : "unsupported";
+            let outlineStatus: ReadFileAnnotatedOutlineStatus = outlineSupported ? "requires_reindex" : "unsupported";
             let outlineReason: ReadFileAnnotatedResponseEnvelope["outlineReason"];
             let outline: FileOutlineResponseEnvelope["outline"] = null;
             let hasMore = false;
             let warnings: string[] | undefined;
             let hints: Record<string, unknown> | undefined;
 
-            if (!supportedByExtension) {
+            if (!outlineSupported) {
                 outlineStatus = "unsupported";
             } else if (!resolvedRoot || !relativeFile) {
                 outlineStatus = "requires_reindex";

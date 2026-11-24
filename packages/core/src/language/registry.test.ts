@@ -240,12 +240,51 @@ test('content detection disambiguates .m between Objective-C, Magma, and MATLAB'
     assert.equal(detectLanguageId('App/View.mm', '@implementation View\n'), 'objective-c');
 });
 
-test('path-determined language defers to content only for .m and unrecognized files', async () => {
+test('content detection disambiguates .cls between ObjectScript UDL, Salesforce Apex, and VB6', async () => {
+    assert.equal(
+        detectLanguageId('Demo/Widget.cls', 'Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n'),
+        'objectscript-udl',
+    );
+    assert.equal(detectLanguageId('Simple.cls', 'Class Simple Extends %Persistent\n{\n}\n'), 'objectscript-udl');
+    assert.equal(detectLanguageId('Foo.cls', 'Class Foo { ClassMethod Bar() As %String {} }\n'), 'objectscript-udl');
+    assert.equal(detectLanguageId('Multi.cls', 'Class Multi Extends (%Persistent, %XML.Adaptor)\n{\n}\n'), 'objectscript-udl');
+    assert.equal(detectLanguageId('Body.cls', 'Class Body\n{\nProperty Name As %String;\nParameter VER = 1;\nStorage Default\n{\n}\n}\n'), 'objectscript-udl');
+
+    assert.equal(detectLanguageId('classes/AccountService.cls', 'public with sharing class AccountService {\n    public static void run() {}\n}\n'), 'apex');
+    assert.equal(detectLanguageId('classes/MyBatch.cls', 'global class MyBatch {\n    global void execute() {}\n}\n'), 'apex');
+    assert.equal(detectLanguageId('classes/Plain.cls', 'Class PlainNoUdlMarkers {\n    void run() {}\n}\n'), 'apex');
+
+    const vb6 = 'VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = "Customer"\n';
+    assert.equal(detectLanguageId('vb6/Customer.cls', vb6), 'text');
+    assert.equal(detectLanguageId('vb6/Customer.cls', vb6, 'unknown'), 'unknown');
+    assert.equal(detectLanguageId('vb6/AttrOnly.cls', 'Attribute VB_GlobalNameSpace = False\nAttribute VB_Creatable = True\n', 'unknown'), 'unknown');
+    assert.equal(detectLanguageId('vb6/BeginOnly.cls', 'BEGIN\r\n  MultiUse = -1\r\nEND\r\n', 'unknown'), 'unknown');
+    assert.equal(detectLanguageId('vb6/BomBegin.cls', '\uFEFFBEGIN\n  MultiUse = -1\nEND\n'), 'text');
+    assert.equal(detectLanguageId('vb6/BomBegin.cls', '\uFEFFBEGIN\n  MultiUse = -1\nEND\n', 'unknown'), 'unknown');
+    assert.equal(detectLanguageId('vb6/BomVersion.cls', '\uFEFFVERSION 1.0 CLASS\n'), 'text');
+    assert.equal(detectLanguageId('vb6/BomVersion.cls', '\uFEFFVERSION 1.0 CLASS\n', 'unknown'), 'unknown');
+    assert.equal(detectLanguageId('mypkg/Widget.cls', 'Class mypkg.Widget Extends %RegisteredObject {}\n'), 'objectscript-udl');
+    assert.equal(detectLanguageId('My_Pkg/My_Widget.cls', 'Class My_Pkg.My_Widget {}\n'), 'objectscript-udl');
+
+    assert.equal(isLanguageCapabilitySupportedForLanguage('objectscript-udl', 'search'), true);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('objectscript-udl', 'symbols'), false);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('objectscript-udl', 'fileOutline'), false);
+});
+
+test('path-determined language defers to content only for .m, .cls, and unrecognized files', async () => {
     assert.equal(pathDeterminedLanguageId('src/a.go'), 'go');
     assert.equal(pathDeterminedLanguageId('Makefile'), 'makefile');
+    assert.equal(pathDeterminedLanguageId('triggers/Account.trigger'), 'apex');
+    assert.equal(pathDeterminedLanguageId('Demo.cls'), undefined);
     assert.equal(pathDeterminedLanguageId('sci/solve.m'), undefined);
     assert.equal(pathDeterminedLanguageId('bin/tool'), undefined);
     assert.equal(isSearchableLanguageSource('bin/tool', '#!/usr/bin/env python\n'), true);
     assert.equal(isSearchableLanguageSource('bin/notes', 'notes\n'), false);
     assert.equal(isSearchableLanguageSource('src/a.go', ''), true);
+    assert.equal(
+        isSearchableLanguageSource('vb6/Customer.cls', 'VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = "Customer"\n'),
+        false,
+    );
+    assert.equal(isSearchableLanguageSource('Demo/Widget.cls', 'Class Demo.Widget Extends %RegisteredObject {}\n'), true);
+    assert.equal(isSearchableLanguageSource('classes/AccountService.cls', 'public with sharing class AccountService {}\n'), true);
 });

@@ -216,7 +216,7 @@ export function getSupportedLanguageAliasesForCapability(capability: LanguageCap
 }
 
 // Content-aware detection, ported from codebase-memory-mcp's discovery rules.
-// Filename and extension stay authoritative; content only disambiguates `.m`
+// Filename and extension stay authoritative; content only disambiguates `.m` and `.cls`
 // and routes extensionless scripts by their shebang line.
 const CONTENT_PROBE_CHARS = 4096;
 const SHEBANG_INTERPRETERS: Readonly<Record<string, string>> = {
@@ -226,6 +226,10 @@ const SHEBANG_INTERPRETERS: Readonly<Record<string, string>> = {
 };
 const OBJC_MARKERS = ['@interface', '@implementation', '@protocol', '@property', '#import', '@selector', '@encode', '@synthesize', '@dynamic'];
 const MAGMA_END_MARKERS = ['end function;', 'end procedure;', 'end intrinsic;', 'end if;', 'end for;', 'end while;'];
+const VB6_CLS_RE = /^(?:VERSION\s+1\.0\s+CLASS\b|Attribute\s+VB_(?:Name\s*=|GlobalNameSpace\b|Creatable\b)|BEGIN\r?\n[ \t]+MultiUse\s*=)/m;
+const UDL_CLASS_HEADER_RE = /^Class\s+(%?[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\b/m;
+const UDL_EXTENDS_RE = /\bExtends\s+(?:%[A-Za-z0-9_.]+|[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+|\([^)]+\))/;
+const UDL_MEMBER_RE = /\b(?:(?:ClassMethod|Method|Property|Relationship)\s+[A-Za-z%][A-Za-z0-9]*[^\r\n{}]*\bAs\b|Parameter\s+[A-Za-z%][A-Za-z0-9]*(?:\s+As\s+[^\r\n=]+)?\s*=|Index\s+[A-Za-z%][A-Za-z0-9]*\s+On\b|Storage\s+Default\b|XData\s+[A-Za-z%][A-Za-z0-9]*\b)/;
 
 function interpreterLanguage(interpreter: string): string | undefined {
     const base = interpreter.slice(interpreter.lastIndexOf('/') + 1);
@@ -255,23 +259,37 @@ function disambiguateDotM(head: string): string {
     return 'matlab';
 }
 
+function disambiguateDotCls(head: string, fallback: string): string {
+    const cleanHead = head.startsWith('\uFEFF') ? head.slice(1) : head;
+    if (VB6_CLS_RE.test(cleanHead)) return fallback;
+    const classHeader = UDL_CLASS_HEADER_RE.exec(cleanHead);
+    if (classHeader) {
+        const hasDottedName = classHeader[1].includes('.');
+        if (hasDottedName || UDL_EXTENDS_RE.test(cleanHead) || UDL_MEMBER_RE.test(cleanHead)) {
+            return 'objectscript-udl';
+        }
+    }
+    return 'apex';
+}
+
 export function detectLanguageId(relativePath: string, content: string, fallback: string = 'text'): string {
     const basename = String(relativePath || '').trim().split(/[\\/]/).pop() || '';
     const extension = basename.includes('.') ? `.${basename.split('.').pop()}`.toLowerCase() : '';
     const head = content.slice(0, CONTENT_PROBE_CHARS);
     if (extension === '.m' && !getLanguageAdapterByFilename(basename)) return disambiguateDotM(head);
+    if (extension === '.cls' && !getLanguageAdapterByFilename(basename)) return disambiguateDotCls(head, fallback);
     const adapter = getLanguageAdapterByFilename(basename) || getLanguageAdapterByExtension(extension);
     if (adapter) return adapter.id;
     return detectLanguageFromShebang(head) ?? fallback;
 }
 
-/** The language the path alone decides, or undefined when content decides (`.m`, unrecognized files). */
+/** The language the path alone decides, or undefined when content decides (`.m`, `.cls`, unrecognized files). */
 export function pathDeterminedLanguageId(relativePath: string): string | undefined {
     const basename = String(relativePath || '').trim().split(/[\\/]/).pop() || '';
     const filenameAdapter = getLanguageAdapterByFilename(basename);
     if (filenameAdapter) return filenameAdapter.id;
     const extension = basename.includes('.') ? `.${basename.split('.').pop()}`.toLowerCase() : '';
-    if (extension === '.m') return undefined;
+    if (extension === '.m' || extension === '.cls') return undefined;
     return getLanguageAdapterByExtension(extension)?.id;
 }
 

@@ -246,6 +246,8 @@ const CBM_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     searchOnlyLanguage({ languageId: 'chialisp', aliases: [], extensions: ['.clib', '.clinc', '.clsp'] }),
     searchOnlyLanguage({ languageId: 'mojo', aliases: [], extensions: ['.mojo'] }),
     searchOnlyLanguage({ languageId: 'objectscript-routine', aliases: [], extensions: ['.int', '.mac', '.rtn'] }),
+    // `.cls` stays on `apex` for extension lookup; detectLanguageId disambiguates `.cls` by content.
+    searchOnlyLanguage({ languageId: 'objectscript-udl', aliases: [], extensions: [] }),
     // CBM routes Razor through C# for @page route scanning only; see SATORI_EXTENSION_SPLITS.
     searchOnlyLanguage({ languageId: 'razor', aliases: [], extensions: ['.cshtml', '.razor'] }),
     searchOnlyLanguage({ languageId: 'plsql', aliases: [], extensions: ['.bdy', '.fnc', '.pck', '.pkb', '.pks', '.plb', '.pls', '.plsql', '.tpb', '.tps', '.trg'] }),

@@ -619,3 +619,86 @@ test('file_outline accepts in-root absolute paths (including under symlinked wor
     }, ctx);
     assert.equal(traversalResponse.isError, true);
 });
+
+test('file_outline returns unsupported_language for ObjectScript UDL .cls and structural_evidence_unavailable for Apex .cls when structural_unavailable', async (t) => {
+    const tmpBase = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'file-outline-cls-')));
+    t.after(() => fs.rmSync(tmpBase, { recursive: true, force: true }));
+
+    const udlRel = 'Demo/Widget.cls';
+    const apexRel = 'classes/Broken.cls';
+    const udlSource = 'Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n';
+    const apexSource = 'public class Broken {\n    public void run(\n}\n';
+
+    fs.mkdirSync(path.join(tmpBase, 'Demo'), { recursive: true });
+    fs.mkdirSync(path.join(tmpBase, 'classes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpBase, udlRel), udlSource, 'utf8');
+    fs.writeFileSync(path.join(tmpBase, apexRel), apexSource, 'utf8');
+
+    const udlHash = crypto.createHash('sha256').update(udlSource).digest('hex');
+    const apexHash = crypto.createHash('sha256').update(apexSource).digest('hex');
+
+    const registry = {
+        manifest: {
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: [
+                { path: udlRel, hash: udlHash, definitionStatus: 'structural_unavailable' },
+                { path: apexRel, hash: apexHash, definitionStatus: 'structural_unavailable' },
+            ],
+        },
+        symbolsByFile: new Map<string, SymbolRecord[]>([
+            [udlRel, []],
+            [apexRel, []],
+        ]),
+    } as unknown as SymbolRegistry;
+    const lease = {
+        id: 'publication-cls',
+        publication: { id: 'publication-cls', canonicalRoot: tmpBase },
+        release: () => {},
+    } as PublicationLease;
+
+    const navigationHandlers = new NavigationHandlers({
+        toolResponseBuilders: { buildInvalidFileOutlineRequestPayload: ToolResponseBuilders.prototype.buildInvalidFileOutlineRequestPayload },
+        prepareNavigationRead: async () => ({ state: 'ready', root: { path: tmpBase }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => 'valid',
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        loadPreparedNavigationSymbolsByFile: async (_state: unknown, relFile: string) => ({
+            status: 'ok',
+            registry,
+            symbols: registry.symbolsByFile.get(relFile) ?? [],
+            manifestHash: 'manifest-hash-cls',
+        }),
+        getRegistryFileFreshness: () => ({ status: 'fresh' }),
+        loadRegistryValidatedRelationshipNavigation: async () => ({ relationshipReady: false }),
+        buildRegistrySymbolCallGraphHint: () => ({ supported: false, reason: 'missing_relationship_navigation' }),
+        buildOutlineSpanWarningCodes: () => [],
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+
+    const ctx = {
+        workspacePolicy: buildWorkspacePolicy([tmpBase]),
+        toolHandlers: {
+            navigationHandlers,
+            handleFileOutline: ToolHandlers.prototype.handleFileOutline,
+        } as unknown as ToolHandlers,
+    } as unknown as ToolContext;
+
+    const udlResponse = await fileOutlineTool.execute({ path: tmpBase, file: udlRel }, ctx);
+    assert.equal(udlResponse.isError, undefined);
+    const udlPayload = JSON.parse(udlResponse.content[0]!.text);
+    assert.equal(udlPayload.status, 'unsupported');
+    assert.equal(udlPayload.reason, 'unsupported_language');
+    assert.equal(udlPayload.outline, null);
+
+    const apexResponse = await fileOutlineTool.execute({ path: tmpBase, file: apexRel }, ctx);
+    assert.equal(apexResponse.isError, undefined);
+    const apexPayload = JSON.parse(apexResponse.content[0]!.text);
+    assert.equal(apexPayload.status, 'not_ready');
+    assert.equal(apexPayload.reason, 'structural_evidence_unavailable');
+    assert.equal(apexPayload.outline, null);
+});

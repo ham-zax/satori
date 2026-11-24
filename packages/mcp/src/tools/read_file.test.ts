@@ -327,3 +327,81 @@ test("format='text' on ordinary >40-line ranges emits clean line-numbered raw te
     assert.match(text, /\n55\| export const line_55 = "value_55";$/);
     assert.equal(text.includes("\"presentation\":\"compact\""), false);
 });
+
+test("annotated read_file checks .cls content so ObjectScript UDL and VB6 return unsupported while Apex invokes handleFileOutline", async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-read-cls-")));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    const files: Record<string, string> = {
+        "src/Widget.cls": "Class Demo.Widget Extends %RegisteredObject {\n  Method Run() As %Status {\n    Quit $$$OK\n  }\n}\n",
+        "src/Customer.cls": "VERSION 1.0 CLASS\nBEGIN\n  MultiUse = -1\nEND\nAttribute VB_Name = \"Customer\"\n",
+        "src/AccountService.cls": "public with sharing class AccountService {\n    public static void run() {}\n}\n",
+    };
+
+    const fileHashes: Array<[string, string]> = [];
+    for (const [relPath, body] of Object.entries(files)) {
+        const absPath = path.join(root, relPath);
+        fs.mkdirSync(path.dirname(absPath), { recursive: true });
+        fs.writeFileSync(absPath, body, "utf8");
+        fileHashes.push([relPath, sha256(Buffer.from(body, "utf8"))]);
+    }
+
+    const outlineCalls: string[] = [];
+    const publication = { publication: { canonicalRoot: root } };
+    const ctx = {
+        readFileMaxLines: 200,
+        workspacePolicy: createSessionWorkspacePolicy({
+            roots: [root],
+            homeDirectory: "/home/user",
+            stateRoot: "/state",
+        }),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes }),
+            hasSearchableGeneration: () => true,
+            getCurrentSearchGeneration: () => ({ generationId: "gen-1", compatibility: "compatible" }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+        toolHandlers: {
+            handleFileOutline: async (input: { file: string }) => {
+                outlineCalls.push(input.file);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "ok",
+                            outline: { language: "apex", symbols: [] },
+                            hasMore: false,
+                        }),
+                    }],
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    const udlResponse = await readFileTool.execute({
+        path: path.join(root, "src/Widget.cls"),
+        codebaseRoot: root,
+        mode: "annotated",
+    }, ctx);
+    assert.equal(JSON.parse(udlResponse.content[0].text).outlineStatus, "unsupported");
+    assert.deepEqual(outlineCalls, []);
+
+    const vb6Response = await readFileTool.execute({
+        path: path.join(root, "src/Customer.cls"),
+        codebaseRoot: root,
+        mode: "annotated",
+    }, ctx);
+    assert.equal(JSON.parse(vb6Response.content[0].text).outlineStatus, "unsupported");
+    assert.deepEqual(outlineCalls, []);
+
+    const apexResponse = await readFileTool.execute({
+        path: path.join(root, "src/AccountService.cls"),
+        codebaseRoot: root,
+        mode: "annotated",
+    }, ctx);
+    assert.equal(JSON.parse(apexResponse.content[0].text).outlineStatus, "ok");
+    assert.deepEqual(outlineCalls, ["src/AccountService.cls"]);
+});

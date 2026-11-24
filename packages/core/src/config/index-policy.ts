@@ -9,6 +9,8 @@ import {
     detectLanguageFromShebang,
     getLanguageAdapterByExtension,
     isLanguageCapabilitySupportedForLanguage,
+    isSearchableLanguageSource,
+    pathDeterminedLanguageId,
 } from '../language/registry';
 
 
@@ -164,6 +166,18 @@ export function isIndexableFileObservationByPolicySync(
     const extension = path.extname(relativePath).toLowerCase();
 
     if (extension && extensionSet.has(extension)) {
+        // Content-disambiguated extensions (.cls, .m) are registered in the
+        // language catalog, yet path alone cannot separate VB6 from Apex/UDL.
+        if (getLanguageAdapterByExtension(extension) !== undefined && pathDeterminedLanguageId(relativePath) === undefined) {
+            if (size === 0) {
+                return isSearchableLanguageSource(relativePath, '');
+            }
+            try {
+                return isSearchableLanguageSource(relativePath, readProbe().toString('utf8'));
+            } catch {
+                return false;
+            }
+        }
         return true;
     }
     if (isAllowedExactFilename(relativePath, extensionSet)) {
@@ -231,6 +245,16 @@ export async function isIndexableFileObservationByPolicy(
     const extension = path.extname(relativePath).toLowerCase();
 
     if (extension && extensionSet.has(extension)) {
+        if (getLanguageAdapterByExtension(extension) !== undefined && pathDeterminedLanguageId(relativePath) === undefined) {
+            if (size === 0) {
+                return isSearchableLanguageSource(relativePath, '');
+            }
+            try {
+                return isSearchableLanguageSource(relativePath, (await readProbe()).toString('utf8'));
+            } catch {
+                return false;
+            }
+        }
         return true;
     }
     if (isAllowedExactFilename(relativePath, extensionSet)) {

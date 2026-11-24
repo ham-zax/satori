@@ -7,8 +7,8 @@ These files are copied from that commit. Grammar sources are read from the pinne
 ## Local patches
 
 - `internal/cbm/cbm.h`: append `start_byte` and `end_byte` to `CBMDefinition`.
-- `internal/cbm/extract_defs.c`: set both byte spans at all 26 definition line-span sites and extend `end_byte` in `fold_elixir_clause`.
-- `satori_extractor.c` and `satori_shim.c` are Satori-owned ABI and link shims.
+- `internal/cbm/extract_defs.c`: set both byte spans at all 26 definition line-span sites, extend `end_byte` in `fold_elixir_clause`, and extend Dart `function_signature`/`method_signature` end spans across sibling `function_body` nodes.
+- `satori_extractor.c` and `satori_shim.c` are Satori-owned ABI and link shims (including `cbm_test_declarations_{preset,items}` stubs so `test_conventions.c` and `yyjson` are not vendored or linked).
 
 ## Vendored files
 
@@ -71,7 +71,6 @@ These files are copied from that commit. Grammar sources are read from the pinne
 - `internal/cbm/vendored/ts_runtime/src/wasm_store.h`
 - `internal/cbm/vendored/verstable/LICENSE`
 - `internal/cbm/vendored/verstable/verstable.h`
-- `src/discover/test_conventions.c`
 - `src/discover/test_conventions.h`
 - `src/foundation/arena.c`
 - `src/foundation/arena.h`
@@ -93,6 +92,3 @@ These files are copied from that commit. Grammar sources are read from the pinne
 - `src/simhash/minhash.h`
 - `vendored/xxhash/LICENSE`
 - `vendored/xxhash/xxhash.h`
-- `vendored/yyjson/LICENSE`
-- `vendored/yyjson/yyjson.c`
-- `vendored/yyjson/yyjson.h`

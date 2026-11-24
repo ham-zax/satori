@@ -7518,6 +7518,31 @@ static void push_make_rule_targets(CBMExtractCtx *ctx, TSNode node, const CBMDef
     }
 }
 
+/* Dart tree-sitter represents a function/method body as the next named
+ * sibling (`function_body`) of `function_signature` / `method_signature`.
+ * Extend the end span across that body so multiline declarations and
+ * extension members include their full body for outline/open_symbol. */
+static TSNode satori_dart_def_end_node(CBMLanguage lang, TSNode node) {
+    if (lang != CBM_LANG_DART) {
+        return node;
+    }
+    const char *kind = ts_node_type(node);
+    TSNode anchor = node;
+    if (strcmp(kind, "function_signature") == 0) {
+        TSNode parent = ts_node_parent(node);
+        if (!ts_node_is_null(parent) && strcmp(ts_node_type(parent), "method_signature") == 0) {
+            anchor = parent;
+        }
+    } else if (strcmp(kind, "method_signature") != 0) {
+        return node;
+    }
+    TSNode sib = ts_node_next_named_sibling(anchor);
+    if (!ts_node_is_null(sib) && strcmp(ts_node_type(sib), "function_body") == 0) {
+        return sib;
+    }
+    return node;
+}
+
 static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
 
@@ -7646,12 +7671,13 @@ static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec 
     }
     def.label = "Function";
     def.file_path = ctx->rel_path;
+    TSNode satori_end_node = satori_dart_def_end_node(ctx->language, node);
     def.start_line =
         ts_node_start_point(configured && ctx->language == CBM_LANG_C ? name_node : node).row +
         TS_LINE_OFFSET;
     def.start_byte = ts_node_start_byte(configured && ctx->language == CBM_LANG_C ? name_node : node);
-    def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;
-    def.end_byte = ts_node_end_byte(node);
+    def.end_line = ts_node_end_point(satori_end_node).row + TS_LINE_OFFSET;
+    def.end_byte = ts_node_end_byte(satori_end_node);
     def.lines = (int)(def.end_line - def.start_line + TS_LINE_OFFSET);
     def.is_exported = cbm_is_exported(name, ctx->language);
     if (ctx->language == CBM_LANG_RUST &&
@@ -10096,10 +10122,11 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, TSNode class_node,
     def.label = "Method";
     def.file_path = ctx->rel_path;
     def.parent_class = class_qn;
+    TSNode satori_end_node = satori_dart_def_end_node(ctx->language, child);
     def.start_line = ts_node_start_point(child).row + TS_LINE_OFFSET;
     def.start_byte = ts_node_start_byte(child);
-    def.end_line = ts_node_end_point(child).row + TS_LINE_OFFSET;
-    def.end_byte = ts_node_end_byte(child);
+    def.end_line = ts_node_end_point(satori_end_node).row + TS_LINE_OFFSET;
+    def.end_byte = ts_node_end_byte(satori_end_node);
     def.lines = (int)(def.end_line - def.start_line + TS_LINE_OFFSET);
     def.is_exported = cbm_is_exported(name, ctx->language);
     if (ctx->language == CBM_LANG_RUST &&

@@ -33,7 +33,6 @@ const closureFiles = [
     'internal/cbm/resolve_stats.h',
     'internal/cbm/ts_runtime.c',
     'internal/cbm/vendored/verstable/verstable.h',
-    'src/discover/test_conventions.c',
     'src/discover/test_conventions.h',
     'src/foundation/arena.c',
     'src/foundation/arena.h',
@@ -54,15 +53,13 @@ const closureFiles = [
     'src/simhash/minhash.c',
     'src/simhash/minhash.h',
     'vendored/xxhash/xxhash.h',
-    'vendored/yyjson/yyjson.c',
-    'vendored/yyjson/yyjson.h',
 ];
 const runtimeFiles = execFileSync('git', ['-C', cbmRoot, 'ls-tree', '-r', '--name-only', pinnedCommit, '--', 'internal/cbm/vendored/ts_runtime'], { encoding: 'utf8' })
     .trim().split('\n').filter((name) => /\.(?:c|h)$/.test(name));
 if (runtimeFiles.length < 30) throw new Error(`CBM extractor sync: incomplete tree-sitter runtime (${runtimeFiles.length} files)`);
 const sourceFiles = [...new Set([...closureFiles, ...runtimeFiles, 'LICENSE',
     'internal/cbm/vendored/ts_runtime/LICENSE', 'internal/cbm/vendored/verstable/LICENSE',
-    'vendored/xxhash/LICENSE', 'vendored/yyjson/LICENSE'])].sort();
+    'vendored/xxhash/LICENSE'])].sort();
 
 function source(name) {
     return execFileSync('git', ['-C', cbmRoot, 'show', `${pinnedCommit}:${name}`]);
@@ -96,22 +93,74 @@ function patchDefinitions(input) {
         },
     );
 
-    // 1) Multiline extract_func_def site.
+    // 1) Multiline extract_func_def site + Dart sibling function_body span helper.
     output = replaceExactOnce(
         output,
         '    def.start_line =\n' +
             '        ts_node_start_point(configured && ctx->language == CBM_LANG_C ? name_node : node).row +\n' +
             '        TS_LINE_OFFSET;\n' +
             '    def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;',
-        '    def.start_line =\n' +
+        '    TSNode satori_end_node = satori_dart_def_end_node(ctx->language, node);\n' +
+            '    def.start_line =\n' +
             '        ts_node_start_point(configured && ctx->language == CBM_LANG_C ? name_node : node).row +\n' +
             '        TS_LINE_OFFSET;\n' +
             '    def.start_byte = ts_node_start_byte(configured && ctx->language == CBM_LANG_C ? name_node : node);\n' +
-            '    def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;\n' +
-            '    def.end_byte = ts_node_end_byte(node);',
+            '    def.end_line = ts_node_end_point(satori_end_node).row + TS_LINE_OFFSET;\n' +
+            '    def.end_byte = ts_node_end_byte(satori_end_node);',
         'extract_func_def span',
     );
     pairs++;
+
+    // 1b) Dart sibling function_body span helper and push_method_def end-span extension.
+    output = replaceExactOnce(
+        output,
+        'static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {',
+        '/* Dart tree-sitter represents a function/method body as the next named\n' +
+            ' * sibling (`function_body`) of `function_signature` / `method_signature`.\n' +
+            ' * Extend the end span across that body so multiline declarations and\n' +
+            ' * extension members include their full body for outline/open_symbol. */\n' +
+            'static TSNode satori_dart_def_end_node(CBMLanguage lang, TSNode node) {\n' +
+            '    if (lang != CBM_LANG_DART) {\n' +
+            '        return node;\n' +
+            '    }\n' +
+            '    const char *kind = ts_node_type(node);\n' +
+            '    TSNode anchor = node;\n' +
+            '    if (strcmp(kind, "function_signature") == 0) {\n' +
+            '        TSNode parent = ts_node_parent(node);\n' +
+            '        if (!ts_node_is_null(parent) && strcmp(ts_node_type(parent), "method_signature") == 0) {\n' +
+            '            anchor = parent;\n' +
+            '        }\n' +
+            '    } else if (strcmp(kind, "method_signature") != 0) {\n' +
+            '        return node;\n' +
+            '    }\n' +
+            '    TSNode sib = ts_node_next_named_sibling(anchor);\n' +
+            '    if (!ts_node_is_null(sib) && strcmp(ts_node_type(sib), "function_body") == 0) {\n' +
+            '        return sib;\n' +
+            '    }\n' +
+            '    return node;\n' +
+            '}\n\n' +
+            'static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {',
+        'satori_dart_def_end_node helper',
+    );
+    output = replaceExactOnce(
+        output,
+        '    def.label = "Method";\n' +
+            '    def.file_path = ctx->rel_path;\n' +
+            '    def.parent_class = class_qn;\n' +
+            '    def.start_line = ts_node_start_point(child).row + TS_LINE_OFFSET;\n' +
+            '    def.start_byte = ts_node_start_byte(child);\n' +
+            '    def.end_line = ts_node_end_point(child).row + TS_LINE_OFFSET;\n' +
+            '    def.end_byte = ts_node_end_byte(child);',
+        '    def.label = "Method";\n' +
+            '    def.file_path = ctx->rel_path;\n' +
+            '    def.parent_class = class_qn;\n' +
+            '    TSNode satori_end_node = satori_dart_def_end_node(ctx->language, child);\n' +
+            '    def.start_line = ts_node_start_point(child).row + TS_LINE_OFFSET;\n' +
+            '    def.start_byte = ts_node_start_byte(child);\n' +
+            '    def.end_line = ts_node_end_point(satori_end_node).row + TS_LINE_OFFSET;\n' +
+            '    def.end_byte = ts_node_end_byte(satori_end_node);',
+        'push_method_def Dart body span',
+    );
 
     // 2) Elixir multi-clause folding + extract_elixir_func_def.
     output = replaceExactOnce(
@@ -201,8 +250,8 @@ const upstream = `# CBM definition extractor sources\n\n` +
     `These files are copied from that commit. Grammar sources are read from the pinned checkout during the build.\n\n` +
     `## Local patches\n\n` +
     `- \`internal/cbm/cbm.h\`: append \`start_byte\` and \`end_byte\` to \`CBMDefinition\`.\n` +
-    `- \`internal/cbm/extract_defs.c\`: set both byte spans at all ${spanSites} definition line-span sites and extend \`end_byte\` in \`fold_elixir_clause\`.\n` +
-    `- \`satori_extractor.c\` and \`satori_shim.c\` are Satori-owned ABI and link shims.\n\n` +
+    `- \`internal/cbm/extract_defs.c\`: set both byte spans at all ${spanSites} definition line-span sites, extend \`end_byte\` in \`fold_elixir_clause\`, and extend Dart \`function_signature\`/\`method_signature\` end spans across sibling \`function_body\` nodes.\n` +
+    `- \`satori_extractor.c\` and \`satori_shim.c\` are Satori-owned ABI and link shims (including \`cbm_test_declarations_{preset,items}\` stubs so \`test_conventions.c\` and \`yyjson\` are not vendored or linked).\n\n` +
     `## Vendored files\n\n${sourceFiles.map((name) => `- \`${name}\``).join('\n')}\n`;
 expected.set('UPSTREAM.md', Buffer.from(upstream));
 

@@ -141,7 +141,7 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
     parserDeclaredSearchOnlyLanguage({ languageId: 'gdscript', extensions: ['.gd'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'gitattributes', extensions: [], filenames: ['.gitattributes'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'gleam', extensions: ['.gleam'] }),
-    parserDeclaredSearchOnlyLanguage({ languageId: 'glsl', extensions: ['.frag', '.glsl', '.vert'] }),
+    parserDeclaredSearchOnlyLanguage({ languageId: 'glsl', extensions: ['.comp', '.frag', '.geom', '.glsl', '.tesc', '.tese', '.vert'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'gn', extensions: ['.gn', '.gni'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'gomod', extensions: [], filenames: ['go.mod'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'gotemplate', extensions: ['.gotmpl', '.tmpl', '.tpl'] }),

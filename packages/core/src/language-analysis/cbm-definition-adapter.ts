@@ -23,10 +23,21 @@ export function supportsCbmDefinitions(language: string, assetRoot?: string): bo
     return cbmExtractorHost(assetRoot).supports(language);
 }
 
+function stripCallableSignature(qualifiedName: string): string {
+    const paren = qualifiedName.indexOf('(');
+    return paren >= 0 && qualifiedName.endsWith(')') ? qualifiedName.slice(0, paren) : qualifiedName;
+}
+
 function parentPath(record: CbmDefinitionRecord): string[] {
+    if (record.parentClass) {
+        return record.parentClass.split('.').filter(Boolean);
+    }
     const suffix = `.${record.name}`;
-    if (!record.qualifiedName.endsWith(suffix)) return [];
-    return record.qualifiedName.slice(0, -suffix.length).split('.').filter(Boolean);
+    const candidate = record.qualifiedName.endsWith(suffix)
+        ? record.qualifiedName
+        : stripCallableSignature(record.qualifiedName);
+    if (!candidate.endsWith(suffix)) return [];
+    return candidate.slice(0, -suffix.length).split('.').filter(Boolean);
 }
 
 export function symbolsFromCbmDefinitions(

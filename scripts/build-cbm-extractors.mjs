@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,19 +35,20 @@ const sharedObjectSources = [
     'internal/cbm/helpers.c',
     'internal/cbm/lang_specs.c',
     'internal/cbm/ts_runtime.c',
-    'src/discover/test_conventions.c',
     'src/foundation/arena.c',
     'src/foundation/hash_table.c',
     'src/foundation/secure_random.c',
     'src/foundation/sha256.c',
     'src/semantic/ast_profile.c',
     'src/simhash/minhash.c',
-    'vendored/yyjson/yyjson.c',
     'satori_shim.c',
 ];
 const perLanguageSources = ['satori_extractor.c'];
-const fixedFlags = [
-    '-std=gnu11', '-D_GNU_SOURCE', '-O2', '-sSTACK_SIZE=8388608',
+const compileFlags = [
+    '-std=gnu11', '-D_GNU_SOURCE', '-O2', '-ffunction-sections', '-fdata-sections',
+];
+const linkFlags = [
+    '-Wl,--gc-sections', '-sSTACK_SIZE=8388608',
     '-sALLOW_MEMORY_GROWTH=1', '-sMAXIMUM_MEMORY=1073741824', '-sMODULARIZE=1',
     '-sEXPORT_NAME=createSatoriCbmExtractor', '-sENVIRONMENT=node',
     '-sEXPORTED_FUNCTIONS=["_satori_extract","_satori_result_ptr","_satori_result_len","_malloc","_free"]',
@@ -62,6 +63,35 @@ function findKnownFailure(failures, row, sourceSha256, memoryFailure, checkOnly)
     return failures.find((entry) => entry.cbmLanguage === row.cbmLanguage &&
         entry.sourceSha256 === sourceSha256 &&
         (checkOnly ? isMemoryFailureReason(entry.reason) : entry.reason === memoryFailure));
+}
+function resolveInitialGlue({ checkOnly, oldManifest, diskGlue, commit, hasReusableModule }) {
+    const diskGlueMatchesManifest = Boolean(
+        oldManifest?.glue && diskGlue && sha256(diskGlue) === oldManifest.glue.sha256,
+    );
+    if (checkOnly) {
+        if (oldManifest?.glue && !diskGlueMatchesManifest) fail('shipped glue differs from manifest');
+        return { glue: diskGlue, canReuseCache: true };
+    }
+    if (oldManifest && oldManifest.cbmCommit !== commit) {
+        return { glue: null, canReuseCache: false };
+    }
+    if (oldManifest?.glue && !diskGlueMatchesManifest) {
+        return { glue: null, canReuseCache: false };
+    }
+    if (!hasReusableModule) {
+        return { glue: null, canReuseCache: false };
+    }
+    return { glue: diskGlue, canReuseCache: true };
+}
+function writeFileAtomic(targetPath, contents) {
+    const tempPath = `${targetPath}.${process.pid}.tmp`;
+    try {
+        writeFileSync(tempPath, contents);
+        renameSync(tempPath, targetPath);
+    } catch (error) {
+        rmSync(tempPath, { force: true });
+        throw error;
+    }
 }
 function filesUnder(dir) {
     return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -125,7 +155,8 @@ const dirs = grammarDirectories();
 const sourceFiles = filesUnder(vendorRoot).filter((filename) => /\.(?:c|h|inc)$/.test(filename)).sort();
 const sharedHash = createHash('sha256');
 for (const filename of sourceFiles) hashFile(sharedHash, filename, path.relative(vendorRoot, filename));
-sharedHash.update(JSON.stringify(fixedFlags));
+sharedHash.update(JSON.stringify(compileFlags));
+sharedHash.update(JSON.stringify(linkFlags));
 sharedHash.update(emscripten);
 
 let oldManifest = null;
@@ -133,11 +164,7 @@ if (existsSync(manifestPath)) {
     try { oldManifest = JSON.parse(readFileSync(manifestPath, 'utf8')); }
     catch (error) { fail(`invalid existing manifest: ${error.message}`); }
 }
-let glue = existsSync(gluePath) ? readFileSync(gluePath) : null;
-if (oldManifest?.glue && (!glue || sha256(glue) !== oldManifest.glue.sha256)) fail('shipped glue differs from manifest');
-if (!checkOnly && oldManifest && oldManifest.cbmCommit !== commit) {
-    glue = null;
-}
+const diskGlue = existsSync(gluePath) ? readFileSync(gluePath) : null;
 if (!checkOnly) {
     const version = spawnSync('emcc', ['--version'], { encoding: 'utf8' });
     if (version.status !== 0 || !new RegExp(`\\b${emscripten.replaceAll('.', '\\.')}\\b`).test(version.stdout)) {
@@ -180,7 +207,7 @@ function ensureSharedObjects() {
         const sourcePath = path.join(vendorRoot, relativeName);
         const objectPath = path.join(sharedObjRoot, `${index}_${path.basename(relativeName, '.c')}.o`);
         const compileArgs = [
-            '-c', ...fixedFlags.slice(0, 3),
+            '-c', ...compileFlags,
             ...vendorIncludes.flatMap((include) => [`-I${include}`]),
             sourcePath, '-o', objectPath,
         ];
@@ -203,8 +230,8 @@ const startTime = Date.now();
 // SATORI_BUILD_ONLY=KOTLIN,LUA builds a subset for quick checks; the manifest
 // then lists only that subset, so finish with a full build before committing.
 const only = process.env.SATORI_BUILD_ONLY ? new Set(process.env.SATORI_BUILD_ONLY.split(',')) : null;
-try {
-for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLanguage)) : selected) {
+const targetRows = only ? selected.filter((candidate) => only.has(candidate.cbmLanguage)) : selected;
+const plans = targetRows.map((row) => {
     const matches = dirs.get(row.grammarFactory) ?? [];
     if (matches.length !== 1) fail(`${row.cbmLanguage}: expected one ${row.grammarFactory}(void) parser, found ${matches.length}`);
     const dir = matches[0];
@@ -225,8 +252,24 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
     const output = path.join(assetRoot, pack === 'core' ? '' : 'extended', file);
     const previous = oldManifest?.modules?.find((entry) => entry.cbmLanguage === row.cbmLanguage &&
         entry.sourceSha256 === sourceSha256 && entry.pack === pack && entry.file === file);
-    const cached = previous && existsSync(output) && previous.sizeBytes === statSync(output).size &&
-        previous.sha256 === moduleMetadata(output).sha256;
+    const cachedOnDisk = Boolean(previous && existsSync(output) && previous.sizeBytes === statSync(output).size &&
+        previous.sha256 === moduleMetadata(output).sha256);
+    return { row, dir, scannerC, stubs, sourceSha256, pack, file, output, previous, cachedOnDisk };
+});
+const initialGlueState = resolveInitialGlue({
+    checkOnly,
+    oldManifest,
+    diskGlue,
+    commit,
+    hasReusableModule: plans.some((plan) => plan.cachedOnDisk),
+});
+let glue = initialGlueState.glue;
+const canReuseCache = initialGlueState.canReuseCache;
+
+try {
+for (const plan of plans) {
+    const { row, dir, scannerC, stubs, sourceSha256, pack, file, output, previous, cachedOnDisk } = plan;
+    const cached = canReuseCache && cachedOnDisk;
     const knownFailure = findKnownFailure(oldManifest?.failures ?? [], row, sourceSha256, memoryFailure, checkOnly);
     if (knownFailure) {
         failures.push(knownFailure);
@@ -245,11 +288,11 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
             const includes = [...vendorIncludes, dir];
             const sources = perLanguageSources.map((name) => path.join(vendorRoot, name));
             const command = [
-                ...fixedFlags.slice(0, 3), `-DSATORI_CBM_LANG=CBM_LANG_${row.cbmLanguage}`,
+                ...compileFlags, `-DSATORI_CBM_LANG=CBM_LANG_${row.cbmLanguage}`,
                 ...includes.flatMap((include) => [`-I${include}`]), ...sources, tempStubs,
                 path.join(dir, 'parser.c'), ...(existsSync(scannerC) ? [scannerC] : []),
                 ...objects,
-                ...fixedFlags.slice(3), '-o', tempJs,
+                ...linkFlags, '-o', tempJs,
             ];
             let result = cappedEmcc(command);
             // Grammars whose static tables exceed the default 16 MiB initial
@@ -284,7 +327,6 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
             }
             glue = emittedGlue;
             copyFileSync(tempWasm, output);
-            if (!existsSync(gluePath) || !readFileSync(gluePath).equals(glue)) writeFileSync(gluePath, glue);
             built++;
             console.log(`built ${row.cbmLanguage} (${pack}, ${(statSync(output).size / 1048576).toFixed(2)} MiB)`);
         } finally {
@@ -306,7 +348,10 @@ if (checkOnly) {
     if (readFileSync(manifestPath, 'utf8') !== rendered) fail('manifest is stale');
     console.log(`Manifest current: ${modules.length} modules`);
 } else {
-    writeFileSync(manifestPath, rendered);
+    if (!existsSync(gluePath) || !readFileSync(gluePath).equals(glue)) {
+        writeFileAtomic(gluePath, glue);
+    }
+    writeFileAtomic(manifestPath, rendered);
     console.log(`Manifest written: ${modules.length} modules, ${built} built, ${reused} reused, ${((Date.now() - startTime) / 1000).toFixed(1)} s`);
 }
 const buildErrors = failures.filter((entry) => !isMemoryFailureReason(entry.reason));

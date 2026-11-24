@@ -746,11 +746,11 @@ test('Dart extensions survive the agent-visible outline and exact-symbol read pa
     const expected = new Map([
         ['Holder', { kind: 'class', label: 'class Holder', lines: [1, 4], text: 'class Holder {\n  final int value;\n  const Holder(this.value);\n}' }],
         ['HolderMath', { kind: 'class', label: 'class HolderMath', lines: [6, 10], text: "extension HolderMath on Holder {\n  int doubled() => value + value;\n  int tripled() => value + value + value;\n  String describeHolder() => 'holder';\n}" }],
-        ['HolderMath.doubled', { kind: 'method', label: 'method doubled', lines: [7, 7], text: 'int doubled()' }],
-        ['HolderMath.tripled', { kind: 'method', label: 'method tripled', lines: [8, 8], text: 'int tripled()' }],
-        ['HolderMath.describeHolder', { kind: 'method', label: 'method describeHolder', lines: [9, 9], text: 'String describeHolder()' }],
-        ['topLevelHelper', { kind: 'function', label: 'function topLevelHelper', lines: [12, 12], text: 'int topLevelHelper(int x)' }],
-        ['isShout', { kind: 'function', label: 'function isShout', lines: [15, 15], text: 'bool isShout()' }],
+        ['HolderMath.doubled', { kind: 'method', label: 'method doubled', lines: [7, 7], text: 'int doubled() => value + value;' }],
+        ['HolderMath.tripled', { kind: 'method', label: 'method tripled', lines: [8, 8], text: 'int tripled() => value + value + value;' }],
+        ['HolderMath.describeHolder', { kind: 'method', label: 'method describeHolder', lines: [9, 9], text: "String describeHolder() => 'holder';" }],
+        ['topLevelHelper', { kind: 'function', label: 'function topLevelHelper', lines: [12, 12], text: 'int topLevelHelper(int x) => x + 1;' }],
+        ['isShout', { kind: 'function', label: 'function isShout', lines: [15, 15], text: 'bool isShout() => this == toUpperCase();' }],
     ]);
     const outlined = new Map<string, FileOutlineSymbolResult>(
         (outlinePayload.outline.symbols as FileOutlineSymbolResult[]).map((symbol) => [symbol.qualifiedName, symbol]),
@@ -862,6 +862,141 @@ test('Dart extensions survive the agent-visible outline and exact-symbol read pa
         const content = payload.source.excerpts[0].content;
         assert.equal(content, sourceLines[record.span.startLine - 1], qualifiedName);
         assert.equal(content.trim(), declaration, qualifiedName);
+    }
+});
+
+test('Dart multiline block-body extensions preserve full spans through file_outline and read_file(open_symbol)', async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'file-outline-dart-multiline-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const relativeFile = 'lib/multiline.dart';
+    const absoluteFile = path.join(root, relativeFile);
+    const source = [
+        'extension Accumulator on int {',
+        '  int scaled(int factor) {',
+        '    final total = this * factor;',
+        '    return total;',
+        '  }',
+        '}',
+        '',
+        'extension on String {',
+        '  String shoutWrapped() {',
+        '    final upper = toUpperCase();',
+        '    return "[$upper]";',
+        '  }',
+        '}',
+        '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(absoluteFile), { recursive: true });
+    fs.writeFileSync(absoluteFile, source, 'utf8');
+
+    const analysis = await createLanguageAnalysisService().analyze({
+        content: source,
+        language: 'dart',
+        relativePath: relativeFile,
+    });
+    const fileBytes = Buffer.from(source, 'utf8');
+    const fileHash = crypto.createHash('sha256').update(fileBytes).digest('hex');
+    const records = buildSymbolRecordsForFile({
+        relativePath: relativeFile,
+        language: 'dart',
+        content: source,
+        fileHash,
+        extractorVersion: 'test',
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+
+    const outlinePayload = await buildRegistryFileOutlinePayload({
+        codebaseRoot: root,
+        file: relativeFile,
+        symbols: records,
+        limitSymbols: 500,
+        resolveMode: 'outline',
+        buildCallGraphHint: () => ({ supported: false, reason: 'test' }) as never,
+        buildOutlineSpanWarningCodes: () => [],
+        readSourceLines: async () => undefined,
+    });
+    const outlined = new Map<string, FileOutlineSymbolResult>(
+        (outlinePayload.outline!.symbols as FileOutlineSymbolResult[]).map((symbol) => [symbol.qualifiedName, symbol]),
+    );
+    assert.deepEqual([outlined.get('Accumulator.scaled')!.span.startLine, outlined.get('Accumulator.scaled')!.span.endLine], [2, 5]);
+    assert.deepEqual([outlined.get('shoutWrapped')!.span.startLine, outlined.get('shoutWrapped')!.span.endLine], [9, 12]);
+
+    const snapshot: PreparedSymbolContextSnapshot = {
+        canonicalRoot: root,
+        registryManifestIdentity: 'dart-ml-manifest',
+        registry: buildDartRegistry(root, records),
+        navigationAuthority: 'remote_generation_proven',
+        relationships: {
+            status: 'available',
+            authority: 'remote_generation_proven',
+            manifestIdentity: 'dart-ml-rel',
+            callers: { edges: [], availableCount: 0, suppressedCount: 0, suppressionNotes: [] },
+            callees: { edges: [], availableCount: 0, suppressedCount: 0, suppressionNotes: [] },
+        },
+        validateAuthority: async () => true,
+    };
+    const publication = { publication: { canonicalRoot: root } };
+    const readCtx = {
+        readFileMaxLines: 200,
+        workspacePolicy: buildWorkspacePolicy([root]),
+        context: {
+            listCurrentPublications: () => [publication],
+            getCurrentPublication: (codebaseRoot: string) => codebaseRoot === root ? publication : undefined,
+            getPublicationSourceCheckpoint: () => ({ fileHashes: [[relativeFile, fileHash]] }),
+            hasSearchableGeneration: () => true,
+            getCurrentSearchGeneration: () => ({ generationId: 'gen-1', compatibility: 'compatible' }),
+        },
+        mutationRuntime: { listActiveMutations: () => [], getOperation: () => undefined },
+        syncManager: { touchWatchedCodebase: async () => undefined },
+        toolHandlers: {
+            composeSymbolContext: async (input: ComposeSymbolContextInput) => composeSymbolContext(input, {
+                prepareSnapshot: async () => ({ status: 'ready', snapshot }),
+                prepareSource: async () => ({
+                    status: 'available',
+                    evidence: {
+                        canonicalRoot: root,
+                        relativeFile,
+                        sourceBytes: fileBytes,
+                        source,
+                        sourceByteLength: fileBytes.length,
+                        observedHash: fileHash,
+                        identity: {
+                            platform: 'linux',
+                            stableIdentity: 'dart-ml-fixture',
+                            canonicalRelativePath: relativeFile,
+                            strength: 'target_only',
+                        },
+                        selectionCapabilities: {
+                            localLexical: 'available',
+                            lineWindows: 'available',
+                            syntaxBoundaries: 'unavailable_streaming_source',
+                            controlFlowAnchors: 'unavailable_streaming_source',
+                        },
+                    },
+                    finalizer: {
+                        finalize: async () => ({ status: 'available', freshness: 'current_at_final_observation' }),
+                        release: async () => undefined,
+                    },
+                }),
+            }),
+        },
+    } as unknown as ToolContext;
+
+    for (const [qualifiedName, expectedLines] of [
+        ['Accumulator.scaled', ['  int scaled(int factor) {', '    final total = this * factor;', '    return total;', '  }']],
+        ['shoutWrapped', ['  String shoutWrapped() {', '    final upper = toUpperCase();', '    return "[$upper]";', '  }']],
+    ] as const) {
+        const record = records.find((entry) => entry.qualifiedName === qualifiedName);
+        assert.ok(record, qualifiedName);
+        const response = await readFileTool.execute({
+            path: absoluteFile,
+            codebaseRoot: root,
+            open_symbol: { contractVersion: 2, symbolId: record.symbolInstanceId },
+        }, readCtx);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'ok', qualifiedName);
+        assert.equal(payload.source.excerpts[0].content, expectedLines.join('\n'), qualifiedName);
     }
 });
 

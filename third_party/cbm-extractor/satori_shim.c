@@ -1,3 +1,4 @@
+#include "discover/test_conventions.h"
 #include "foundation/arena.h"
 #include "foundation/constants.h"
 #include "foundation/log.h"
@@ -139,4 +140,16 @@ bool cbm_diagram_fence_is_diagram(const char *source, TSNode block) {
 }
 const char *cbm_diagram_fence_labels(CBMExtractCtx *ctx, TSNode block) {
     (void)ctx; (void)block; return NULL;
+}
+bool cbm_test_declarations_preset(const cbm_test_declarations_t *declarations,
+                                  cbm_test_preset_t preset, bool *enabled) {
+    (void)declarations; (void)preset;
+    if (enabled) *enabled = false;
+    return false;
+}
+const cbm_test_declaration_t *cbm_test_declarations_items(
+    const cbm_test_declarations_t *declarations, int *count) {
+    (void)declarations;
+    if (count) *count = 0;
+    return NULL;
 }

@@ -86,11 +86,11 @@ test('Dart extensions and unnamed extension members yield CBM symbols with exact
     const expected = new Map([
         ['Holder', { kind: 'class', parents: [], span: [1, 4], text: 'class Holder {\n  final int value;\n  const Holder(this.value);\n}' }],
         ['HolderMath', { kind: 'class', parents: [], span: [6, 10], text: "extension HolderMath on Holder {\n  int doubled() => value + value;\n  int tripled() => value + value + value;\n  String describeHolder() => 'holder';\n}" }],
-        ['HolderMath.doubled', { kind: 'method', parents: ['HolderMath'], span: [7, 7], text: 'int doubled()' }],
-        ['HolderMath.tripled', { kind: 'method', parents: ['HolderMath'], span: [8, 8], text: 'int tripled()' }],
-        ['HolderMath.describeHolder', { kind: 'method', parents: ['HolderMath'], span: [9, 9], text: 'String describeHolder()' }],
-        ['topLevelHelper', { kind: 'function', parents: [], span: [12, 12], text: 'int topLevelHelper(int x)' }],
-        ['isShout', { kind: 'function', parents: [], span: [15, 15], text: 'bool isShout()' }],
+        ['HolderMath.doubled', { kind: 'method', parents: ['HolderMath'], span: [7, 7], text: 'int doubled() => value + value;' }],
+        ['HolderMath.tripled', { kind: 'method', parents: ['HolderMath'], span: [8, 8], text: 'int tripled() => value + value + value;' }],
+        ['HolderMath.describeHolder', { kind: 'method', parents: ['HolderMath'], span: [9, 9], text: "String describeHolder() => 'holder';" }],
+        ['topLevelHelper', { kind: 'function', parents: [], span: [12, 12], text: 'int topLevelHelper(int x) => x + 1;' }],
+        ['isShout', { kind: 'function', parents: [], span: [15, 15], text: 'bool isShout() => this == toUpperCase();' }],
     ]);
     assert.deepEqual(symbols.map((symbol) => symbol.qualifiedName), [...expected.keys()]);
     const bytes = Buffer.from(DART_HOLDER_SOURCE, 'utf8');
@@ -108,4 +108,111 @@ test('Dart extensions and unnamed extension members yield CBM symbols with exact
         const lineText = lines.slice(symbol.span.startLine - 1, symbol.span.endLine).join('\n');
         assert.ok(lineText.trim().startsWith(want.text), qualifiedName);
     }
+});
+
+test('Dart multiline block-body named and unnamed extensions capture full method and function bodies', async (context) => {
+    if (!supportsCbmDefinitions('dart')) {
+        context.skip('Dart CBM extractor module is not built');
+        return;
+    }
+    const source = [
+        'extension Accumulator on int {',
+        '  int scaled(int factor) {',
+        '    final total = this * factor;',
+        '    return total;',
+        '  }',
+        '}',
+        '',
+        'extension on String {',
+        '  String shoutWrapped() {',
+        '    final upper = toUpperCase();',
+        '    return "[$upper]";',
+        '  }',
+        '}',
+        '',
+    ].join('\n');
+    const symbols = await analyzeWithCbmDefinitions({
+        content: source,
+        relativePath: 'lib/multiline_ext.dart',
+        language: 'dart',
+    });
+    const byQn = new Map(symbols.map((symbol) => [symbol.qualifiedName, symbol]));
+    const bytes = Buffer.from(source, 'utf8');
+
+    const scaled = byQn.get('Accumulator.scaled');
+    assert.ok(scaled);
+    assert.equal(scaled.kind, 'method');
+    assert.deepEqual(scaled.parentQualifiedNamePath, ['Accumulator']);
+    assert.deepEqual([scaled.span.startLine, scaled.span.endLine], [2, 5]);
+    assert.equal(
+        bytes.subarray(scaled.span.startByte, scaled.span.endByte).toString('utf8'),
+        'int scaled(int factor) {\n    final total = this * factor;\n    return total;\n  }',
+    );
+
+    const shoutWrapped = byQn.get('shoutWrapped');
+    assert.ok(shoutWrapped);
+    assert.equal(shoutWrapped.kind, 'function');
+    assert.deepEqual(shoutWrapped.parentQualifiedNamePath, []);
+    assert.deepEqual([shoutWrapped.span.startLine, shoutWrapped.span.endLine], [9, 12]);
+    assert.equal(
+        bytes.subarray(shoutWrapped.span.startByte, shoutWrapped.span.endByte).toString('utf8'),
+        'String shoutWrapped() {\n    final upper = toUpperCase();\n    return "[$upper]";\n  }',
+    );
+});
+
+test('Swift class, nested struct, and labeled/typed methods preserve parentQualifiedNamePath', async (context) => {
+    const synthetic = symbolsFromCbmDefinitions([
+        {
+            label: 'Method',
+            name: 'run',
+            qualifiedName: 'Outer.Inner.run(withLabel:Foundation.URL)',
+            parentClass: 'Outer.Inner',
+            startLine: 3,
+            endLine: 3,
+            startByte: 0,
+            endByte: 10,
+        },
+        {
+            label: 'Function',
+            name: 'helper',
+            qualifiedName: 'Outer.helper(x:Swift.Int)',
+            parentClass: '',
+            startLine: 4,
+            endLine: 4,
+            startByte: 0,
+            endByte: 10,
+        },
+    ], 'func run()\n\n\n\n');
+    assert.deepEqual(synthetic.map((s) => [s.qualifiedName, s.parentQualifiedNamePath]), [
+        ['Outer.Inner.run', ['Outer', 'Inner']],
+        ['Outer.helper', ['Outer']],
+    ]);
+
+    if (!supportsCbmDefinitions('swift')) {
+        context.skip('Swift CBM extractor module is not built');
+        return;
+    }
+    const content = [
+        'class Outer {',
+        '    struct Inner {',
+        '        func run(with label: String, count: Int) -> Int {',
+        '            return count',
+        '        }',
+        '    }',
+        '    func greet(to name: String) -> String {',
+        '        return name',
+        '    }',
+        '}',
+        '',
+    ].join('\n');
+    const symbols = await analyzeWithCbmDefinitions({
+        content,
+        relativePath: 'Sources/Outer.swift',
+        language: 'swift',
+    });
+    const byQn = new Map(symbols.map((symbol) => [symbol.qualifiedName, symbol]));
+    assert.deepEqual(byQn.get('Outer')?.parentQualifiedNamePath, []);
+    assert.deepEqual(byQn.get('Outer.Inner')?.parentQualifiedNamePath, ['Outer']);
+    assert.deepEqual(byQn.get('Outer.Inner.run')?.parentQualifiedNamePath, ['Outer', 'Inner']);
+    assert.deepEqual(byQn.get('Outer.greet')?.parentQualifiedNamePath, ['Outer']);
 });

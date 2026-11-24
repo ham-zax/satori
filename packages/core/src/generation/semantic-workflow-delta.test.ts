@@ -17,6 +17,7 @@ import {
 } from '../symbols';
 import { DefaultSemanticLanguageRegistry } from '../semantic/descriptor';
 import { WasmSemanticProjectAnalyzer } from '../semantic/wasm/wasm-analyzer';
+import { assertSyncMatchesFullIndex, SYNC_EQUIVALENCE_SETTINGS } from './index-equivalence-harness';
 
 function sha256(content: string): string {
     return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
@@ -912,4 +913,33 @@ func Login() string {
     assert.equal(apiCall.decision, 'resolved');
     assert.equal(authCall.sourceFile, 'main.go');
     assert.equal(apiCall.sourceFile, 'main.go');
+});
+
+test('C/C++ incremental delta matches cold full index across direct/transitive #include edits, deletion, and newly resolvable headers', async () => {
+    const initial = {
+        'include/base.h': 'int add(int, int);\n',
+        'include/mid.h': '#include "base.h"\n',
+        'src/util.c': 'int add(int a, int b) { return a + b; }\n',
+        'src/main.c': '#include "mid.h"\nint main() { return add(1, 2); }\n',
+        'include/cpp_api.hpp': 'namespace api { int calc(int x); }\n',
+        'src/cpp_impl.cpp': 'namespace api { int calc(int x) { return x + 1; } }\n',
+        'src/cpp_main.cpp': '#include "../include/cpp_api.hpp"\nint run() { return api::calc(5); }\n',
+    };
+    const edits: Array<[string, (root: string) => void]> = [
+        ['direct header edit', (root) => {
+            fs.writeFileSync(path.join(root, 'include/cpp_api.hpp'), 'namespace other { int calc(int x); }\n');
+        }],
+        ['transitive header edit', (root) => {
+            fs.writeFileSync(path.join(root, 'include/base.h'), '#ifdef FEATURE\nint add(int, int);\n#endif\n');
+        }],
+        ['header deletion', (root) => {
+            fs.rmSync(path.join(root, 'include/base.h'));
+        }],
+        ['newly resolvable header', (root) => {
+            fs.writeFileSync(path.join(root, 'include/base.h'), 'int add(int, int);\n');
+        }],
+    ];
+    await assertSyncMatchesFullIndex('cpp-header-includers', initial, edits, true, false, [
+        SYNC_EQUIVALENCE_SETTINGS.baseline,
+    ]);
 });

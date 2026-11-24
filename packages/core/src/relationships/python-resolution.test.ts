@@ -1142,3 +1142,174 @@ test('argument caches preserve different parameter positions and per-run input s
     ));
     assert.equal(changedInput.registry.symbolsByInstanceId.get(invoke?.targetInstanceId ?? '')?.name, 'second');
 });
+
+test('resolvePythonRelationships targets own and inherited __init__ and falls back to class when absent', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/base.py': [
+            'class Base:',
+            '    def __init__(self, value):',
+            '        self.value = value',
+        ].join('\n'),
+        'pkg/models.py': [
+            'from pkg.base import Base',
+            '',
+            'class Inherited(Base):',
+            '    pass',
+            '',
+            'class Own:',
+            '    def __init__(self):',
+            '        pass',
+            '',
+            'class Plain:',
+            '    pass',
+            '',
+            'def build():',
+            '    Base(1)',
+            '    Inherited(2)',
+            '    Own()',
+            '    Plain()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const calls = result.records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [
+            record.span?.startLine,
+            symbolsById.get(record.targetInstanceId ?? '')?.file,
+            symbolsById.get(record.targetInstanceId ?? '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId ?? '')?.kind,
+            record.confidence,
+        ]);
+    assert.deepEqual(calls, [
+        [14, 'pkg/base.py', 'Base.__init__', 'method', 'low'],
+        [15, 'pkg/base.py', 'Base.__init__', 'method', 'low'],
+        [16, 'pkg/models.py', 'Own.__init__', 'method', 'high'],
+        [17, 'pkg/models.py', 'Plain', 'class', 'low'],
+    ]);
+});
+
+test('resolvePythonRelationships invalidates global-rebound module names while keeping read-only global declarations', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/a.py': 'class R:\n    def save(self): pass\n',
+        'pkg/b.py': 'class R:\n    def save(self): pass\n',
+        'pkg/rebind_import.py': [
+            'from pkg.a import R',
+            'def setup():',
+            '    global R',
+            '    from pkg.b import R',
+            'def use(x: R):',
+            '    x.save()',
+            'def call_it():',
+            '    R()',
+        ].join('\n'),
+        'pkg/rebind_assign.py': [
+            'from pkg.a import R',
+            'def use(x: R):',
+            '    x.save()',
+            'def call_it():',
+            '    R()',
+            'def setup():',
+            '    global R',
+            '    R = object',
+        ].join('\n'),
+        'pkg/readonly_global.py': [
+            'from pkg.a import R',
+            'def setup():',
+            '    global R',
+            '    return R',
+            'def use(x: R):',
+            '    x.save()',
+            'def call_it():',
+            '    R()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const calls = result.records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [
+            record.file,
+            symbolsById.get(record.sourceInstanceId ?? '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId ?? '')?.file,
+            symbolsById.get(record.targetInstanceId ?? '')?.qualifiedName,
+        ]);
+    assert.deepEqual(calls, [
+        ['pkg/readonly_global.py', 'use', 'pkg/a.py', 'R.save'],
+        ['pkg/readonly_global.py', 'call_it', 'pkg/a.py', 'R'],
+    ]);
+});
+
+test('resolvePythonRelationships resolves @overload implementations and fails closed on conflicting overload aliases', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/other.py': 'def wrap(fn): return fn\n',
+        'pkg/resp.py': [
+            'from typing import overload, overload as ovl',
+            'import typing as t',
+            'class Response:',
+            '    @overload',
+            '    def __init__(self, body: str): ...',
+            '    def __init__(self, body): pass',
+            '    @overload',
+            '    def replace(self, cls: type) -> "Response": ...',
+            '    @overload',
+            '    def replace(self, cls: None = None) -> "Response": ...',
+            '    def replace(self, cls=None): pass',
+            '    @ovl',
+            '    def opts(self, a: int): ...',
+            '    def opts(self, a): pass',
+            '@t.overload',
+            'def fn(x: int) -> int: ...',
+            'def fn(x): return x',
+            '@overload',
+            'def stub_only(x: int) -> int: ...',
+        ].join('\n'),
+        'pkg/conflict.py': [
+            'from typing import overload as ovl',
+            'from pkg.other import wrap as ovl',
+            '@ovl',
+            'def cfn(x: int) -> int: ...',
+            'def cfn(x): return x',
+            'def use_local():',
+            '    cfn(1)',
+        ].join('\n'),
+        'pkg/shadowed.py': [
+            'from typing import overload as ovl',
+            'def ovl(fn): return fn',
+            '@ovl',
+            'def sfn(x: int) -> int: ...',
+            'def sfn(x): return x',
+            'def use_local():',
+            '    sfn(1)',
+        ].join('\n'),
+        'pkg/use.py': [
+            'from pkg.resp import Response, fn, stub_only',
+            'from pkg.conflict import cfn',
+            'from pkg.shadowed import sfn',
+            'def run():',
+            '    fn(1)',
+            '    stub_only(1)',
+            '    cfn(1)',
+            '    sfn(1)',
+            '    r = Response("hi")',
+            '    r.replace(cls=None)',
+            '    r.opts(1)',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const calls = result.records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [
+            record.file,
+            record.span?.startLine,
+            symbolsById.get(record.targetInstanceId ?? '')?.file,
+            symbolsById.get(record.targetInstanceId ?? '')?.qualifiedName,
+        ]);
+    assert.deepEqual(calls, [
+        ['pkg/use.py', 5, 'pkg/resp.py', 'fn'],
+        ['pkg/use.py', 9, 'pkg/resp.py', 'Response.__init__'],
+        ['pkg/use.py', 10, 'pkg/resp.py', 'Response.replace'],
+        ['pkg/use.py', 11, 'pkg/resp.py', 'Response.opts'],
+    ]);
+});

@@ -2951,3 +2951,31 @@ test('cancelling yielded relationship work publishes neither records nor partial
         assert.deepEqual(input.analysisByFile, originalEvidence);
     }
 });
+
+test('buildRelationshipDelta updates multi-file inherited Python constructor targets when base __init__ changes', async () => {
+    const initial = await buildAnalyzedPythonRegistry({
+        'pkg/base.py': 'class Base:\n    pass\n',
+        'pkg/child.py': 'from pkg.base import Base\nclass Child(Base):\n    pass\n',
+        'pkg/app.py': 'from pkg.child import Child\ndef run():\n    Child()\n',
+    });
+    const initialRecords = buildRelationshipsForRegistry(initial);
+    const initialTarget = initialRecords.find((record) => record.type === 'CALLS' && record.file === 'pkg/app.py');
+    assert.equal(initial.registry.symbolsByInstanceId.get(initialTarget?.targetInstanceId ?? '')?.qualifiedName, 'Child');
+
+    const updated = await buildAnalyzedPythonRegistry({
+        'pkg/base.py': 'class Base:\n    def __init__(self):\n        pass\n',
+        'pkg/child.py': 'from pkg.base import Base\nclass Child(Base):\n    pass\n',
+        'pkg/app.py': 'from pkg.child import Child\ndef run():\n    Child()\n',
+    });
+    const delta = buildRelationshipDelta({
+        ...updated,
+        previousRegistry: initial.registry,
+        previousAnalysisByFile: initial.analysisByFile,
+        existingRecords: initialRecords,
+        changedFiles: new Set(['pkg/base.py']),
+    });
+    const full = buildRelationshipsForRegistry(updated);
+    assert.deepEqual(delta.records, full);
+    const updatedTarget = delta.records.find((record) => record.type === 'CALLS' && record.file === 'pkg/app.py');
+    assert.equal(updated.registry.symbolsByInstanceId.get(updatedTarget?.targetInstanceId ?? '')?.qualifiedName, 'Base.__init__');
+});

@@ -898,6 +898,7 @@ export class NavigationHandlers {
                     })),
                 },
                 coverage: result.coverage,
+                ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
                 warnings,
                 ...(freshnessDecision ? { freshnessDecision } : {}),
                 message: result.path

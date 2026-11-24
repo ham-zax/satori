@@ -201,3 +201,51 @@ test('trace_path rejects a lease that differs from the prepared Publication', as
     assert.equal(read, false);
     assert.equal(released, true);
 });
+
+test('trace_path forwards additive recursion and possibleOverrides diagnostics when present', async () => {
+    const lease = {
+        id: 'leased-publication',
+        publication: { id: 'leased-publication', canonicalRoot: '/repo' },
+        release: () => {},
+    } as PublicationLease;
+    const diagnostics = {
+        recursion: {
+            state: 'confirmed' as const,
+            sourceSelfRecursive: true,
+            targetSelfRecursive: false,
+            cycleObserved: false,
+        },
+        possibleOverrides: {
+            status: 'unavailable' as const,
+            reason: 'no_override_evidence' as const,
+            targets: [] as [],
+        },
+    };
+    const handler = new NavigationHandlers({
+        prepareNavigationRead: async () => ({
+            state: 'ready',
+            root: { path: '/repo', info: { status: 'indexed' } },
+            publication: { id: 'leased-publication' },
+            navigationStatus: 'valid',
+        }) as Awaited<ReturnType<Host['prepareNavigationRead']>>,
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationAddress: () => ({ publicationId: lease.id, navigationRoot: '/snap/navigation' }),
+        tracePath: async () => ({
+            status: 'ok',
+            path: null,
+            coverage: { visitedNodes: 1, traversedEdges: 0, truncated: false, truncatedBy: [] },
+            diagnostics,
+            warnings: [],
+        }),
+        stringifyToolJson: JSON.stringify,
+    } as unknown as Host);
+
+    const response = await handler.handleTracePath({
+        path: '/repo', sourceSymbolId: 'a', targetSymbolId: 'b',
+        relationshipKinds: ['CALLS'], maxDepth: 3, maxVisitedNodes: 100, maxTraversedEdges: 500,
+    });
+    const payload = JSON.parse(response.content[0]!.text);
+    assert.equal(payload.status, 'ok');
+    assert.deepEqual(payload.diagnostics, diagnostics);
+});

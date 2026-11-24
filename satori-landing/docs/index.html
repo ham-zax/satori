@@ -631,10 +631,10 @@
         </a>
         <div class="nav-links">
           <a href="../index.html#how-it-works">Product</a>
+          <a href="../index.html#calculator">Savings</a>
           <a href="../index.html#ranking">Ranking</a>
-          <a href="../index.html#use-cases">Use cases</a>
+          <a href="../index.html#teams">Teams</a>
           <a href="index.html" aria-current="page">Docs</a>
-          <a href="../architecture.html">Architecture</a>
           <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer" class="cta-contact">GitHub</a>
         </div>
       </nav>
@@ -655,6 +655,7 @@
         <nav class="quick-links docs-path-links" aria-label="Docs learning path">
           <a href="#start">Start here</a>
           <a href="#concepts">Concepts</a>
+          <a href="#benchmarks">Benchmarks</a>
           <a href="#workflow">Workflows</a>
           <a href="#tools">Tools</a>
           <a href="#lifecycle">Operations</a>
@@ -1084,6 +1085,58 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
         </div>
       </section>
 
+      <section class="section" id="benchmarks">
+        <h2>Measured Benchmarks (100% Local Offline)</h2>
+        <p class="lede">
+          Paired protocol v4 agent-discovery results on the 100% local offline stack
+          (<code>Potion-code-16M-v2</code> + <code>LanceDB</code> + <code>LateOn-Code-edge</code> on CPU,
+          zero external search or reranker API calls), plus Phase 4A/4B retrieval and projection measurements.
+        </p>
+        <h3>Agent Discovery: Offline Satori vs Guarded Native Search (v4)</h3>
+        <p>
+          Claive + Pi, DeepSeek V4.1 Flash (<code>xhigh</code> reasoning), 3 alternating repetitions per task
+          (12 runs total; all-run medians). Both arms shared identical production-root bounds, 24-call safety
+          ceilings, and 32 KiB result caps.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Task</th><th>Arm</th><th>Strict v4 Pass</th><th>Tool Calls</th><th>Source Call</th><th>Total Input Tokens</th><th>Reasoning Tokens</th><th>Wall Time</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>unknown-freshness-reuse</code></td><td>Native (guarded)</td><td>0/3</td><td>25</td><td>24 [16–26]</td><td>201,905</td><td>6,975</td><td>151.4 s</td></tr>
+              <tr><td><code>unknown-freshness-reuse</code></td><td><strong>Satori (offline)</strong></td><td><strong>3/3</strong></td><td><strong>5 (-80.0%)</strong></td><td><strong>2 [2–2]</strong></td><td><strong>37,549 (-81.4%)</strong></td><td><strong>1,571 (-77.5%)</strong></td><td><strong>58.2 s (-61.6%)</strong></td></tr>
+              <tr><td><code>known-exact-target</code></td><td>Native (guarded)</td><td>2/3</td><td>13</td><td>3 [3–3]</td><td>77,784</td><td>2,504</td><td>73.5 s</td></tr>
+              <tr><td><code>known-exact-target</code></td><td><strong>Satori (offline)</strong></td><td><strong>3/3</strong></td><td><strong>9 (-30.8%)</strong></td><td><strong>2 [2–2]</strong></td><td><strong>72,022 (-7.4%)</strong></td><td><strong>1,257 (-49.8%)</strong></td><td><strong>52.3 s (-28.8%)</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Combined strict pass rate: <strong>6/6 (100%)</strong> for offline Satori vs <strong>2/6 (33.3%)</strong> for native search
+          (combined medians: <strong>-59.9%</strong> input tokens, <strong>-57.6%</strong> calls, <strong>-46.3%</strong> reasoning tokens, <strong>-35.0%</strong> wall time).
+          Satori recorded <strong>0 wrong code claims</strong>, <strong>0 budget overflows</strong>, and <strong>0 protocol violations</strong>.
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-11-23.md" target="_blank" rel="noopener noreferrer">Full v4 report and raw 12-run table</a>.
+        </p>
+
+        <h3>Phase 4A &amp; 4B: Offline Ranking Accuracy &amp; Projection Speed</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Metric</th><th>Before Phase 4</th><th>After Phase 4</th><th>Delta</th><th>Scope</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Strict symbol <code>hit@1</code></td><td>25/58</td><td><strong>30/58</strong></td><td><strong>+20% (+5)</strong></td><td>5 pinned repos (React, FlatBuffers, Polars, Gin, Flask)</td></tr>
+              <tr><td><code>hit@5</code> / <code>hit@10</code></td><td>41/58 · 47/58</td><td><strong>45/58 · 51/58</strong></td><td><strong>+4 · +4 (0 new misses)</strong></td><td>Same 58 live offline MCP queries</td></tr>
+              <tr><td>Mean Reciprocal Rank (MRR)</td><td>0.5478</td><td><strong>0.6203</strong></td><td><strong>+0.0725</strong></td><td>Same 58 live offline MCP queries</td></tr>
+              <tr><td>Rerank projection (128 docs)</td><td>235.80 ms</td><td><strong>72.11 ms</strong></td><td><strong>-69.4%</strong></td><td>5-run median, real React candidates, 0/128 diffs</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/phase4-ranking-speed-and-flash-handoff-plan-2026-11-21.md" target="_blank" rel="noopener noreferrer">Inspect the Phase 4 measurements and replay gates</a>.
+        </p>
+      </section>
+
       <section class="section" id="reranker">
         <h2>Choose a Reranker</h2>
         <p class="lede">
@@ -1142,11 +1195,11 @@ satori reranker status</code></pre>
           </table>
         </div>
         <p>
-          28 plain-English questions over React, Polars, and FlatBuffers, with
-          Potion embeddings and the same index for every row. Three runs per row on
-          one WSL2 laptop. Times are the reranker alone and include the network for
-          Voyage. The canonical projection sends about 60% more bytes, so Voyage
-          uses the free quota faster.
+          28 plain-English questions over React, Polars, and FlatBuffers (pre-Phase-4 apples-to-apples
+          comparison), with Potion embeddings and the same index for every row. Three runs per row on
+          one WSL2 laptop. Times are the reranker alone and include the network for Voyage. See
+          <a href="#benchmarks">Measured Benchmarks</a> above for the Phase 4A 58-query 5-repo offline LateOn
+          update (30/58 first, 51/58 top 10, MRR 0.6203).
         </p>
         <div class="callout">
           <p>

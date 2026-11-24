@@ -8,27 +8,27 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29d" />
   <title>Satori | Semantic Code Search for Coding Agents</title>
   <meta name="description"
-    content="Free, open-source semantic code search for coding agents. Ask where behavior lives in plain English; Satori finds the owning code and exact source, locally through MCP." />
+    content="Stop burning 2.5x-5x agent tokens on grep loops. 100% local offline semantic code search &amp; call graphs via MCP: 6/6 vs 2/6 verified pass rate, -80.0% tool calls, -81.4% tokens, -61.6% wall time." />
   <meta name="keywords" content="Satori, MCP server, AI coding agents, repository intelligence, semantic code search, call graph, code navigation, Codex, Claude Code, OpenCode, LanceDB" />
   <meta name="robots" content="index,follow" />
   <meta name="theme-color" content="#0b0b0c" />
   <link rel="canonical" href="https://satori.hamza.my.id/" />
   <meta property="og:title" content="Satori | Semantic Code Search for Coding Agents" />
-  <meta property="og:description" content="Ask where behavior lives in plain English. Satori finds relevant code and owning symbols, then lets coding agents verify the result in exact source, locally through MCP." />
+  <meta property="og:description" content="Stop burning 2.5x-5x tokens on grep loops. Measured 100% offline: 6/6 vs 2/6 verified pass rate, -80.0% tool calls, -81.4% tokens, -77.5% reasoning, -61.6% wall time." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://satori.hamza.my.id/" />
   <meta property="og:site_name" content="Satori" />
-  <meta property="og:image" content="https://satori.hamza.my.id/og-image.png" />
+  <meta property="og:image" content="https://satori.hamza.my.id/og-image.png?v=2026-11-23b" />
   <meta property="og:image:type" content="image/png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
+  <meta property="og:image:alt" content="Satori: 100% offline semantic code search for coding agents. 6/6 vs 2/6 verified pass rate, -80.0% tool calls, -81.4% tokens, -61.6% wall time." />
   <meta property="og:locale" content="en_US" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Satori | Semantic Code Search for Coding Agents" />
-  <meta name="twitter:description" content="Ask where behavior lives in plain English. Satori finds relevant code and owning symbols, then lets coding agents verify the result in exact source, locally through MCP." />
-  <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.png" />
-  <meta name="twitter:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
+  <meta name="twitter:description" content="Stop burning 2.5x-5x tokens on grep loops. Measured 100% offline: 6/6 vs 2/6 verified pass rate, -80.0% tool calls, -81.4% tokens, -77.5% reasoning, -61.6% wall time." />
+  <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.png?v=2026-11-23b" />
+  <meta name="twitter:image:alt" content="Satori: 100% offline semantic code search for coding agents. 6/6 vs 2/6 verified pass rate, -80.0% tool calls, -81.4% tokens, -61.6% wall time." />
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -130,7 +130,7 @@
     href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="brand.css?v=2026-10-21a" />
-  <link rel="stylesheet" href="home.css?v=2026-10-27e" />
+  <link rel="stylesheet" href="home.css?v=2026-11-23d" />
   <script>document.documentElement.classList.add("js");</script>
 </head>
 
@@ -150,10 +150,10 @@
       </a>
       <div class="nav-links">
         <a href="#how-it-works" aria-current="page">Product</a>
+        <a href="#calculator">Savings</a>
         <a href="#ranking">Ranking</a>
-        <a href="#use-cases">Use cases</a>
+        <a href="#teams">Teams</a>
         <a href="docs/index.html">Docs</a>
-        <a href="architecture.html">Architecture</a>
         <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer" class="cta-contact">GitHub</a>
       </div>
     </nav>
@@ -169,7 +169,7 @@
             <span class="line"><span class="word">Follow</span> <span class="word">the</span> <span class="word">evidence<span class="seal-dot" aria-hidden="true"></span></span></span>
           </h1>
           <p class="hero-lede" data-reveal style="--i:6">
-            Ask in plain English. Your agent gets the function that owns the behavior, who calls it, and what to read next. Free, open source, and local.
+            Stop burning 2.5&times;&ndash;5&times; your tokens on grep loops. Ask in plain English&mdash;get the owning function, callers, and exact source, 100% locally.
           </p>
           <div class="hero-actions" data-reveal style="--i:7">
             <a class="btn primary" href="#quickstart">Try it on a repo <span class="btn-arrow" aria-hidden="true">&rarr;</span></a>
@@ -179,48 +179,88 @@
               <button class="copy-btn" data-copy-target="hero-install-code" aria-label="Copy install command">Copy</button>
             </div>
           </div>
-          <a class="text-link hero-watch" href="#demo" data-play-demo data-reveal style="--i:8">Watch it find the right code in Ollama (34 s) <span aria-hidden="true">&rarr;</span></a>
-          <p class="hero-proof" data-reveal style="--i:9">Measured on DeepSeek V4.1 Flash: <strong>-72.5% tokens</strong>, <strong>-69.6% tool calls</strong>, <strong>-41.5% wall time</strong>. <a href="#plain">See the benchmark &rarr;</a></p>
+          <a class="text-link hero-watch" href="#demo" data-play-demo data-reveal style="--i:8">Watch offline Satori vs native grep (30 s) <span aria-hidden="true">&rarr;</span></a>
+          <p class="hero-proof" data-reveal style="--i:9">Measured 100% offline on DeepSeek V4.1 Flash: <strong>6/6 vs 2/6 verified pass rate</strong>, <strong>-80.0% tool calls</strong>, <strong>-81.4% tokens</strong>, <strong>-77.5% reasoning</strong>, <strong>-61.6% wall time</strong>. <a href="#calculator">Calculate your waste &rarr;</a></p>
         </div>
 
-        <figure class="ask" id="ask" aria-label="Example: Satori answering a repository question" data-reveal style="--i:3">
-          <div class="ask-bar">
-            <span class="ask-label">Ask</span>
-            <p class="ask-q"><span class="ask-typed" data-text="Where is auth refresh handled, what owns it, and what should I read first?">Where is auth refresh handled, what owns it, and what should I read first?</span><span class="caret" aria-hidden="true"></span></p>
+        <figure class="ask" id="ask" data-mode="satori" aria-label="Interactive comparison: Satori offline vs native grep on a real repository question" data-reveal style="--i:3">
+          <div class="ask-head">
+            <div class="ask-switch" role="tablist" aria-label="Compare discovery mode">
+              <button type="button" class="ask-tab" role="tab" data-ask-mode="satori" aria-selected="true">With Satori</button>
+              <button type="button" class="ask-tab" role="tab" data-ask-mode="native" aria-selected="false" tabindex="-1">Native grep</button>
+            </div>
+            <span class="ask-stat-pill" data-ask-stat>5 calls &middot; 37.5k tokens</span>
           </div>
 
-          <ol class="ask-stages" aria-label="Retrieval stages">
-            <li data-stage="0">Search</li>
-            <li data-stage="1">Owner</li>
-            <li data-stage="2">Trace</li>
-            <li data-stage="3">Source</li>
-          </ol>
+          <div class="ask-bar">
+            <span class="ask-label">Ask</span>
+            <p class="ask-q"><span class="ask-typed" data-text="Where is tracked-root readiness re-proved after source freshness?">Where is tracked-root readiness re-proved after source freshness?</span><span class="caret" aria-hidden="true"></span></p>
+          </div>
 
-          <div class="ask-body">
-            <ul class="ask-candidates" aria-label="Candidate files">
-              <li class="is-owner"><code>src/auth/refresh.ts</code><span class="hit">semantic + lexical</span></li>
-              <li><code>src/session/store.ts</code><span class="hit">semantic</span></li>
-              <li><code>src/http/middleware.ts</code><span class="hit">lexical</span></li>
-              <li><code>config/security.ts</code><span class="hit">config key</span></li>
-            </ul>
+          <div class="ask-panel" data-ask-panel="satori">
+            <ol class="ask-stages" aria-label="Retrieval stages">
+              <li data-stage="0">Search</li>
+              <li data-stage="1">Owner</li>
+              <li data-stage="2">Trace</li>
+              <li data-stage="3">Source</li>
+            </ol>
 
-            <div class="ask-result">
-              <div class="ask-result-head">
-                <span class="ask-result-kind">Owner, rank 1</span>
-                <span class="hanko" aria-hidden="true">悟</span>
-              </div>
-              <strong class="ask-symbol">AuthRefreshCoordinator<wbr>.refresh</strong>
-              <code class="ask-span">src/auth/refresh.ts:84-146</code>
-              <div class="ask-next">
-                <span>outline</span><span>callers</span><span>exact source</span>
+            <div class="ask-body">
+              <ul class="ask-candidates" aria-label="Ranked candidates">
+                <li class="is-owner"><code>search-frontdoor.ts</code><span class="hit">semantic + LateOn &middot; call 1</span></li>
+                <li><code>tracked-root-readiness.ts</code><span class="hit">semantic</span></li>
+                <li><code>handlers.ts</code><span class="hit">semantic</span></li>
+                <li><code>search-request-coordinator.ts</code><span class="hit">caller edge</span></li>
+              </ul>
+
+              <div class="ask-result">
+                <div class="ask-result-head">
+                  <span class="ask-result-kind">Owner &middot; call 1</span>
+                  <span class="hanko" aria-hidden="true">悟</span>
+                </div>
+                <strong class="ask-symbol">runSearchFrontDoor</strong>
+                <code class="ask-span">search-frontdoor.ts:207-345</code>
+                <div class="ask-next">
+                  <span>caller: executeSearchAttempt</span><span>call 2 source</span><span>outline</span>
+                </div>
               </div>
             </div>
           </div>
 
+          <div class="ask-panel ask-panel-native" data-ask-panel="native" hidden>
+            <ol class="ask-stages ask-stages-native" aria-label="Native grep stages">
+              <li data-nstage="0">Grep &times;20</li>
+              <li data-nstage="1">Find &times;2</li>
+              <li data-nstage="2">Read @24</li>
+              <li data-nstage="3">25 calls</li>
+            </ol>
+
+            <ul class="ask-native-log" aria-label="Native grep trace">
+              <li><span class="n-cmd">$ grep &quot;tracked-root readiness&quot;</span><span class="n-out">0 hits</span></li>
+              <li><span class="n-cmd">$ grep &quot;previous Publication&quot;</span><span class="n-out">44 hits</span></li>
+              <li><span class="n-cmd">$ grep &quot;freshness&quot; packages/mcp/src</span><span class="n-out">140+ hits</span></li>
+              <li class="is-warn"><span class="n-cmd">[call 24] 24-call budget hit&hellip;</span><span class="n-out">span unread</span></li>
+              <li class="is-err"><span class="n-cmd">&times; 0 of 3 native runs passed unknown task</span><span class="n-out">201.9k tokens</span></li>
+            </ul>
+          </div>
+
+          <div class="ask-contrast" aria-label="Measured v4 comparison">
+            <div class="ask-meter-row is-satori">
+              <span class="ask-meter-name">Satori</span>
+              <span class="ask-meter-track"><span class="ask-meter-fill" style="--w:20%"></span></span>
+              <span class="ask-meter-val">5 calls &middot; 37.5k tok</span>
+            </div>
+            <div class="ask-meter-row is-native">
+              <span class="ask-meter-name">Grep</span>
+              <span class="ask-meter-track"><span class="ask-meter-fill" style="--w:100%"></span></span>
+              <span class="ask-meter-val">25 calls &middot; 201.9k tok</span>
+            </div>
+          </div>
+
           <figcaption class="ask-foot">
-            <span><i class="fresh-dot" aria-hidden="true"></i>Freshness: current</span>
-            <span>One coherent Publication</span>
-            <button class="ask-replay" type="button" aria-label="Replay the example">Replay</button>
+            <span><i class="fresh-dot" aria-hidden="true"></i>100% local offline</span>
+            <span>Real v4 trace &middot; -80.0% calls</span>
+            <button class="ask-replay" type="button" aria-label="Replay the trace">Replay</button>
           </figcaption>
         </figure>
       </section>
@@ -240,70 +280,194 @@
         <span class="works-note">No account. Beta: Linux x64, ARM64, and WSL2.</span>
       </div>
 
-      <section class="section plain-section" id="plain" data-chapter="In plain words">
+      <section class="section plain-section" id="plain" data-chapter="Proof">
         <h2>Agents write fast. They search badly.</h2>
         <p class="section-intro">
-          In a large project, an agent greps, opens whole files, and edits before it reaches the part that matters. Satori is the map it checks first.
+          Without a code index, your agent burns quota on blind grep loops, reads partial spans, and misses callers. Satori hands it verified evidence first.
         </p>
-        <div class="plain-compare">
-          <article class="plain-card" data-reveal style="--i:0">
-            <h3 class="minor">Without Satori</h3>
-            <ul>
-              <li>A keyword search returns dozens of matches.</li>
-              <li>Whole files fill the agent&rsquo;s context.</li>
-              <li>It edits after reading half a function.</li>
-              <li>It misses code that depends on the old behavior.</li>
-            </ul>
-          </article>
-          <article class="plain-card is-with" data-reveal style="--i:1">
-            <h3 class="minor">With Satori</h3>
-            <ul>
-              <li>One question in plain English.</li>
-              <li>The owning function, ranked near the top.</li>
-              <li>That function in full, with its file outline.</li>
-              <li>Its callers, before the edit.</li>
-            </ul>
-          </article>
-        </div>
         <dl class="plain-metrics" data-reveal>
           <div class="plain-metric">
-            <dt>Input tokens</dt>
+            <dt>Verified pass rate</dt>
             <dd>
-              <span class="plain-metric-figure">-72.5%</span>
-              <span class="plain-metric-detail">17,463 vs 63,576 tokens</span>
+              <span class="plain-metric-figure">6/6 vs 2/6</span>
+              <span class="plain-metric-detail">100% vs 33% strict v4 &middot; 0 wrong claims</span>
             </dd>
           </div>
           <div class="plain-metric">
             <dt>Tool calls</dt>
             <dd>
-              <span class="plain-metric-figure">-69.6%</span>
-              <span class="plain-metric-detail">7 vs 23 calls; source read at call 2 vs 16</span>
+              <span class="plain-metric-figure">-80.0%</span>
+              <span class="plain-metric-detail">5 vs 25 calls &middot; source at call 2 vs 24</span>
+            </dd>
+          </div>
+          <div class="plain-metric">
+            <dt>Input tokens</dt>
+            <dd>
+              <span class="plain-metric-figure">-81.4%</span>
+              <span class="plain-metric-detail">37.5k vs 201.9k &middot; -77.5% reasoning</span>
             </dd>
           </div>
           <div class="plain-metric">
             <dt>Wall time</dt>
             <dd>
-              <span class="plain-metric-figure">-41.5%</span>
-              <span class="plain-metric-detail">84.2 s vs 143.9 s</span>
+              <span class="plain-metric-figure">-61.6%</span>
+              <span class="plain-metric-detail">58.2 s vs 151.4 s &middot; $0 local offline</span>
             </dd>
           </div>
         </dl>
+
+        <div class="plain-receipts" data-reveal>
+          <article class="receipt-card">
+            <div class="receipt-head">
+              <span class="receipt-tag">Native grep/read receipts</span>
+              <code>4 of 6 failed v4</code>
+            </div>
+            <ul class="receipt-list">
+              <li><b>Off-by-one span (<code>known-r1</code>):</b> reported line <code>661</code> instead of <code>660</code> after 6 chunked reads.</li>
+              <li><b>Budget blowout (<code>unknown-r2</code>):</b> burned <code>26</code> calls, <code>197k</code> tokens, and exited <code>budget_exhausted</code> with no owner symbol.</li>
+              <li><b>Reasoning spiral (<code>unknown-r3</code>):</b> hit the 24-call cap before reading the span, burned <code>17k</code> reasoning tokens (<code>288 s</code>), and truncated.</li>
+            </ul>
+          </article>
+          <article class="receipt-card is-satori">
+            <div class="receipt-head">
+              <span class="receipt-tag">Offline Satori receipts</span>
+              <code>6/6 strict v4 pass</code>
+            </div>
+            <ul class="receipt-list">
+              <li><b>Target at call 1, source at call 2 (<code>6/6</code>):</b> exact AST owner span before reading a line.</li>
+              <li><b>Proven callers via <code>call_graph</code>:</b> verified <code>executeSearchAttempt</code> without 20 blind greps.</li>
+              <li><b>100% pass rate, zero overflows:</b> <code>3/3</code> on unknown behavior and <code>3/3</code> on exact targets with zero wrong code claims.</li>
+            </ul>
+          </article>
+        </div>
+
         <p class="plain-metrics-note" data-reveal>
-          All figures compare Satori with native search on the valid paired OpenCode benchmark (protocol v3, DeepSeek V4.1 Flash, Potion embeddings, Voyage <code>rerank-3</code>). The strip comes from the <code>unknown-freshness-reuse</code> task, where each arm answered 1 of 3 runs correctly. On the <code>known-exact-target</code> task Satori saved 25.2% input tokens and 57.1% tool calls, with 3/3 correct runs against 2/3.
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-10-26.md" target="_blank" rel="noopener noreferrer">Read the method and raw tables</a>.
+          Paired protocol v4 benchmark (DeepSeek V4.1 Flash <code>xhigh</code>, 12 runs, 100% local offline Potion + LanceDB + LateOn on CPU vs guarded native search).
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-11-23.md" target="_blank" rel="noopener noreferrer">Read the method &amp; raw tables &rarr;</a>
         </p>
-        <p class="plain-analogy">
-          Satori is the colleague who has read the whole project: &ldquo;That lives here. These places use it. Read this first.&rdquo;
+      </section>
+
+      <section class="section journey-section" id="demo" data-chapter="Demo">
+        <h2>From 25 grep calls to verified source in 5.</h2>
+        <p class="section-intro">
+          Real protocol v4 trace: watch 201.9k native tokens collapse into four verified offline Satori layers.
         </p>
+
+        <figure class="demo-video">
+          <video id="demo-video" controls muted playsinline loop preload="none"
+            poster="media/satori-demo-poster.jpg?v=2026-11-23b" width="1920" height="1080"
+            aria-describedby="demo-video-summary">
+            <source src="media/satori-demo.webm?v=2026-11-23b" type="video/webm" />
+            <source src="media/satori-demo.mp4?v=2026-11-23b" type="video/mp4" />
+          </video>
+          <figcaption id="demo-video-summary">
+            30-second real v4 offline trace (<code>unknown-freshness-reuse</code>): target at call 1, source at call 2, caller proven in 5 calls (-80.0% calls, -81.4% tokens, -61.6% time).
+          </figcaption>
+        </figure>
+
+        <a class="text-link" href="docs/index.html#benchmarks">Inspect the full v4 &amp; Phase 4 benchmark tables <span aria-hidden="true">&rarr;</span></a>
+      </section>
+
+      <section class="section calc-section" id="calculator" data-chapter="Waste calculator" data-calculator>
+        <div class="calc-head">
+          <h2>See what grep loops are costing your quota.</h2>
+          <p class="section-intro">
+            Every unguided discovery task burns 2.6&times;&ndash;5.4&times; the tokens and up to 4.4&times; the reasoning&mdash;hitting Pro/Max limits faster and inflating API bills.
+          </p>
+        </div>
+
+        <div class="calc-shell">
+          <div class="calc-controls">
+            <div class="calc-group">
+              <span class="calc-label" id="calc-plan-label">Billing or plan</span>
+              <div class="calc-pills" role="group" aria-labelledby="calc-plan-label" data-calc-plans>
+                <button type="button" class="calc-pill" data-plan="sonnet" aria-pressed="true">Sonnet-class <small>$3 / $15</small></button>
+                <button type="button" class="calc-pill" data-plan="opus" aria-pressed="false">Opus-class <small>$15 / $75</small></button>
+                <button type="button" class="calc-pill" data-plan="codex" aria-pressed="false">Codex-class <small>$2.50 / $10</small></button>
+                <button type="button" class="calc-pill" data-plan="quota" aria-pressed="false">Pro / Max cap <small>5-hr quota</small></button>
+              </div>
+            </div>
+
+            <div class="calc-group">
+              <span class="calc-label" id="calc-mix-label">Task mix</span>
+              <div class="calc-pills" role="group" aria-labelledby="calc-mix-label" data-calc-mix>
+                <button type="button" class="calc-pill" data-mix="blended" aria-pressed="true">50/50 blended <small>-60.8% tokens</small></button>
+                <button type="button" class="calc-pill" data-mix="unknown" aria-pressed="false">Unknown behavior <small>-81.4% tokens</small></button>
+              </div>
+            </div>
+
+            <div class="calc-sliders">
+              <label class="calc-slider-row" for="calc-devs">
+                <span class="calc-slider-top">
+                  <span>Engineers using agents</span>
+                  <output id="calc-devs-out" for="calc-devs">5</output>
+                </span>
+                <input id="calc-devs" type="range" min="1" max="50" step="1" value="5" />
+              </label>
+
+              <label class="calc-slider-row" for="calc-tasks">
+                <span class="calc-slider-top">
+                  <span>Discovery tasks / engineer / day</span>
+                  <output id="calc-tasks-out" for="calc-tasks">15</output>
+                </span>
+                <input id="calc-tasks" type="range" min="2" max="40" step="1" value="15" />
+              </label>
+            </div>
+          </div>
+
+          <dl class="calc-outputs" aria-live="polite">
+            <div class="calc-card is-primary">
+              <dt data-calc-primary-label>Monthly API spend wasted on grep loops</dt>
+              <dd>
+                <span class="calc-figure" data-calc-primary>$195 / mo</span>
+                <span class="calc-detail" data-calc-primary-sub>$2,344 / yr recovered &middot; 2.6&times; quota headroom</span>
+              </dd>
+            </div>
+            <div class="calc-card">
+              <dt>Tokens kept out of context / mo</dt>
+              <dd>
+                <span class="calc-figure" data-calc-tokens>147.0M</span>
+                <span class="calc-detail" data-calc-tokens-sub>140.3M input &middot; 6.7M output (5.5M reasoning)</span>
+              </dd>
+            </div>
+            <div class="calc-card">
+              <dt>Wait time &amp; tool calls cut / mo</dt>
+              <dd>
+                <span class="calc-figure" data-calc-time>26.3 hrs</span>
+                <span class="calc-detail" data-calc-time-sub>19,800 redundant grep/read calls eliminated</span>
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="calc-foot">
+          <p class="calc-note">
+            Based on November 23 v4 medians (22 workdays/mo, cache reads at 0.1&times; input rate, <strong>$0</strong> offline Satori search API cost).
+            <a href="docs/index.html#benchmarks">See exact formula &amp; tables &rarr;</a>
+          </p>
+          <div class="calc-actions">
+            <div class="install-pill calc-install-pill" role="group" aria-label="Install command">
+              <span class="install-prompt" aria-hidden="true">$</span>
+              <code id="calc-install-code">npx -y @satori-code/cli@latest install</code>
+              <button class="copy-btn" data-copy-target="calc-install-code" aria-label="Copy install command">Copy</button>
+            </div>
+            <a class="btn" href="#teams">Team rollout (3 slots/mo)</a>
+          </div>
+        </div>
       </section>
 
       <section class="section strata-section" id="how-it-works" data-chapter="How it works">
         <div class="strata-head">
-          <h2>One question. Four layers. One repository state.</h2>
+          <h2>One question. Four layers. One snapshot.</h2>
           <p>
-            Every answer comes from one Publication, a single indexed snapshot of the repository.
-            Search, owners, calls, and source always agree.
+            Every answer comes from one atomic Publication&mdash;search, owners, calls, and exact source always agree. Incremental sync keeps it current on disk with zero cloud calls.
           </p>
+          <dl class="strata-facts">
+            <div><dt>Exact lookup</dt><dd>14&ndash;65 ms p50</dd></div>
+            <div><dt>Offline stack</dt><dd>Potion &middot; BM25 &middot; LateOn &middot; LanceDB</dd></div>
+            <div><dt>Navigation</dt><dd>11 languages &middot; ~140 searched</dd></div>
+          </dl>
+          <a class="text-link" href="architecture.html">Inspect the architecture <span aria-hidden="true">&rarr;</span></a>
         </div>
         <div class="strata" role="list" aria-label="Satori repository intelligence layers">
           <span class="strata-ink" aria-hidden="true"></span>
@@ -327,79 +491,17 @@
             <span class="stratum-key">Trace</span>
             <div>
               <h3>Supported relationships</h3>
-              <p>Callers, callees, imports, and exports, only when the parser can prove them.</p>
+              <p>Callers, callees, imports, and exports&mdash;fail-closed when ambiguous.</p>
             </div>
             <code>advisory, conservative, fail-closed</code>
           </article>
           <article class="stratum" role="listitem" data-reveal>
             <span class="stratum-key">Truth</span>
             <div>
-              <h3>Freshness + Publication authority</h3>
-              <p>Source checkpoints, runtime compatibility, and atomic swaps to the next snapshot.</p>
+              <h3>Freshness + atomic Publications</h3>
+              <p>Source checkpoints and background incremental sync with read-only repo access.</p>
             </div>
             <code>know which repo state answered</code>
-          </article>
-        </div>
-      </section>
-
-      <section class="section journey-section" id="demo" data-chapter="Demo">
-        <h2>From a human question to source evidence.</h2>
-        <p class="section-intro">
-          No exact identifier needed. Satori narrows the search in stages, and each stage points at real source.
-        </p>
-
-        <figure class="demo-video">
-          <video id="demo-video" controls muted playsinline loop preload="none"
-            poster="media/satori-demo-poster.jpg" width="1920" height="1080"
-            aria-describedby="demo-video-summary">
-            <source src="media/satori-demo.webm" type="video/webm" />
-            <source src="media/satori-demo.mp4" type="video/mp4" />
-          </video>
-          <figcaption id="demo-video-summary">
-            Real run on ollama/ollama: 1,138 files indexed offline in 30 seconds. Asked where the 5-minute keep-alive default is set,
-            Satori found <code>envconfig.KeepAlive()</code>, its caller, and the source. A grep-driven edit landed in the wrong place.
-            Indexing is sped up.
-          </figcaption>
-        </figure>
-
-        <a class="text-link" href="docs/index.html#workflow">See semantic code search in an agent <span aria-hidden="true">&rarr;</span></a>
-      </section>
-
-      <section class="section bento-section" id="why" data-chapter="Why Satori">
-        <h2>Less reading. Better answers.</h2>
-        <p class="section-intro">
-          A few simple tools, backed by the code-intelligence stack your MCP host would otherwise rebuild.
-        </p>
-        <div class="bento">
-          <article class="tile tile-speed" data-reveal style="--i:0">
-            <h3>Fast exact lookups</h3>
-            <p class="tile-figure"><span>14-65</span><small>ms p50</small></p>
-            <p>Exact symbol lookup on five pinned repositories, fully offline.</p>
-          </article>
-          <article class="tile tile-offline" data-reveal style="--i:1">
-            <h3>Offline after install</h3>
-            <p>Embeddings, search, storage, and reranking run on your machine. No model API key.</p>
-          </article>
-          <article class="tile" data-reveal style="--i:2">
-            <h3>Reranking that finds owners</h3>
-            <p>LateOn puts the owning code first, locally. It doubled first-hit accuracy in our 36-task test. <a class="tile-link" href="#ranking">See how ranking works</a>.</p>
-          </article>
-          <article class="tile tile-langs" data-reveal style="--i:0">
-            <h3>Parser-derived repository structure</h3>
-            <p>Symbols, exact spans, and call navigation in nine production languages, plus Kotlin and PHP.</p>
-          </article>
-          <article class="tile" data-reveal style="--i:1">
-            <h3>Token-efficient by design</h3>
-            <p>Exact spans instead of whole files, so context goes to the code that matters.</p>
-          </article>
-          <article class="tile tile-wide" data-reveal style="--i:0">
-            <div>
-              <h3>One coherent Publication</h3>
-              <p>Search, symbols, structure, and calls go live together. Ambiguous relationships fail closed.</p>
-            </div>
-            <ol class="publication-strip" aria-label="Layers that activate together">
-              <li>search</li><li>symbols</li><li>structure</li><li>calls</li>
-            </ol>
           </article>
         </div>
       </section>
@@ -407,47 +509,25 @@
       <section class="section ranking-section" id="ranking" data-chapter="Ranking">
         <h2>Built to put the owning code first.</h2>
         <p class="section-intro">
-          If the right file comes back at rank seven, your agent reads six wrong files first. Satori ranks for the code that owns the behavior.
+          If the right file lands at rank seven, your agent reads six wrong files first. Satori ranks for the function that owns the behavior.
         </p>
-        <ol class="rank-pipeline" aria-label="How a question becomes ranked owners">
-          <li data-reveal style="--i:0">
-            <b>Retrieve three ways</b>
-            <span>Embeddings, BM25, and exact symbols, so paraphrases and identifiers both land.</span>
-          </li>
-          <li data-reveal style="--i:1">
-            <b>Search the agent&rsquo;s guesses</b>
-            <span>Up to four <code>alt_terms</code> from the agent, each searched and fused with the question.</span>
-          </li>
-          <li data-reveal style="--i:2">
-            <b>Vote for definitions</b>
-            <span>Code that defines a symbol outranks code that only mentions it.</span>
-          </li>
-          <li data-reveal style="--i:3">
-            <b>Rerank with context</b>
-            <span>Up to 64 candidates, with role, callers, callees, and tests. LateOn on your CPU, or Voyage in the cloud.</span>
-          </li>
-          <li data-reveal style="--i:4">
-            <b>Return exact evidence</b>
-            <span>The owning span, its file outline, and call paths to follow.</span>
-          </li>
-        </ol>
 
         <div class="rank-results">
           <article data-reveal style="--i:0">
-            <p class="rank-figure">0.19 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 0.39</p>
-            <p>Owner ranked first with LateOn. 36 tasks, 6 repositories.</p>
+            <p class="rank-figure">25 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 30 / 58</p>
+            <p>Strict symbol hit@1 (+20%) offline across 5 repos (51/58 top-10, MRR 0.6203, 0 new misses).</p>
           </article>
           <article data-reveal style="--i:1">
-            <p class="rank-figure">16 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 34</p>
-            <p>Owners in the top 10 with agent <code>alt_terms</code>. 46 questions. Median 2.7 s to 2.9 s.</p>
+            <p class="rank-figure">236 ms <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 72 ms</p>
+            <p>Rerank projection (-69.4%) on 128 real React docs via Phase 4B fast path (0/128 diffs).</p>
           </article>
           <article data-reveal style="--i:2">
-            <p class="rank-figure">4 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 13</p>
-            <p>Named symbols at rank 1 with definition fusion and LateOn, against no reranker. 19 questions, 4 repositories.</p>
+            <p class="rank-figure">1.86 s <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 1.22 s</p>
+            <p>LateOn on 64 candidates, adaptive session pool on CPU. Identical scores.</p>
           </article>
           <article data-reveal style="--i:3">
-            <p class="rank-figure">1.86 s <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 1.22 s</p>
-            <p>LateOn on 64 candidates, adaptive session pool, 8-core Ryzen 7 3800X. Identical scores.</p>
+            <p class="rank-figure">6/6 vs 2/6</p>
+            <p>Strict v4 agent-discovery pass rate, 100% local offline (-80.0% calls, -81.4% tokens).</p>
           </article>
         </div>
 
@@ -455,29 +535,27 @@
         <div class="rank-choices">
           <article class="rank-choice" data-reveal style="--i:0">
             <h3>LateOn <small>default, offline</small></h3>
-            <p>Runs on your CPU. Code stays local. 13 of 28 owners first, median rerank 2.58 s.</p>
+            <p>Runs locally on CPU. 30/58 owners first, 51/58 in top 10 (MRR 0.6203) across 5 repos.</p>
             <pre><code>satori reranker use lateon</code></pre>
           </article>
           <article class="rank-choice is-featured" data-reveal style="--i:1">
-            <h3 class="voyage-title"><svg viewBox="0 0 155 39" fill="none" role="img" aria-label="Voyage AI" class="voyage-logo" focusable="false"><path d="M35.0157 32.0543H34.0915L33.874 31.8368L26.6161 14.9561C26.453 14.6027 26.1812 14.3309 25.7191 14.3309H25.0938L24.8764 14.1134V13.2436L25.0938 13.0261H30.7751L30.9926 13.2436V14.1134L30.7751 14.3309H30.1499C29.6606 14.3309 29.4703 14.5755 29.4703 14.8745C29.4703 15.0648 29.5247 15.2551 29.6062 15.4726L35.2332 28.6292L40.9144 15.4726C40.996 15.2551 41.0503 15.0648 41.0503 14.8745C41.0503 14.5755 40.8873 14.3309 40.398 14.3309H39.7727L39.5553 14.1134V13.2436L39.7727 13.0261H44.0405L44.258 13.2436V14.1134L44.0405 14.3309H43.4968C43.0619 14.3309 42.6813 14.5483 42.4367 15.092L35.2332 31.8368L35.0157 32.0543ZM50.0592 32.4348C46.1449 32.4348 43.0188 29.635 43.0188 25.34C43.0188 21.0451 46.1449 18.2452 50.0592 18.2452C53.9736 18.2452 57.0997 21.0451 57.0997 25.34C57.0997 29.635 53.9736 32.4348 50.0592 32.4348ZM50.0592 31.0757C52.9135 31.0757 54.7619 28.8739 54.7619 25.34C54.7619 21.8062 52.9135 19.6044 50.0592 19.6044C47.205 19.6044 45.3565 21.8062 45.3565 25.34C45.3565 28.8739 47.205 31.0757 50.0592 31.0757ZM62.6321 38.1977H61.7078L61.2457 37.953L60.9739 37.1919V36.8657L64.4805 31.4291L59.2885 20.4743C59.1526 20.2024 58.8808 19.9306 58.473 19.9306H57.9566L57.7391 19.7131V18.8433L57.9566 18.6258H62.9039L63.1214 18.8433V19.7131L62.9039 19.9306H62.469C62.034 19.9306 61.8438 20.1481 61.8438 20.4743C61.8438 20.6374 61.8981 20.8548 62.0069 21.0723L65.7853 29.0098L69.455 21.0723C69.5638 20.8548 69.6453 20.6102 69.6453 20.4471C69.6453 20.1209 69.4007 19.9306 68.9929 19.9306H68.4493L68.2318 19.7131V18.8433L68.4493 18.6258H72.4995L72.717 18.8433V19.7131L72.4995 19.9306H72.0374C71.5209 19.9306 71.2491 20.2024 71.0588 20.6374L62.9583 37.8715L62.6321 38.1977ZM87.7162 30.7495H88.2055L88.4229 30.967V31.8368L88.2055 32.0543H84.8347L84.6173 31.8368V29.6078C83.2581 31.8368 81.3825 32.4348 79.6156 32.4348C76.408 32.4348 73.2547 30.3146 73.2547 25.34C73.2547 20.882 76.408 18.2452 79.7515 18.2452C82.2252 18.2452 83.7202 19.4685 84.5357 20.6374H84.6716L85.7862 18.6258H86.5745L86.7919 18.8433V29.8253C86.7919 30.3689 87.1725 30.7495 87.7162 30.7495ZM79.9961 31.1572C82.9319 31.1572 84.4542 28.3574 84.4542 25.34C84.4542 22.2955 82.9319 19.5229 79.9961 19.5229C76.9788 19.5229 75.5381 22.2955 75.5381 25.34C75.5381 28.3574 76.9788 31.1572 79.9961 31.1572ZM98.5085 18.6258H103.102L103.347 18.8705V19.9306L103.102 20.1753L100.574 19.985C101.471 20.882 101.988 21.9965 101.988 23.3285C101.988 26.1284 99.5143 28.4389 96.0892 28.4389C95.2465 28.4389 94.4038 28.2215 93.6427 27.8681C93.099 28.1127 92.501 28.4661 92.501 28.9282C92.501 29.635 93.4524 29.8253 94.7572 29.8253H98.2367C101.091 29.8253 102.967 31.2116 102.967 33.6037C102.967 36.8113 99.5686 38.5782 95.9533 38.5782C92.3651 38.5782 90.3264 36.9201 90.3264 34.7182C90.3264 33.4678 91.0875 32.1902 92.3651 31.4834C90.9516 31.2932 90.272 30.6951 90.272 29.6894C90.272 28.5205 91.1962 27.705 92.4738 27.1341C91.305 26.2099 90.4895 24.8508 90.4895 23.3557C90.4895 20.5286 92.9903 18.2452 96.2523 18.2452C97.0406 18.2452 97.8017 18.3812 98.5085 18.6258ZM96.2523 27.107C97.9105 27.107 99.7046 25.9381 99.7046 23.3285C99.7046 20.7189 97.9105 19.55 96.2523 19.55C94.5669 19.55 92.8 20.7189 92.8 23.3285C92.8 25.9381 94.5669 27.107 96.2523 27.107ZM97.7745 31.5106H94.2407C93.1806 32.0271 92.4195 33.0601 92.4195 34.3377C92.4195 36.3764 94.1048 37.3278 96.3067 37.3278C98.9706 37.3278 100.683 35.9687 100.683 33.9299C100.683 32.6795 100.031 31.5106 97.7745 31.5106ZM111.882 32.4348C107.288 32.4348 104.977 29.0098 104.977 25.4488C104.977 21.5344 107.723 18.2452 111.746 18.2452C115.986 18.2452 118.161 21.616 118.161 25.2585L117.944 25.476H107.179C107.179 28.2486 109.327 30.6136 112.235 30.6136C114.79 30.6136 116.34 29.2272 117.346 27.406L117.617 27.2972L117.916 27.406L118.052 27.6778C117.264 30.3961 114.899 32.4348 111.882 32.4348ZM107.179 23.9537L107.397 24.1712H114.953C115.551 24.1712 115.715 23.8993 115.715 23.41C115.715 21.5344 114.355 19.4957 111.719 19.4957C108.837 19.4957 107.315 21.9422 107.179 23.9537ZM143.506 30.7495H144.131L144.348 30.967V31.8368L144.131 32.0543H138.314L138.096 31.8368V30.967L138.314 30.7495H139.156C139.646 30.7495 139.836 30.5048 139.836 30.2058C139.836 30.0155 139.782 29.8253 139.7 29.6078L138.721 27.1613H130.512L129.506 29.6078C129.425 29.8253 129.37 30.0155 129.37 30.2058C129.37 30.5048 129.534 30.7495 130.023 30.7495H131.056L131.273 30.967V31.8368L131.056 32.0543H126.136L125.918 31.8368V30.967L126.136 30.7495H126.679C127.114 30.7495 127.495 30.5592 127.74 29.9884L134.671 13.2436L134.889 13.0261H135.541L135.759 13.2436L142.609 30.1243C142.745 30.4777 143.044 30.7495 143.506 30.7495ZM134.671 17.1036L131.056 25.8565H138.205L134.671 17.1036ZM152.783 32.0543H146.422L146.204 31.8368V30.967L146.422 30.7495H147.292C147.835 30.7495 148.379 30.2058 148.379 29.6622V15.4182C148.379 14.8745 147.835 14.3309 147.292 14.3309H146.476L146.204 14.059V13.2979L146.476 13.0261H152.728L153 13.2979V14.059L152.728 14.3309H151.913C151.369 14.3309 150.826 14.8745 150.826 15.4182V29.6622C150.826 30.2058 151.369 30.7495 151.913 30.7495H152.783L153 30.967V31.8368L152.783 32.0543Z" fill="currentColor"></path><path d="M11.5031 4.00254C9.99594 2.21432 8.6981 0.398158 8.43296 0.020956C8.40505 -0.00698532 8.36317 -0.00698532 8.33526 0.020956C8.07012 0.398158 6.77224 2.21432 5.26509 4.00254C-7.67155 20.5017 7.30256 31.6361 7.30256 31.6361L7.42814 31.72C7.53979 33.4383 7.8189 35.9111 7.8189 35.9111H8.37713H8.93533C8.93533 35.9111 9.21447 33.4523 9.32609 31.72L9.4517 31.6222C9.46562 31.6222 24.4398 20.5017 11.5031 4.00254ZM8.37713 31.3847C8.37713 31.3847 7.70728 30.8119 7.52584 30.5185V30.4906L8.33526 12.5245C8.33526 12.4686 8.419 12.4686 8.419 12.5245L9.22839 30.4906V30.5185C9.04699 30.8119 8.37713 31.3847 8.37713 31.3847Z" fill="currentColor"></path></svg> <small>best ranking, free tier</small></h3>
+            <h3 class="voyage-title"><svg viewBox="0 0 155 39" fill="none" role="img" aria-label="Voyage AI" class="voyage-logo" focusable="false"><path d="M35.0157 32.0543H34.0915L33.874 31.8368L26.6161 14.9561C26.453 14.6027 26.1812 14.3309 25.7191 14.3309H25.0938L24.8764 14.1134V13.2436L25.0938 13.0261H30.7751L30.9926 13.2436V14.1134L30.7751 14.3309H30.1499C29.6606 14.3309 29.4703 14.5755 29.4703 14.8745C29.4703 15.0648 29.5247 15.2551 29.6062 15.4726L35.2332 28.6292L40.9144 15.4726C40.996 15.2551 41.0503 15.0648 41.0503 14.8745C41.0503 14.5755 40.8873 14.3309 40.398 14.3309H39.7727L39.5553 14.1134V13.2436L39.7727 13.0261H44.0405L44.258 13.2436V14.1134L44.0405 14.3309H43.4968C43.0619 14.3309 42.6813 14.5483 42.4367 15.092L35.2332 31.8368L35.0157 32.0543ZM50.0592 32.4348C46.1449 32.4348 43.0188 29.635 43.0188 25.34C43.0188 21.0451 46.1449 18.2452 50.0592 18.2452C53.9736 18.2452 57.0997 21.0451 57.0997 25.34C57.0997 29.635 53.9736 32.4348 50.0592 32.4348ZM50.0592 31.0757C52.9135 31.0757 54.7619 28.8739 54.7619 25.34C54.7619 21.8062 52.9135 19.6044 50.0592 19.6044C47.205 19.6044 45.3565 21.8062 45.3565 25.34C45.3565 28.8739 47.205 31.0757 50.0592 31.0757ZM62.6321 38.1977H61.7078L61.2457 37.953L60.9739 37.1919V36.8657L64.4805 31.4291L59.2885 20.4743C59.1526 20.2024 58.8808 19.9306 58.473 19.9306H57.9566L57.7391 19.7131V18.8433L57.9566 18.6258H62.9039L63.1214 18.8433V19.7131L62.9039 19.9306H62.469C62.034 19.9306 61.8438 20.1481 61.8438 20.4743C61.8438 20.6374 61.8981 20.8548 62.0069 21.0723L65.7853 29.0098L69.455 21.0723C69.5638 20.8548 69.6453 20.6102 69.6453 20.4471C69.6453 20.1209 69.4007 19.9306 68.9929 19.9306H68.4493L68.2318 19.7131V18.8433L68.4493 18.6258H72.4995L72.717 18.8433V19.7131L72.4995 19.9306H72.0374C71.5209 19.9306 71.2491 20.2024 71.0588 20.6374L62.9583 37.8715L62.6321 38.1977ZM87.7162 30.7495H88.2055L88.4229 30.967V31.8368L88.2055 32.0543H84.8347L84.6173 31.8368V29.6078C83.2581 31.8368 81.3825 32.4348 79.6156 32.4348C76.408 32.4348 73.2547 30.3146 73.2547 25.34C73.2547 20.882 76.408 18.2452 79.7515 18.2452C82.2252 18.2452 83.7202 19.4685 84.5357 20.6374H84.6716L85.7862 18.6258H86.5745L86.7919 18.8433V29.8253C86.7919 30.3689 87.1725 30.7495 87.7162 30.7495ZM79.9961 31.1572C82.9319 31.1572 84.4542 28.3574 84.4542 25.34C84.4542 22.2955 82.9319 19.5229 79.9961 19.5229C76.9788 19.5229 75.5381 22.2955 75.5381 25.34C75.5381 28.3574 76.9788 31.1572 79.9961 31.1572ZM98.5085 18.6258H103.102L103.347 18.8705V19.9306L103.102 20.1753L100.574 19.985C101.471 20.882 101.988 21.9965 101.988 23.3285C101.988 26.1284 99.5143 28.4389 96.0892 28.4389C95.2465 28.4389 94.4038 28.2215 93.6427 27.8681C93.099 28.1127 92.501 28.4661 92.501 28.9282C92.501 29.635 93.4524 29.8253 94.7572 29.8253H98.2367C101.091 29.8253 102.967 31.2116 102.967 33.6037C102.967 36.8113 99.5686 38.5782 95.9533 38.5782C92.3651 38.5782 90.3264 36.9201 90.3264 34.7182C90.3264 33.4678 91.0875 32.1902 92.3651 31.4834C90.9516 31.2932 90.272 30.6951 90.272 29.6894C90.272 28.5205 91.1962 27.705 92.4738 27.1341C91.305 26.2099 90.4895 24.8508 90.4895 23.3557C90.4895 20.5286 92.9903 18.2452 96.2523 18.2452C97.0406 18.2452 97.8017 18.3812 98.5085 18.6258ZM96.2523 27.107C97.9105 27.107 99.7046 25.9381 99.7046 23.3285C99.7046 20.7189 97.9105 19.55 96.2523 19.55C94.5669 19.55 92.8 20.7189 92.8 23.3285C92.8 25.9381 94.5669 27.107 96.2523 27.107ZM97.7745 31.5106H94.2407C93.1806 32.0271 92.4195 33.0601 92.4195 34.3377C92.4195 36.3764 94.1048 37.3278 96.3067 37.3278C98.9706 37.3278 100.683 35.9687 100.683 33.9299C100.683 32.6795 100.031 31.5106 97.7745 31.5106ZM111.882 32.4348C107.288 32.4348 104.977 29.0098 104.977 25.4488C104.977 21.5344 107.723 18.2452 111.746 18.2452C115.986 18.2452 118.161 21.616 118.161 25.2585L117.944 25.476H107.179C107.179 28.2486 109.327 30.6136 112.235 30.6136C114.79 30.6136 116.34 29.2272 117.346 27.406L117.617 27.2972L117.916 27.406L118.052 27.6778C117.264 30.3961 114.899 32.4348 111.882 32.4348ZM107.179 23.9537L107.397 24.1712H114.953C115.551 24.1712 115.715 23.8993 115.715 23.41C115.715 21.5344 114.355 19.4957 111.719 19.4957C108.837 19.4957 107.315 21.9422 107.179 23.9537ZM143.506 30.7495H144.131L144.348 30.967V31.8368L144.131 32.0543H138.314L138.096 31.8368V30.967L138.314 30.7495H139.156C139.646 30.7495 139.836 30.5048 139.836 30.2058C139.836 30.0155 139.782 29.8253 139.7 29.6078L138.721 27.1613H130.512L129.506 29.6078C129.425 29.8253 129.37 30.0155 129.37 30.2058C129.37 30.5048 129.534 30.7495 130.023 30.7495H131.056L131.273 30.967V31.8368L131.056 32.0543H126.136L125.918 31.8368V30.967L126.136 30.7495H126.679C127.114 30.7495 127.495 30.5592 127.74 29.9884L134.671 13.2436L134.889 13.0261H135.541L135.759 13.2436L142.609 30.1243C142.745 30.4777 143.044 30.7495 143.506 30.7495ZM134.671 17.1036L131.056 25.8565H138.205L134.671 17.1036ZM152.783 32.0543H146.422L146.204 31.8368V30.967L146.422 30.7495H147.292C147.835 30.7495 148.379 30.2058 148.379 29.6622V15.4182C148.379 14.8745 147.835 14.3309 147.292 14.3309H146.476L146.204 14.059V13.2979L146.476 13.0261H152.728L153 13.2979V14.059L152.728 14.3309H151.913C151.369 14.3309 150.826 14.8745 150.826 15.4182V29.6622C150.826 30.2058 151.369 30.7495 151.913 30.7495H152.783L153 30.967V31.8368L152.783 32.0543Z" fill="currentColor"></path><path d="M11.5031 4.00254C9.99594 2.21432 8.6981 0.398158 8.43296 0.020956C8.40505 -0.00698532 8.36317 -0.00698532 8.33526 0.020956C8.07012 0.398158 6.77224 2.21432 5.26509 4.00254C-7.67155 20.5017 7.30256 31.6361 7.30256 31.6361L7.42814 31.72C7.53979 33.4383 7.8189 35.9111 7.8189 35.9111H8.37713H8.93533C8.93533 35.9111 9.21447 33.4523 9.32609 31.72L9.4517 31.6222C9.46562 31.6222 24.4398 20.5017 11.5031 4.00254ZM8.37713 31.3847C8.37713 31.3847 7.70728 30.8119 7.52584 30.5185V30.4906L8.33526 12.5245C8.33526 12.4686 8.419 12.4686 8.419 12.5245L9.22839 30.4906V30.5185C9.04699 30.8119 8.37713 31.3847 8.37713 31.3847Z" fill="currentColor"></path></svg> <small>opt-in, free tier</small></h3>
             <p class="voyage-by">Voyage AI by MongoDB</p>
-            <p>23 of 28 owners first with <code>rerank-3-lite</code>, median rerank 1.03 s. 200 million free tokens per model, about 4,600 searches, with no credit card. Queries and code excerpts go to Voyage.</p>
-            <p>The command asks for your <code>VOYAGEAI_API_KEY</code> (hidden), saves it to <code>~/.satori/.env</code>, and tests it before it switches.</p>
-            <pre><code>satori reranker use voyage
-satori reranker status</code></pre>
+            <p>23/28 owners first with <code>rerank-3-lite</code> (1.03 s median). 200M free tokens/model, no credit card; sends excerpts to Voyage.</p>
+            <pre><code>satori reranker use voyage</code></pre>
           </article>
           <article class="rank-choice" data-reveal style="--i:2">
             <h3>None <small>fastest</small></h3>
-            <p>Retrieval order only. About 200 ms per search on React (36,233 chunks).</p>
+            <p>Retrieval order only (~200 ms on React, 36,233 chunks).</p>
             <pre><code>satori reranker use none</code></pre>
           </article>
         </div>
         <p class="rank-note">
-          28 questions on React, Polars, and FlatBuffers, same index for every reranker. Restart your agent after a switch. If Voyage fails, Satori returns retrieval order and reports <code>RERANKER_FAILED</code>. No global CLI? Use <code>npx -y @satori-code/cli@latest</code> in place of <code>satori</code>.
+          Phase 4 offline figures cover 58 live queries across React, Polars, FlatBuffers, Gin, and Flask; Voyage covers the 28-query 3-repo benchmark.
         </p>
         <div class="link-row">
-          <a class="text-link" href="docs/index.html#reranker">Read the reranker docs <span aria-hidden="true">&rarr;</span></a>
-          <a class="text-link" href="https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#choosing-a-reranker" target="_blank" rel="noopener noreferrer">See the full benchmark <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="docs/index.html#benchmarks">Read the v4 &amp; Phase 4 benchmarks <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="docs/index.html#reranker">Reranker setup docs <span aria-hidden="true">&rarr;</span></a>
         </div>
       </section>
 
@@ -532,7 +610,7 @@ satori reranker status</code></pre>
           </div>
           <div class="faq-item" data-reveal style="--i:2">
             <dt>Will it change my repository?</dt>
-            <dd>No. Satori only reads source. Install adds nothing to <code>AGENTS.md</code> and never overwrites files it did not write; for Claude Code, it adds one read-only <code>SessionStart</code> status hook in <code>~/.claude/settings.json</code> that only reports index status and never modifies repository files.</dd>
+            <dd>No. Source access is read-only&mdash;nothing is written to your repo or <code>AGENTS.md</code> (Claude Code gets one read-only status hook in <code>~/.claude/settings.json</code>).</dd>
           </div>
           <div class="faq-item" data-reveal style="--i:0">
             <dt>What does install download?</dt>
@@ -587,38 +665,59 @@ npx -y @satori-code/cli@latest doctor</code></pre>
         </div>
       </section>
 
-      <section class="section maintenance-section" id="maintenance" data-chapter="Maintenance">
-        <h2>The index keeps itself fresh.</h2>
-        <div class="maintenance">
-          <div class="stack" data-reveal>
-            <h3 class="minor">Default offline stack</h3>
-            <ul class="stack-grid">
-              <li><strong>Potion</strong><small>local semantic embeddings</small></li>
-              <li><strong>BM25</strong><small>lexical + exact evidence</small></li>
-              <li><strong>LateOn</strong><small>local query-time reranking</small></li>
-              <li><strong>LanceDB</strong><small>local Publication storage</small></li>
+      <section class="section teams-section" id="teams" data-chapter="Teams &amp; licensing">
+        <h2>Free open-source CLI. Capped founder capacity for teams.</h2>
+        <p class="section-intro">
+          The local CLI is AGPL-3.0 and stays free forever. Because I build and maintain Satori solo, hands-on engineering onboarding and pre-1.0 commercial licenses are strictly capped.
+        </p>
+
+        <div class="team-tiers">
+          <article class="team-tier" data-reveal style="--i:0">
+            <div class="team-top">
+              <span class="team-badge">Always free &middot; AGPL-3.0</span>
+              <h3>Individual &amp; Open Source</h3>
+              <p class="team-price"><strong>$0</strong><span>forever, no account</span></p>
+            </div>
+            <ul class="team-list">
+              <li>Full 100% offline stack: Potion, BM25, LateOn, LanceDB</li>
+              <li>All 11 MCP tools, unlimited local repositories</li>
+              <li>Read-only source access, zero telemetry upload</li>
+              <li>Works with Claude Code, Codex, Cursor, OpenCode, Windsurf</li>
             </ul>
-            <p>No model API key needed after install. Voyage and Milvus/Zilliz are optional.</p>
-          </div>
-          <div class="lifecycle" data-reveal style="--i:1">
-            <h3 class="minor">Freshness and repair</h3>
-            <ol>
-              <li><b>Source changed</b><span>Incremental sync builds a replacement Publication.</span></li>
-              <li><b>Sync running</b><span>The last proven Publication stays readable, with freshness info.</span></li>
-              <li class="is-auto"><b>Rebuild required, managed offline</b><span>Satori starts or joins one background reindex.</span></li>
-              <li><b>Remote, failed, or unsafe</b><span>You run reindex explicitly.</span></li>
-              <li><b>Clear</b><span>Always manual.</span></li>
-            </ol>
-          </div>
-        </div>
-        <ul class="boundaries">
-          <li><strong>Read-only source.</strong> Satori does not modify repository files.</li>
-          <li><strong>Conservative graph.</strong> Absent edges are not proof of no caller.</li>
-          <li><strong>Open source.</strong> AGPL-3.0-only.</li>
-        </ul>
-        <div class="link-row">
-          <a class="text-link" href="docs/index.html#lifecycle">Read maintenance docs <span aria-hidden="true">&rarr;</span></a>
-          <a class="text-link" href="architecture.html">Inspect the architecture <span aria-hidden="true">&rarr;</span></a>
+            <a class="btn" href="#quickstart">Install in 30 seconds</a>
+          </article>
+
+          <article class="team-tier is-featured" data-reveal style="--i:1">
+            <div class="team-top">
+              <span class="team-badge is-scarce">3 team slots / month</span>
+              <h3>Founding Team Setup</h3>
+              <p class="team-price"><strong>Hands-on</strong><span>solo-founder capacity</span></p>
+            </div>
+            <ul class="team-list">
+              <li>Wire Satori into your team&rsquo;s MCP clients and monorepo</li>
+              <li>Tune <code>.satoriignore</code>, profiles, and reranker choice on your code</li>
+              <li>Paired before/after benchmark on your real tickets (tokens, calls, accuracy)</li>
+              <li>Direct Slack/email channel during rollout</li>
+            </ul>
+            <p class="team-scarcity">Only 3 team engagements accepted per month so core development stays fast. Overflow rolls to next month&rsquo;s queue.</p>
+            <a class="btn primary" href="mailto:ahmed@hamza.my.id?subject=Satori%20Founding%20Team%20Setup%20Slot&amp;body=Team%20size%3A%20%0APrimary%20languages%20%26%20repo%20size%3A%20%0ACoding%20agents%20used%3A%20%0ABiggest%20discovery%20pain%20point%3A%20">Claim a monthly slot <span class="btn-arrow" aria-hidden="true">&rarr;</span></a>
+          </article>
+
+          <article class="team-tier" data-reveal style="--i:2">
+            <div class="team-top">
+              <span class="team-badge is-scarce">First 10 teams &middot; Pre-1.0 rate</span>
+              <h3>Commercial License</h3>
+              <p class="team-price"><strong>AGPL-free</strong><span>locked founding terms</span></p>
+            </div>
+            <ul class="team-list">
+              <li>Clean proprietary license when legal restricts AGPL-3.0</li>
+              <li>100% solo-owned copyright&mdash;zero CLA ambiguity</li>
+              <li>Priority issue triage and compatibility guarantees</li>
+              <li>Pre-1.0 founding rate locked before 1.0 commercial pricing</li>
+            </ul>
+            <p class="team-scarcity">Founding commercial cohort is limited to the first 10 companies before v1.0 pricing takes effect.</p>
+            <a class="btn" href="mailto:ahmed@hamza.my.id?subject=Satori%20Commercial%20License%20(Founding%20Cohort)&amp;body=Company%3A%20%0AEngineering%20seats%3A%20%0AUse%20case%20(internal%20team%20or%20OEM)%3A%20">Request commercial terms <span class="btn-arrow" aria-hidden="true">&rarr;</span></a>
+          </article>
         </div>
       </section>
 
@@ -722,7 +821,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
   </div>
 
   <script src="brand.js?v=2026-10-21a" defer></script>
-  <script src="home.js?v=2026-10-21a" defer></script>
+  <script src="home.js?v=2026-11-23c" defer></script>
 </body>
 
 </html>

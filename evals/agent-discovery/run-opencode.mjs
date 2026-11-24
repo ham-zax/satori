@@ -61,6 +61,7 @@ const ARM_ORDER = Object.freeze([
 ]);
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TASKS_FILE = path.join(SCRIPT_DIR, "evaluator-tasks.json");
+const WORKING_TREE_TASK_KEYS_FILE = path.join(SCRIPT_DIR, "working-tree-task-keys.json");
 const INSTRUCTIONS_FILE = path.join(SCRIPT_DIR, "AGENT_INSTRUCTIONS.md");
 const GUARD_PLUGIN_FILE = path.join(SCRIPT_DIR, "opencode-plugin.mjs");
 
@@ -233,7 +234,7 @@ function requireString(value, label) {
     return value;
 }
 
-export function loadTaskManifest(file = DEFAULT_TASKS_FILE) {
+export function loadTaskManifest(file = DEFAULT_TASKS_FILE, { frozen = false } = {}) {
     const manifest = readJson(file);
     if (!isRecord(manifest)
         || manifest.version !== TASK_MANIFEST_VERSION
@@ -257,6 +258,16 @@ export function loadTaskManifest(file = DEFAULT_TASKS_FILE) {
         const expectedKeys = Object.keys(task.expected.taskFacts ?? {}).sort();
         if (stableJson(templateKeys) !== stableJson(expectedKeys)) {
             throw new Error(`${task.id} task fact template does not match the hidden key.`);
+        }
+    }
+    if (!frozen && file === DEFAULT_TASKS_FILE && fs.existsSync(WORKING_TREE_TASK_KEYS_FILE)) {
+        const workingKeys = readJson(WORKING_TREE_TASK_KEYS_FILE);
+        for (const [id, key] of Object.entries(workingKeys)) {
+            const task = manifest.tasks.find((candidate) => candidate.id === id);
+            if (!task || !Number.isSafeInteger(key.ownerSpan?.startLine) || !Number.isSafeInteger(key.ownerSpan?.endLine)) {
+                throw new Error(`Invalid working-tree task span for '${id}'.`);
+            }
+            task.expected.ownerSpan = key.ownerSpan;
         }
     }
     return manifest;
@@ -1479,6 +1490,7 @@ async function runOpenCodeArm({
         mode: options.mode,
         environment: {
             ...immutableEnvironment,
+            repoRoot: options.repoRoot,
             worktreeCleanAfter: null,
             taskPromptSha256: sha256(task.prompt),
             agentPromptSha256: sha256(prompt),
@@ -1512,6 +1524,7 @@ async function runOpenCodeArm({
                 operation: tool.tool,
                 status: tool.status,
                 input: tool.input,
+                output: tool.output,
                 rawResultBytes: tool.rawBytes,
                 visibleResultBytes: tool.visibleBytes,
                 truncated: tool.truncated,
@@ -1856,7 +1869,7 @@ export async function main(argv = process.argv.slice(2)) {
         "benchmarks",
         "agent-discovery",
     );
-    const manifest = loadTaskManifest(options.tasksFile);
+    const manifest = loadTaskManifest(options.tasksFile, { frozen: options.acceptanceBaseline });
     const tasks = selectTasks(manifest, options.taskIds);
     await requireCleanWorktree(options.repoRoot);
     const taskValidation = tasks.map((task) => validateTaskKey(options.repoRoot, task));
@@ -1914,7 +1927,9 @@ export async function main(argv = process.argv.slice(2)) {
         setup.toolDefinitions,
     );
     const instructionsText = fs.readFileSync(INSTRUCTIONS_FILE, "utf8");
-    const tasksText = fs.readFileSync(options.tasksFile, "utf8");
+    const tasksText = !options.acceptanceBaseline && options.tasksFile === DEFAULT_TASKS_FILE
+        ? JSON.stringify(manifest)
+        : fs.readFileSync(options.tasksFile, "utf8");
     const immutableEnvironment = {
         ...repositoryIdentity,
         worktreeCleanBefore: true,

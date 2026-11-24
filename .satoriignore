@@ -1,7 +1,11 @@
-# Generated evaluation evidence is retained in git but should not consume
-# embedding or search-result budget. Keep executable harness sources indexed.
+# Generated evaluation evidence and non-model-visible task manifests are
+# retained in git but should not consume embedding or search-result budget.
+# Keep executable harness sources indexed.
 docs/release/artifacts/*.json
 evals/agent-discovery/bounded-symbol-context-phase-0.json
+evals/agent-discovery/bounded-symbol-context-baseline.json
+evals/agent-discovery/evaluator-tasks.json
+evals/agent-discovery/working-tree-task-keys.json
 
 # Satori's own native extractor and semantic sources live under third_party/;
 # re-include them past the overridable third-party default.

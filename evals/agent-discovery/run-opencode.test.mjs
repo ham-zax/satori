@@ -355,6 +355,14 @@ test("versioned task keys match the current production source", () => {
     }
 });
 
+test("the default manifest loads its frozen keys when the working-tree key file is absent", (t) => {
+    const fileExists = fs.existsSync;
+    const workingKeys = path.join(import.meta.dirname, "working-tree-task-keys.json");
+    t.mock.method(fs, "existsSync", (file) => file !== workingKeys && fileExists(file));
+
+    assert.deepEqual(loadTaskManifest(), loadTaskManifest(undefined, { frozen: true }));
+});
+
 test("unknown-target prompt explicitly requests every graded relationship", () => {
     const manifest = loadTaskManifest();
     const task = manifest.tasks.find((candidate) => candidate.id === "unknown-freshness-reuse");

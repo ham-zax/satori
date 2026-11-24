@@ -57,6 +57,7 @@ export const ScriptKind = ast.ScriptKind;
 export const ScriptTarget = ast.ScriptTarget;
 export const NodeFlags = ast.NodeFlags;
 export const API = sync.API;
+export const all = sync.all;
 export const ModuleKind = sync.ModuleKind;
 export const ModuleResolutionKind = sync.ModuleResolutionKind;
 export const JsxEmit = sync.JsxEmit;

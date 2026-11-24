@@ -13,6 +13,12 @@ import type { SemanticProjectInput } from './contracts';
 export { TYPESCRIPT_COMPILER_PROVIDER_ID, TYPESCRIPT_COMPILER_PROVIDER_VERSION };
 
 const VIRTUAL_ROOT = '/__satori__';
+// Bounded call-site batch size: keeps generator frames small while amortizing
+// TS 7.1 IPC round-trips and warming per-program caches across chunks.
+const CALL_BATCH_CHUNK_SIZE = 256;
+// A call chunk can expand to every receiver branch crossed with every class.
+// Bound the number of generators passed as arguments to any prewarm batch.
+const ASSIGNABILITY_BATCH_SIZE = 16_384;
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -94,6 +100,7 @@ interface ProjectFile {
     readonly virtualPath: string;
     readonly source: string;
     readonly sourceMap: Utf8SourceMap;
+    readonly sourceFile?: ts.SourceFile;
 }
 
 interface CandidateSet {
@@ -102,6 +109,34 @@ interface CandidateSet {
     readonly receiverType?: string;
     readonly targets: readonly TypeScriptSemanticTarget[];
     readonly bindingProofs?: readonly TypeScriptBindingProof[];
+}
+
+interface AnalysisCaches {
+    readonly resolvedSymbolById: Map<number, ts.Symbol>;
+    readonly propertyOfTypeByKey: Map<string, ts.Symbol | undefined>;
+    readonly implementationsBySymbolId: Map<number, readonly TypeScriptSemanticTarget[]>;
+    readonly assignableClassesByTypeId: Map<number, readonly ts.Type[]>;
+    readonly baseConstraintByTypeId: Map<number, ts.Type | undefined>;
+}
+
+interface AnalysisContext {
+    readonly projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>;
+    readonly projectCanonicalPaths: ReadonlySet<string>;
+    readonly caches: AnalysisCaches;
+    readonly skipExternalHandles: boolean;
+}
+
+interface ProjectDispatchContext {
+    readonly classTypes: readonly ts.Type[];
+    readonly targetsByTypeAndMember: Map<ts.Type, Map<string, readonly TypeScriptSemanticTarget[]>>;
+    readonly fieldBindingProofs: Map<ts.Symbol, TypeScriptBindingProof[]>;
+}
+
+interface CallWorkItem {
+    readonly call: ts.CallExpression | ts.NewExpression;
+    readonly sourceFile: ts.SourceFile;
+    readonly projectFile: ProjectFile;
+    readonly fileOccurrences: TypeScriptCallEvidence[];
 }
 
 function bindingProof(
@@ -119,12 +154,6 @@ function bindingProof(
         span: file.sourceMap.spanFromUtf16(node.getStart(sourceFile), node.end),
         ...(detail ? { detail } : {}),
     }];
-}
-
-interface ProjectDispatchContext {
-    readonly classTypes: readonly ts.Type[];
-    readonly targetsByTypeAndMember: Map<ts.Type, Map<string, readonly TypeScriptSemanticTarget[]>>;
-    readonly fieldBindingProofs: Map<ts.Symbol, TypeScriptBindingProof[]>;
 }
 
 function normalizeProjectPath(filePath: string): string {
@@ -149,16 +178,77 @@ function defaultCompilerOptions(): ts.CompilerOptions {
     };
 }
 
-function resolvedSymbol(checker: ts.Checker, symbol: ts.Symbol | undefined): ts.Symbol | undefined {
-    let current = symbol;
+function handleBelongsToProject(
+    handle: ts.NodeHandle,
+    context: AnalysisContext,
+): boolean {
+    const rawPath = String(handle.path);
+    if (context.projectCanonicalPaths.has(rawPath)) return true;
+    const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'));
+    return context.projectFilesByVirtualPath.has(normalized);
+}
+
+function* resolveHandlesGen<T extends ts.Node>(
+    handles: readonly ts.NodeHandle<T>[],
+    context: AnalysisContext,
+    projectOnly: boolean,
+): ts.APIRequestGenerator<T[]> {
+    const filtered = projectOnly && context.skipExternalHandles
+        ? handles.filter((handle) => handleBelongsToProject(handle, context))
+        : handles;
+    if (filtered.length === 0) return [];
+    const resolved = yield* ts.all(...filtered.map((handle) => handle.resolve.gen()));
+    const nodes: T[] = [];
+    for (const node of resolved) {
+        if (node) nodes.push(node);
+    }
+    return nodes;
+}
+
+function* resolvedSymbolGen(
+    checker: ts.Checker,
+    symbol: ts.Symbol | undefined,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<ts.Symbol | undefined> {
+    if (!symbol) return undefined;
+    if ((symbol.flags & ts.SymbolFlags.Alias) === 0) return symbol;
+    const cached = caches.resolvedSymbolById.get(symbol.id);
+    if (cached !== undefined) return cached;
+
+    let current: ts.Symbol | undefined = symbol;
     const seen = new Set<ts.Symbol>();
+    const visitedIds: number[] = [];
     while (current && (current.flags & ts.SymbolFlags.Alias) !== 0 && !seen.has(current)) {
+        const hit = caches.resolvedSymbolById.get(current.id);
+        if (hit !== undefined) {
+            current = hit;
+            break;
+        }
         seen.add(current);
-        const next = checker.getAliasedSymbol(current);
+        visitedIds.push(current.id);
+        const next: ts.Symbol | undefined = yield* checker.getAliasedSymbol.gen(current);
         if (!next || next === current) break;
         current = next;
     }
+    if (current) {
+        for (const id of visitedIds) caches.resolvedSymbolById.set(id, current);
+    }
     return current;
+}
+
+function* propertyOfTypeGen(
+    checker: ts.Checker,
+    type: ts.Type,
+    propertyName: string,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<ts.Symbol | undefined> {
+    const key = `${type.id}\0${propertyName}`;
+    if (caches.propertyOfTypeByKey.has(key)) {
+        return caches.propertyOfTypeByKey.get(key);
+    }
+    const property = yield* checker.getPropertyOfType.gen(type, propertyName);
+    caches.propertyOfTypeByKey.set(key, property);
+    return property;
 }
 
 function declarationName(declaration: ts.Declaration): string | undefined {
@@ -315,37 +405,51 @@ function uniqueTargets(targets: readonly TypeScriptSemanticTarget[]): TypeScript
     return [...byKey.values()];
 }
 
-function implementationsForSymbol(
+function* implementationsForSymbolGen(
     checker: ts.Checker,
     symbol: ts.Symbol | undefined,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): TypeScriptSemanticTarget[] {
-    const resolved = resolvedSymbol(checker, symbol);
+    context: AnalysisContext,
+): ts.APIRequestGenerator<readonly TypeScriptSemanticTarget[]> {
+    const resolved = yield* resolvedSymbolGen(checker, symbol, context.caches);
     if (!resolved) return [];
 
+    const cached = context.caches.implementationsBySymbolId.get(resolved.id);
+    if (cached !== undefined) return cached;
+
+    const declarations = yield* resolveHandlesGen(resolved.declarations, context, true);
     const targets: TypeScriptSemanticTarget[] = [];
-    for (const declaration of resolved.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; })) {
-        const target = targetFromDeclaration(declaration, projectFilesByVirtualPath);
+    for (const declaration of declarations) {
+        const target = targetFromDeclaration(declaration, context.projectFilesByVirtualPath);
         if (target) targets.push(target);
     }
-    return uniqueTargets(targets);
+    const unique = uniqueTargets(targets);
+    context.caches.implementationsBySymbolId.set(resolved.id, unique);
+    return unique;
 }
 
-function signatureTarget(
+function* signatureTargetGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): TypeScriptSemanticTarget | undefined {
-    const signature = checker.getResolvedSignature(call);
-    const declaration = signature?.declaration?.resolve();
+    context: AnalysisContext,
+    preResolvedSignature?: ts.Signature,
+): ts.APIRequestGenerator<TypeScriptSemanticTarget | undefined> {
+    const signature = preResolvedSignature !== undefined
+        ? preResolvedSignature
+        : yield* checker.getResolvedSignature.gen(call);
+    const declHandle = signature?.declaration;
+    if (!declHandle) return undefined;
+    if (context.skipExternalHandles && !handleBelongsToProject(declHandle, context)) {
+        return undefined;
+    }
+    const declaration = yield* declHandle.resolve.gen();
     if (!declaration) return undefined;
 
-    const direct = targetFromDeclaration(declaration, projectFilesByVirtualPath);
+    const direct = targetFromDeclaration(declaration, context.projectFilesByVirtualPath);
     if (direct) return direct;
 
     const named = declaration as (ts.Declaration & { readonly name?: ts.DeclarationName });
-    const symbol = named.name ? checker.getSymbolAtLocation(named.name) : undefined;
-    const targets = implementationsForSymbol(checker, symbol, projectFilesByVirtualPath);
+    const symbol = named.name ? yield* checker.getSymbolAtLocation.gen(named.name) : undefined;
+    const targets = yield* implementationsForSymbolGen(checker, symbol, context);
     return targets.length === 1 ? targets[0] : undefined;
 }
 
@@ -390,28 +494,46 @@ function receiverForExpression(expression: ts.Expression): ts.Expression | undef
     return undefined;
 }
 
-function collectProjectDispatchContext(
-    checker: ts.Checker,
-    program: ts.Program,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): ProjectDispatchContext {
-    const classTypes: ts.Type[] = [];
-    for (const sourceFile of program.getSourceFileNames().map(name => program.getSourceFile(name)!)) {
-        const normalized = path.posix.normalize(sourceFile.fileName.replace(/\\/g, '/'));
-        if (!projectFilesByVirtualPath.has(normalized)) continue;
+function collectNonAbstractClassNames(sourceFiles: readonly ts.SourceFile[]): ts.Identifier[] {
+    const classNames: ts.Identifier[] = [];
+    for (const sourceFile of sourceFiles) {
         const visit = (node: ts.Node): void => {
             if (ts.isClassDeclaration(node) && node.name) {
                 const isAbstract = node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword);
-                if (!isAbstract) {
-                    const symbol = checker.getSymbolAtLocation(node.name);
-                    if (symbol) {
-                        classTypes.push(checker.getDeclaredTypeOfSymbol(symbol));
-                    }
-                }
+                if (!isAbstract) classNames.push(node.name);
             }
             node.forEachChild(visit);
         };
         visit(sourceFile);
+    }
+    return classNames;
+}
+
+type NativeTypeScriptApi = InstanceType<typeof ts.API>;
+
+function collectProjectDispatchContext(
+    api: NativeTypeScriptApi | undefined,
+    checker: ts.Checker,
+    projectSourceFiles: readonly ts.SourceFile[],
+    batched: boolean,
+): ProjectDispatchContext {
+    const classNames = collectNonAbstractClassNames(projectSourceFiles);
+    const classTypes: ts.Type[] = [];
+    if (classNames.length > 0) {
+        if (batched && api) {
+            const symbols = api.batch(...classNames.map((name) => checker.getSymbolAtLocation.gen(name)));
+            const validSymbols = symbols.filter((symbol): symbol is ts.Symbol => Boolean(symbol));
+            if (validSymbols.length > 0) {
+                classTypes.push(
+                    ...api.batch(...validSymbols.map((symbol) => checker.getDeclaredTypeOfSymbol.gen(symbol))),
+                );
+            }
+        } else {
+            for (const name of classNames) {
+                const symbol = checker.getSymbolAtLocation(name);
+                if (symbol) classTypes.push(checker.getDeclaredTypeOfSymbol(symbol));
+            }
+        }
     }
     return {
         classTypes,
@@ -420,23 +542,50 @@ function collectProjectDispatchContext(
     };
 }
 
-function dispatchTargetsForType(
+function* dispatchTargetsForTypeGen(
     checker: ts.Checker,
     receiverType: ts.Type,
     propertyName: string,
     dispatchContext: ProjectDispatchContext,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): readonly TypeScriptSemanticTarget[] {
+    context: AnalysisContext,
+): ts.APIRequestGenerator<readonly TypeScriptSemanticTarget[]> {
     const cachedByMember = dispatchContext.targetsByTypeAndMember.get(receiverType);
     const cached = cachedByMember?.get(propertyName);
     if (cached) return cached;
 
+    let assignableClasses = context.caches.assignableClassesByTypeId.get(receiverType.id);
+    if (assignableClasses === undefined) {
+        if (dispatchContext.classTypes.length === 0) {
+            assignableClasses = [];
+        } else {
+            const flags = yield* ts.all(
+                ...dispatchContext.classTypes.map((candidateType) => (
+                    checker.isTypeAssignableTo.gen(candidateType, receiverType)
+                )),
+            );
+            const matched: ts.Type[] = [];
+            for (let index = 0; index < dispatchContext.classTypes.length; index++) {
+                if (flags[index]) matched.push(dispatchContext.classTypes[index]);
+            }
+            assignableClasses = matched;
+        }
+        context.caches.assignableClassesByTypeId.set(receiverType.id, assignableClasses);
+    }
+
     const targets: TypeScriptSemanticTarget[] = [];
-    for (const candidateType of dispatchContext.classTypes) {
-        if (!checker.isTypeAssignableTo(candidateType, receiverType)) continue;
-        const property = checker.getPropertyOfType(candidateType, propertyName);
-        if (!property) continue;
-        targets.push(...implementationsForSymbol(checker, property, projectFilesByVirtualPath));
+    if (assignableClasses.length > 0) {
+        const properties = yield* ts.all(
+            ...assignableClasses.map((candidateType) => (
+                propertyOfTypeGen(checker, candidateType, propertyName, context.caches)
+            )),
+        );
+        const foundProperties = properties.filter((property): property is ts.Symbol => Boolean(property));
+        if (foundProperties.length > 0) {
+            const targetLists = yield* ts.all(
+                ...foundProperties.map((property) => implementationsForSymbolGen(checker, property, context)),
+            );
+            for (const list of targetLists) targets.push(...list);
+        }
     }
 
     const unique = uniqueTargets(targets);
@@ -446,29 +595,35 @@ function dispatchTargetsForType(
     return unique;
 }
 
-function hasUncertainArgument(
+function* hasUncertainArgumentGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-): boolean {
-    return (call.arguments ?? []).some((argument) => {
-        const type = checker.getTypeAtLocation(argument);
-        return (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0;
-    });
+): ts.APIRequestGenerator<boolean> {
+    const args = call.arguments;
+    if (!args || args.length === 0) return false;
+    const types = yield* ts.all(...args.map((argument) => checker.getTypeAtLocation.gen(argument)));
+    return types.some((type) => (
+        (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0
+    ));
 }
 
-function overloadCandidates(
+function* overloadCandidatesGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): readonly TypeScriptSemanticTarget[] {
-    if (!hasUncertainArgument(checker, call)) return [];
-    const calleeType = checker.getTypeAtLocation(call.expression);
-    const signatures = ts.isNewExpression(call) ? calleeType.getConstructSignatures() : calleeType.getCallSignatures();
+    context: AnalysisContext,
+): ts.APIRequestGenerator<readonly TypeScriptSemanticTarget[]> {
+    if (!(yield* hasUncertainArgumentGen(checker, call))) return [];
+    const calleeType = yield* checker.getTypeAtLocation.gen(call.expression);
+    const signatures = ts.isNewExpression(call)
+        ? yield* calleeType.getConstructSignatures.gen()
+        : yield* calleeType.getCallSignatures.gen();
     if (signatures.length <= 1) return [];
-    return uniqueTargets(signatures
-        .map((signature) => signature.declaration?.resolve()
-            ? targetFromDeclaration(signature.declaration.resolve()!, projectFilesByVirtualPath, true)
-            : undefined)
+    const handles = signatures
+        .map((signature) => signature.declaration)
+        .filter((handle): handle is ts.NodeHandle<ts.Declaration> => Boolean(handle));
+    const declarations = yield* resolveHandlesGen(handles, context, true);
+    return uniqueTargets(declarations
+        .map((declaration) => targetFromDeclaration(declaration, context.projectFilesByVirtualPath, true))
         .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
 }
 
@@ -486,38 +641,40 @@ function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
     return current;
 }
 
-function assignmentTargetsForExpression(
+function* symbolAtIdentifierGen(
+    checker: ts.Checker,
+    node: ts.Identifier,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<ts.Symbol | undefined> {
+    const symbol = yield* checker.getSymbolAtLocation.gen(node);
+    return yield* resolvedSymbolGen(checker, symbol, caches);
+}
+
+function* assignmentTargetsForExpressionGen(
     checker: ts.Checker,
     expression: ts.Expression,
     propertyName: string,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    context: AnalysisContext,
     seenSymbols = new Set<ts.Symbol>(),
-): readonly TypeScriptSemanticTarget[] | undefined {
+): ts.APIRequestGenerator<readonly TypeScriptSemanticTarget[] | undefined> {
     const current = unwrapTransparentExpression(expression);
 
     if (ts.isConditionalExpression(current)) {
-        const whenTrue = assignmentTargetsForExpression(
-            checker,
-            current.whenTrue,
-            propertyName,
-            projectFilesByVirtualPath,
-            seenSymbols,
-        );
-        const whenFalse = assignmentTargetsForExpression(
-            checker,
-            current.whenFalse,
-            propertyName,
-            projectFilesByVirtualPath,
-            seenSymbols,
+        const [whenTrue, whenFalse] = yield* ts.all(
+            assignmentTargetsForExpressionGen(checker, current.whenTrue, propertyName, context, seenSymbols),
+            assignmentTargetsForExpressionGen(checker, current.whenFalse, propertyName, context, seenSymbols),
         );
         if (!whenTrue || !whenFalse) return undefined;
         return uniqueTargets([...whenTrue, ...whenFalse]);
     }
 
     if (ts.isIdentifier(current)) {
-        const symbol = symbolAtIdentifier(checker, current);
+        const symbol = yield* symbolAtIdentifierGen(checker, current, context.caches);
         if (!symbol || seenSymbols.has(symbol)) return undefined;
-        const declaration = symbol.valueDeclaration?.resolve();
+        const declHandle = symbol.valueDeclaration;
+        if (!declHandle) return undefined;
+        if (context.skipExternalHandles && !handleBelongsToProject(declHandle, context)) return undefined;
+        const declaration = yield* declHandle.resolve.gen();
         if (
             !declaration
             || !ts.isVariableDeclaration(declaration)
@@ -529,11 +686,11 @@ function assignmentTargetsForExpression(
         }
         const nextSeen = new Set(seenSymbols);
         nextSeen.add(symbol);
-        return assignmentTargetsForExpression(
+        return yield* assignmentTargetsForExpressionGen(
             checker,
             declaration.initializer,
             propertyName,
-            projectFilesByVirtualPath,
+            context,
             nextSeen,
         );
     }
@@ -542,35 +699,35 @@ function assignmentTargetsForExpression(
         ts.isPropertyAccessExpression(current)
         && current.expression.kind === ts.SyntaxKind.ThisKeyword
     ) {
-        const property = resolvedSymbol(checker, checker.getSymbolAtLocation(current.name));
-        const declaration = property?.valueDeclaration?.resolve();
-        if (
-            declaration
-            && ts.isPropertyDeclaration(declaration)
-            && declaration.initializer
-            && declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword)
-        ) {
-            return assignmentTargetsForExpression(
-                checker,
-                declaration.initializer,
-                propertyName,
-                projectFilesByVirtualPath,
-                seenSymbols,
-            );
+        const rawProperty = yield* checker.getSymbolAtLocation.gen(current.name);
+        const property = yield* resolvedSymbolGen(checker, rawProperty, context.caches);
+        const declHandle = property?.valueDeclaration;
+        if (declHandle && (!context.skipExternalHandles || handleBelongsToProject(declHandle, context))) {
+            const declaration = yield* declHandle.resolve.gen();
+            if (
+                declaration
+                && ts.isPropertyDeclaration(declaration)
+                && declaration.initializer
+                && declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword)
+            ) {
+                return yield* assignmentTargetsForExpressionGen(
+                    checker,
+                    declaration.initializer,
+                    propertyName,
+                    context,
+                    seenSymbols,
+                );
+            }
         }
     }
 
     if (!ts.isNewExpression(current)) return undefined;
 
-    const type = checker.getTypeAtLocation(current);
-    const property = checker.getPropertyOfType(type, propertyName);
+    const type = yield* checker.getTypeAtLocation.gen(current);
+    const property = yield* propertyOfTypeGen(checker, type, propertyName, context.caches);
     if (!property) return undefined;
-    const targets = implementationsForSymbol(checker, property, projectFilesByVirtualPath);
+    const targets = yield* implementationsForSymbolGen(checker, property, context);
     return targets.length > 0 ? targets : undefined;
-}
-
-function symbolAtIdentifier(checker: ts.Checker, node: ts.Identifier): ts.Symbol | undefined {
-    return resolvedSymbol(checker, checker.getSymbolAtLocation(node));
 }
 
 function isPrivateClassMemberDeclaration(declaration: ts.Declaration): boolean {
@@ -582,18 +739,20 @@ function isPrivateClassMemberDeclaration(declaration: ts.Declaration): boolean {
     return Boolean(modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword));
 }
 
-function privateThisMemberCandidates(
+function* privateThisMemberCandidatesGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     receiver: ts.Expression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): CandidateSet | undefined {
+    context: AnalysisContext,
+): ts.APIRequestGenerator<CandidateSet | undefined> {
     if (receiver.kind !== ts.SyntaxKind.ThisKeyword || ts.isNewExpression(call)) return undefined;
     const expression = call.expression;
-    const symbol = ts.isPropertyAccessExpression(expression)
-        ? resolvedSymbol(checker, checker.getSymbolAtLocation(expression.name))
-        : resolvedSymbol(checker, checker.getSymbolAtLocation(expression));
-    const executableDeclarations = (symbol?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? []).filter(isExecutableDeclaration);
+    const rawSymbol = ts.isPropertyAccessExpression(expression)
+        ? yield* checker.getSymbolAtLocation.gen(expression.name)
+        : yield* checker.getSymbolAtLocation.gen(expression);
+    const symbol = yield* resolvedSymbolGen(checker, rawSymbol, context.caches);
+    const declarations = symbol ? yield* resolveHandlesGen(symbol.declarations, context, false) : [];
+    const executableDeclarations = declarations.filter(isExecutableDeclaration);
     if (
         executableDeclarations.length === 0
         || executableDeclarations.some((declaration) => !isPrivateClassMemberDeclaration(declaration))
@@ -601,7 +760,7 @@ function privateThisMemberCandidates(
         return undefined;
     }
     const targets = uniqueTargets(executableDeclarations
-        .map((declaration) => targetFromDeclaration(declaration, projectFilesByVirtualPath))
+        .map((declaration) => targetFromDeclaration(declaration, context.projectFilesByVirtualPath))
         .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
     if (targets.length === 0) return undefined;
     return {
@@ -611,16 +770,20 @@ function privateThisMemberCandidates(
     };
 }
 
-function immutableLocalOriginCandidates(
+function* immutableLocalOriginCandidatesGen(
     checker: ts.Checker,
     receiver: ts.Expression,
     propertyName: string,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): CandidateSet | undefined {
+    context: AnalysisContext,
+    rawReceiverType: ts.Type,
+): ts.APIRequestGenerator<CandidateSet | undefined> {
     if (!ts.isIdentifier(receiver)) return undefined;
 
-    const symbol = symbolAtIdentifier(checker, receiver);
-    const declaration = symbol?.valueDeclaration?.resolve();
+    const symbol = yield* symbolAtIdentifierGen(checker, receiver, context.caches);
+    const declHandle = symbol?.valueDeclaration;
+    if (!declHandle) return undefined;
+    if (context.skipExternalHandles && !handleBelongsToProject(declHandle, context)) return undefined;
+    const declaration = yield* declHandle.resolve.gen();
     if (
         !declaration
         || !ts.isVariableDeclaration(declaration)
@@ -631,17 +794,17 @@ function immutableLocalOriginCandidates(
         return undefined;
     }
 
-    const targets = assignmentTargetsForExpression(
+    const targets = yield* assignmentTargetsForExpressionGen(
         checker,
         declaration.initializer,
         propertyName,
-        projectFilesByVirtualPath,
+        context,
     );
     if (!targets || targets.length === 0) return undefined;
 
     const unique = uniqueTargets(targets);
-    const staticProperty = checker.getPropertyOfType(checker.getTypeAtLocation(receiver), propertyName);
-    const staticTargets = implementationsForSymbol(checker, staticProperty, projectFilesByVirtualPath);
+    const staticProperty = yield* propertyOfTypeGen(checker, rawReceiverType, propertyName, context.caches);
+    const staticTargets = yield* implementationsForSymbolGen(checker, staticProperty, context);
     // Preserve compiler binding authority when allocation confirms the same
     // target. Origin flow is needed only when it changes the static target set.
     const confirmsStaticBinding = unique.every((target) => (
@@ -654,7 +817,7 @@ function immutableLocalOriginCandidates(
         bindingProofs: bindingProof(
             confirmsStaticBinding ? 'constructor_origin' : 'allocation_origin',
             receiver,
-            projectFilesByVirtualPath,
+            context.projectFilesByVirtualPath,
         ),
     };
 }
@@ -678,22 +841,28 @@ function enclosingFunctionLike(node: ts.Node): ts.FunctionLikeDeclaration | unde
     return undefined;
 }
 
-function nodeReferencesSymbol(
-    checker: ts.Checker,
-    node: ts.Node,
-    symbol: ts.Symbol,
-): boolean {
-    let found = false;
+function collectIdentifiersWithName(node: ts.Node, name: string): ts.Identifier[] {
+    const matches: ts.Identifier[] = [];
     const visit = (current: ts.Node): void => {
-        if (found) return;
-        if (ts.isIdentifier(current) && symbolAtIdentifier(checker, current) === symbol) {
-            found = true;
-            return;
+        if (ts.isIdentifier(current) && current.text === name) {
+            matches.push(current);
         }
         current.forEachChild(visit);
     };
     visit(node);
-    return found;
+    return matches;
+}
+
+function* nodeReferencesSymbolGen(
+    checker: ts.Checker,
+    node: ts.Node,
+    symbol: ts.Symbol,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<boolean> {
+    const candidates = collectIdentifiersWithName(node, symbol.name);
+    if (candidates.length === 0) return false;
+    const symbols = yield* ts.all(...candidates.map((id) => symbolAtIdentifierGen(checker, id, caches)));
+    return symbols.some((resolved) => resolved === symbol);
 }
 
 function isDirectEvalCall(call: ts.CallExpression): boolean {
@@ -702,19 +871,21 @@ function isDirectEvalCall(call: ts.CallExpression): boolean {
     return ts.isIdentifier(callee) && callee.text === 'eval';
 }
 
-function mutableLocalOriginCandidates(
+function* mutableLocalOriginCandidatesGen(
     checker: ts.Checker,
     receiver: ts.Expression,
     propertyName: string,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): CandidateSet | undefined {
+    context: AnalysisContext,
+): ts.APIRequestGenerator<CandidateSet | undefined> {
     if (!ts.isIdentifier(receiver)) return undefined;
 
-    const symbol = symbolAtIdentifier(checker, receiver);
-    const declaration = symbol?.valueDeclaration?.resolve();
+    const symbol = yield* symbolAtIdentifierGen(checker, receiver, context.caches);
+    const declHandle = symbol?.valueDeclaration;
+    if (!symbol || !declHandle) return undefined;
+    if (context.skipExternalHandles && !handleBelongsToProject(declHandle, context)) return undefined;
+    const declaration = yield* declHandle.resolve.gen();
     if (
-        !symbol
-        || !declaration
+        !declaration
         || !ts.isVariableDeclaration(declaration)
         || !ts.isVariableDeclarationList(declaration.parent)
         || (declaration.parent.flags & ts.NodeFlags.Let) === 0
@@ -727,78 +898,82 @@ function mutableLocalOriginCandidates(
 
     const targets: TypeScriptSemanticTarget[] = [];
     const originAlternatives: TypeScriptBindingProof[] = [];
-    let complete = true;
-    const collect = (expression: ts.Expression): void => {
-        const assignedTargets = assignmentTargetsForExpression(
-            checker,
-            expression,
-            propertyName,
-            projectFilesByVirtualPath,
-        );
-        if (!assignedTargets || assignedTargets.length === 0) {
-            complete = false;
-            return;
-        }
-        targets.push(...assignedTargets);
-        originAlternatives.push(...bindingProof(
-            'branch_origin', expression, projectFilesByVirtualPath,
-            'Observed mutable-binding origin alternative; execution order and reachability are not established.',
-        ));
-    };
+    const assignedExpressions: ts.Expression[] = [];
+    if (declaration.initializer) assignedExpressions.push(declaration.initializer);
 
-    if (declaration.initializer) collect(declaration.initializer);
-    if (!complete) return undefined;
+    // Collect relevant AST nodes first so we can verify writes with batched symbol checks.
+    let hasEval = false;
+    const assignments: ts.BinaryExpression[] = [];
+    const unaryUpdates: (ts.PrefixUnaryExpression | ts.PostfixUnaryExpression)[] = [];
+    const loopAssignments: (ts.ForInStatement | ts.ForOfStatement)[] = [];
 
     const visit = (node: ts.Node): void => {
-        if (!complete) return;
-
+        if (hasEval) return;
         if (ts.isCallExpression(node) && isDirectEvalCall(node)) {
-            complete = false;
+            hasEval = true;
             return;
         }
-
         if (
             ts.isBinaryExpression(node)
             && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
             && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-            && nodeReferencesSymbol(checker, node.left, symbol)
         ) {
-            if (
-                node.operatorToken.kind !== ts.SyntaxKind.EqualsToken
-                || !ts.isIdentifier(node.left)
-                || symbolAtIdentifier(checker, node.left) !== symbol
-            ) {
-                complete = false;
-                return;
-            }
-            collect(node.right);
-            if (!complete) return;
+            assignments.push(node);
         }
-
         if (
             (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
             && (node.operator === ts.SyntaxKind.PlusPlusToken
                 || node.operator === ts.SyntaxKind.MinusMinusToken)
-            && nodeReferencesSymbol(checker, node.operand, symbol)
         ) {
-            complete = false;
-            return;
+            unaryUpdates.push(node);
         }
-
         if (
             (ts.isForInStatement(node) || ts.isForOfStatement(node))
             && !ts.isVariableDeclarationList(node.initializer)
-            && nodeReferencesSymbol(checker, node.initializer, symbol)
         ) {
-            complete = false;
-            return;
+            loopAssignments.push(node);
         }
-
         node.forEachChild(visit);
     };
     visit(owner.body);
+    if (hasEval) return undefined;
 
-    if (!complete) return undefined;
+    for (const node of unaryUpdates) {
+        if (yield* nodeReferencesSymbolGen(checker, node.operand, symbol, context.caches)) {
+            return undefined;
+        }
+    }
+    for (const node of loopAssignments) {
+        if (yield* nodeReferencesSymbolGen(checker, node.initializer, symbol, context.caches)) {
+            return undefined;
+        }
+    }
+    for (const node of assignments) {
+        if (!(yield* nodeReferencesSymbolGen(checker, node.left, symbol, context.caches))) continue;
+        if (
+            node.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+            || !ts.isIdentifier(node.left)
+            || (yield* symbolAtIdentifierGen(checker, node.left, context.caches)) !== symbol
+        ) {
+            return undefined;
+        }
+        assignedExpressions.push(node.right);
+    }
+
+    for (const expression of assignedExpressions) {
+        const assignedTargets = yield* assignmentTargetsForExpressionGen(
+            checker,
+            expression,
+            propertyName,
+            context,
+        );
+        if (!assignedTargets || assignedTargets.length === 0) return undefined;
+        targets.push(...assignedTargets);
+        originAlternatives.push(...bindingProof(
+            'branch_origin', expression, context.projectFilesByVirtualPath,
+            'Observed mutable-binding origin alternative; execution order and reachability are not established.',
+        ));
+    }
 
     const unique = uniqueTargets(targets);
     // Mutable-origin evidence is candidate-only. A single observed origin does
@@ -820,11 +995,11 @@ function clipReceiverTypeDescription(value: string): string {
     return `${value.slice(0, MAX_RECEIVER_TYPE_DESCRIPTION_LENGTH - 3)}...`;
 }
 
-function receiverTypeSymbolName(type: ts.Type): string | undefined {
-    const aliasName = type.getAliasSymbol()?.name;
+function* receiverTypeSymbolNameGen(type: ts.Type): ts.APIRequestGenerator<string | undefined> {
+    const aliasName = (yield* type.getAliasSymbol.gen())?.name;
     if (aliasName) return clipReceiverTypeDescription(aliasName);
 
-    const symbolName = type.getSymbol()?.name;
+    const symbolName = (yield* type.getSymbol.gen())?.name;
     if (!symbolName || symbolName === '__type' || symbolName === '__object' || symbolName === '__function') {
         return undefined;
     }
@@ -847,8 +1022,8 @@ function receiverTypePrimitiveName(type: ts.Type): string | undefined {
     return undefined;
 }
 
-function describeReceiverType(type: ts.Type, depth = 0): string {
-    const symbolName = receiverTypeSymbolName(type);
+function* describeReceiverTypeGen(type: ts.Type, depth = 0): ts.APIRequestGenerator<string> {
+    const symbolName = yield* receiverTypeSymbolNameGen(type);
     if (symbolName) return symbolName;
 
     const primitiveName = receiverTypePrimitiveName(type);
@@ -856,10 +1031,12 @@ function describeReceiverType(type: ts.Type, depth = 0): string {
 
     if (depth < 2 && (type.isUnionType() || type.isIntersectionType())) {
         const separator = type.isUnionType() ? ' | ' : ' & ';
-        const parts = type.getTypes()
-            .slice(0, MAX_RECEIVER_TYPE_COMPONENTS)
-            .map((part) => describeReceiverType(part, depth + 1));
-        if (type.getTypes().length > MAX_RECEIVER_TYPE_COMPONENTS) parts.push('...');
+        const allTypes = (yield* type.getTypes.gen()) ?? [];
+        const slice = allTypes.slice(0, MAX_RECEIVER_TYPE_COMPONENTS);
+        const parts: string[] = slice.length > 0
+            ? yield* ts.all(...slice.map((part) => describeReceiverTypeGen(part, depth + 1)))
+            : [];
+        if (allTypes.length > MAX_RECEIVER_TYPE_COMPONENTS) parts.push('...');
         return clipReceiverTypeDescription(parts.join(separator));
     }
 
@@ -872,42 +1049,40 @@ function describeReceiverType(type: ts.Type, depth = 0): string {
 // constrained to the class instance type. Dispatch on that constraint so a
 // public `this.m()` gets the same override-aware dispatch as `c: C; c.m()`.
 // Unconstrained `this` parameters keep their type parameter.
-function thisReceiverDispatchType(checker: ts.Checker, receiver: ts.Expression, type: ts.Type): ts.Type {
+function* thisReceiverDispatchTypeGen(
+    checker: ts.Checker,
+    receiver: ts.Expression,
+    type: ts.Type,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<ts.Type> {
     if (receiver.kind !== ts.SyntaxKind.ThisKeyword || (type.flags & ts.TypeFlags.TypeParameter) === 0) return type;
-    const constraint = checker.getBaseConstraintOfType(type);
+    let constraint: ts.Type | undefined;
+    if (caches.baseConstraintByTypeId.has(type.id)) {
+        constraint = caches.baseConstraintByTypeId.get(type.id);
+    } else {
+        constraint = yield* checker.getBaseConstraintOfType.gen(type);
+        caches.baseConstraintByTypeId.set(type.id, constraint);
+    }
     if (!constraint || (constraint.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return type;
     return constraint;
 }
 
-function memberCandidatesWithoutBindingProofs(
+function* memberCandidatesWithoutBindingProofsGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    context: AnalysisContext,
     dispatchContext: ProjectDispatchContext,
-): CandidateSet | undefined {
-    const receiver = receiverForExpression(call.expression);
-    if (!receiver) return undefined;
-
-    const propertyName = propertyNameForExpression(call.expression);
-    if (!propertyName) {
-        return {
-            decision: 'unsupported',
-            reason: 'dynamic_callee',
-            targets: [],
-        };
-    }
-
-    const receiverType = thisReceiverDispatchType(checker, receiver, checker.getTypeAtLocation(receiver));
+    rawReceiverType: ts.Type,
+    receiverType: ts.Type,
+    receiver: ts.Expression,
+    propertyName: string,
+): ts.APIRequestGenerator<CandidateSet> {
     // Descriptive evidence only. Do not call TypeChecker.typeToString here:
     // project noErrorTruncation settings can force anonymous structural types
     // to expand into very large strings retained once per call during indexing.
-    const receiverTypeText = describeReceiverType(receiverType);
-
-    const privateThisCandidates = privateThisMemberCandidates(
-        checker,
-        call,
-        receiver,
-        projectFilesByVirtualPath,
+    const [receiverTypeText, privateThisCandidates] = yield* ts.all(
+        describeReceiverTypeGen(receiverType),
+        privateThisMemberCandidatesGen(checker, call, receiver, context),
     );
     if (privateThisCandidates) {
         return {
@@ -934,7 +1109,7 @@ function memberCandidatesWithoutBindingProofs(
         };
     }
 
-    const overloads = overloadCandidates(checker, call, projectFilesByVirtualPath);
+    const overloads = yield* overloadCandidatesGen(checker, call, context);
     if (overloads.length > 1) {
         return {
             decision: 'ambiguous',
@@ -945,11 +1120,11 @@ function memberCandidatesWithoutBindingProofs(
     }
 
     if (!ts.isIdentifier(receiver)) {
-        const expressionTargets = assignmentTargetsForExpression(
+        const expressionTargets = yield* assignmentTargetsForExpressionGen(
             checker,
             receiver,
             propertyName,
-            projectFilesByVirtualPath,
+            context,
         );
         if (expressionTargets && expressionTargets.length > 0) {
             const targets = uniqueTargets(expressionTargets);
@@ -959,17 +1134,18 @@ function memberCandidatesWithoutBindingProofs(
                 receiverType: receiverTypeText,
                 targets,
                 bindingProofs: ts.isNewExpression(unwrapTransparentExpression(receiver))
-                    ? bindingProof('constructor_origin', receiver, projectFilesByVirtualPath)
+                    ? bindingProof('constructor_origin', receiver, context.projectFilesByVirtualPath)
                     : [],
             };
         }
     }
 
-    const originCandidates = immutableLocalOriginCandidates(
+    const originCandidates = yield* immutableLocalOriginCandidatesGen(
         checker,
         receiver,
         propertyName,
-        projectFilesByVirtualPath,
+        context,
+        rawReceiverType,
     );
     if (originCandidates) {
         return {
@@ -978,11 +1154,11 @@ function memberCandidatesWithoutBindingProofs(
         };
     }
 
-    const mutableOriginCandidates = mutableLocalOriginCandidates(
+    const mutableOriginCandidates = yield* mutableLocalOriginCandidatesGen(
         checker,
         receiver,
         propertyName,
-        projectFilesByVirtualPath,
+        context,
     );
     if (mutableOriginCandidates) {
         return {
@@ -993,7 +1169,7 @@ function memberCandidatesWithoutBindingProofs(
 
     const optionalReceiver = callUsesOptionalReceiver(call);
     const branches = receiverType.isUnionType()
-        ? receiverType.getTypes().filter((part) => !(optionalReceiver && nullableType(part)))
+        ? ((yield* receiverType.getTypes.gen()) ?? []).filter((part) => !(optionalReceiver && nullableType(part)))
         : [receiverType];
 
     if (branches.length === 0) {
@@ -1015,28 +1191,27 @@ function memberCandidatesWithoutBindingProofs(
             continue;
         }
 
-        const property = checker.getPropertyOfType(branch, propertyName);
+        const property = yield* propertyOfTypeGen(checker, branch, propertyName, context.caches);
         if (!property) {
             unresolvedBranch = true;
             continue;
         }
 
-        const declarations = resolvedSymbol(checker, property)?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? [];
+        const [resolvedProperty, dispatchTargets] = yield* ts.all(
+            resolvedSymbolGen(checker, property, context.caches),
+            dispatchTargetsForTypeGen(checker, branch, propertyName, dispatchContext, context),
+        );
+
+        const declHandles = resolvedProperty?.declarations ?? [];
+        const declarations = yield* resolveHandlesGen(declHandles, context, true);
         const executableDeclarations = declarations.filter(isExecutableDeclaration);
         const hasProjectDeclaration = declarations.some((declaration) => (
-            declarationBelongsToProject(declaration, projectFilesByVirtualPath)
+            declarationBelongsToProject(declaration, context.projectFilesByVirtualPath)
         ));
         const ownTargets = executableDeclarations
-            .map((declaration) => targetFromDeclaration(declaration, projectFilesByVirtualPath))
+            .map((declaration) => targetFromDeclaration(declaration, context.projectFilesByVirtualPath))
             .filter((target): target is TypeScriptSemanticTarget => Boolean(target));
 
-        const dispatchTargets = dispatchTargetsForType(
-            checker,
-            branch,
-            propertyName,
-            dispatchContext,
-            projectFilesByVirtualPath,
-        );
         if (dispatchTargets.length > 1) {
             allTargets.push(...dispatchTargets);
             continue;
@@ -1108,17 +1283,21 @@ function memberCandidatesWithoutBindingProofs(
     };
 }
 
-function fieldBindingProofs(
+function* fieldBindingProofsGen(
     checker: ts.Checker,
     receiver: ts.Expression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    context: AnalysisContext,
     cache: Map<ts.Symbol, TypeScriptBindingProof[]>,
-): TypeScriptBindingProof[] {
+): ts.APIRequestGenerator<TypeScriptBindingProof[]> {
     if (!ts.isPropertyAccessExpression(receiver)
         || receiver.expression.kind !== ts.SyntaxKind.ThisKeyword) return [];
-    const symbol = resolvedSymbol(checker, checker.getSymbolAtLocation(receiver.name));
-    const declaration = symbol?.valueDeclaration?.resolve();
-    if (!symbol || !declaration || declaration.getSourceFile().fileName !== receiver.getSourceFile().fileName) return [];
+    const rawSymbol = yield* checker.getSymbolAtLocation.gen(receiver.name);
+    const symbol = yield* resolvedSymbolGen(checker, rawSymbol, context.caches);
+    const declHandle = symbol?.valueDeclaration;
+    if (!symbol || !declHandle) return [];
+    if (context.skipExternalHandles && !handleBelongsToProject(declHandle, context)) return [];
+    const declaration = yield* declHandle.resolve.gen();
+    if (!declaration || declaration.getSourceFile().fileName !== receiver.getSourceFile().fileName) return [];
     const cached = cache.get(symbol);
     if (cached) return cached;
     const save = (proof: TypeScriptBindingProof[]): TypeScriptBindingProof[] => {
@@ -1128,32 +1307,43 @@ function fieldBindingProofs(
     if (declaration.kind === ts.SyntaxKind.Parameter
         && ts.isConstructorDeclaration(declaration.parent)) {
         return save([
-            ...bindingProof('field_origin', declaration, projectFilesByVirtualPath),
-            ...bindingProof('constructor_origin', declaration, projectFilesByVirtualPath),
+            ...bindingProof('field_origin', declaration, context.projectFilesByVirtualPath),
+            ...bindingProof('constructor_origin', declaration, context.projectFilesByVirtualPath),
         ]);
     }
     if (!ts.isPropertyDeclaration(declaration)) return save([]);
-    const proof = bindingProof('field_origin', declaration, projectFilesByVirtualPath);
+    const proof = bindingProof('field_origin', declaration, context.projectFilesByVirtualPath);
     if (declaration.initializer) {
         return save(ts.isNewExpression(unwrapTransparentExpression(declaration.initializer))
-            ? [...proof, ...bindingProof('constructor_origin', declaration.initializer, projectFilesByVirtualPath)]
+            ? [...proof, ...bindingProof('constructor_origin', declaration.initializer, context.projectFilesByVirtualPath)]
             : []);
     }
     const owner = declaration.parent;
     if (!ts.isClassLikeDeclaration(owner)) return save([]);
-    const writes: ts.BinaryExpression[] = [];
+    const candidateWrites: ts.BinaryExpression[] = [];
     const visit = (node: ts.Node): void => {
         if (ts.isBinaryExpression(node)
             && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
             && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
             && ts.isPropertyAccessExpression(node.left)
             && node.left.expression.kind === ts.SyntaxKind.ThisKeyword
-            && resolvedSymbol(checker, checker.getSymbolAtLocation(node.left.name)) === symbol) {
-            writes.push(node);
+            && node.left.name.text === symbol.name) {
+            candidateWrites.push(node);
         }
         node.forEachChild(visit);
     };
     visit(owner);
+    const writes: ts.BinaryExpression[] = [];
+    if (candidateWrites.length > 0) {
+        const writeSymbols = yield* ts.all(
+            ...candidateWrites.map((write) => (
+                resolvedSymbolFromLocationGen(checker, (write.left as ts.PropertyAccessExpression).name, context.caches)
+            )),
+        );
+        for (let index = 0; index < candidateWrites.length; index++) {
+            if (writeSymbols[index] === symbol) writes.push(candidateWrites[index]);
+        }
+    }
     // Only one direct constructor write establishes this specific parameter
     // link. Uncertain or overwritten fields do not get origin evidence.
     if (writes.length !== 1) return save([]);
@@ -1165,69 +1355,145 @@ function fieldBindingProofs(
     const constructor = write.parent.parent.parent;
     const value = unwrapTransparentExpression(write.right);
     if (!ts.isIdentifier(value)) return save([]);
-    const parameter = resolvedSymbol(checker, checker.getSymbolAtLocation(value))?.valueDeclaration?.resolve();
+    const paramSymbol = yield* symbolAtIdentifierGen(checker, value, context.caches);
+    const paramHandle = paramSymbol?.valueDeclaration;
+    const parameter = paramHandle ? yield* paramHandle.resolve.gen() : undefined;
     if (parameter?.kind !== ts.SyntaxKind.Parameter || parameter.parent !== constructor) return save([]);
     return save([
         ...proof,
-        ...bindingProof('constructor_origin', parameter, projectFilesByVirtualPath),
-        ...bindingProof('assignment_origin', write, projectFilesByVirtualPath),
-        ...bindingProof('flow_hop', write, projectFilesByVirtualPath).map((step) => ({ ...step, hop: 1 })),
+        ...bindingProof('constructor_origin', parameter, context.projectFilesByVirtualPath),
+        ...bindingProof('assignment_origin', write, context.projectFilesByVirtualPath),
+        ...bindingProof('flow_hop', write, context.projectFilesByVirtualPath).map((step) => ({ ...step, hop: 1 })),
     ]);
 }
 
-function memberCandidates(
+function* resolvedSymbolFromLocationGen(
+    checker: ts.Checker,
+    node: ts.Node,
+    caches: AnalysisCaches,
+): ts.APIRequestGenerator<ts.Symbol | undefined> {
+    const raw = yield* checker.getSymbolAtLocation.gen(node);
+    return yield* resolvedSymbolGen(checker, raw, caches);
+}
+
+function* memberCandidatesGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    context: AnalysisContext,
     dispatchContext: ProjectDispatchContext,
-): CandidateSet | undefined {
-    const candidates = memberCandidatesWithoutBindingProofs(checker, call, projectFilesByVirtualPath, dispatchContext);
+    preFetchedRawReceiverType?: ts.Type,
+    preFetchedReceiverType?: ts.Type,
+): ts.APIRequestGenerator<CandidateSet | undefined> {
     const receiver = receiverForExpression(call.expression);
-    if (!candidates || !receiver) return candidates;
-    const proof = [...(candidates.bindingProofs ?? []), ...fieldBindingProofs(checker, receiver, projectFilesByVirtualPath, dispatchContext.fieldBindingProofs)];
-    if (callUsesOptionalReceiver(call)) {
-        proof.push(...bindingProof('optional_receiver', call.expression, projectFilesByVirtualPath));
+    if (!receiver) return undefined;
+
+    const propertyName = propertyNameForExpression(call.expression);
+    if (!propertyName) {
+        return {
+            decision: 'unsupported',
+            reason: 'dynamic_callee',
+            targets: [],
+        };
     }
-    const type = thisReceiverDispatchType(checker, receiver, checker.getTypeAtLocation(receiver));
-    const branches = type.isUnionType() ? type.getTypes() : [type];
+
+    const rawReceiverType = preFetchedRawReceiverType ?? (yield* checker.getTypeAtLocation.gen(receiver));
+    const receiverType = preFetchedReceiverType
+        ?? (yield* thisReceiverDispatchTypeGen(checker, receiver, rawReceiverType, context.caches));
+
+    const [candidates, fieldProof] = yield* ts.all(
+        memberCandidatesWithoutBindingProofsGen(
+            checker,
+            call,
+            context,
+            dispatchContext,
+            rawReceiverType,
+            receiverType,
+            receiver,
+            propertyName,
+        ),
+        fieldBindingProofsGen(checker, receiver, context, dispatchContext.fieldBindingProofs),
+    );
+
+    const proof = [...(candidates.bindingProofs ?? []), ...fieldProof];
+    if (callUsesOptionalReceiver(call)) {
+        proof.push(...bindingProof('optional_receiver', call.expression, context.projectFilesByVirtualPath));
+    }
+
+    const branches = receiverType.isUnionType()
+        ? ((yield* receiverType.getTypes.gen()) ?? [])
+        : [receiverType];
     for (const branch of branches) {
-        const declarations = resolvedSymbol(checker, branch.getSymbol())?.declarations
-            .map((handle) => handle.resolve()).filter((node): node is ts.Declaration => Boolean(node)) ?? [];
-        if (declarations.some(ts.isInterfaceDeclaration)) {
-            proof.push(...bindingProof('interface_contract', receiver, projectFilesByVirtualPath));
+        const branchRawSymbol = yield* branch.getSymbol.gen();
+        const branchSymbol = yield* resolvedSymbolGen(checker, branchRawSymbol, context.caches);
+        const declHandles = branchSymbol?.declarations ?? [];
+
+        if (context.skipExternalHandles) {
+            if (declHandles.some((handle) => handle.kind === ts.SyntaxKind.InterfaceDeclaration)) {
+                proof.push(...bindingProof('interface_contract', receiver, context.projectFilesByVirtualPath));
+            }
+        } else {
+            const declarations = yield* resolveHandlesGen(declHandles, context, false);
+            if (declarations.some(ts.isInterfaceDeclaration)) {
+                proof.push(...bindingProof('interface_contract', receiver, context.projectFilesByVirtualPath));
+            }
         }
-        const propertyName = propertyNameForExpression(call.expression);
-        if (!propertyName || !candidates.targets.length) continue;
-        const property = resolvedSymbol(checker, checker.getPropertyOfType(branch, propertyName));
-        const methodOwners = property?.declarations.map((handle) => handle.resolve()?.parent)
-            .filter((node): node is ts.ClassLikeDeclaration => Boolean(node && ts.isClassLikeDeclaration(node))) ?? [];
-        for (const declaration of declarations) {
+
+        if (!candidates.targets.length) continue;
+
+        const classHandles = declHandles.filter((handle) => (
+            handle.kind === ts.SyntaxKind.ClassDeclaration
+            || handle.kind === ts.SyntaxKind.ClassExpression
+        ));
+        if (classHandles.length === 0) continue;
+
+        const classDeclarations = yield* resolveHandlesGen(classHandles, context, false);
+        const extendsTypes: ts.HeritageClauseElement[] = [];
+        for (const declaration of classDeclarations) {
             if (!ts.isClassLikeDeclaration(declaration)) continue;
             for (const clause of declaration.heritageClauses ?? []) {
                 if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
-                for (const base of clause.types) {
-                    const baseName = 'expression' in base ? base.expression : base.typeName;
-                    const baseDeclarations = resolvedSymbol(checker, checker.getSymbolAtLocation(baseName))?.declarations
-                        .map((handle) => handle.resolve()).filter((node): node is ts.Declaration => Boolean(node)) ?? [];
-                    if (methodOwners.some((owner) => baseDeclarations.some((baseDeclaration) => (
-                        baseDeclaration.getSourceFile().fileName === owner.getSourceFile().fileName
-                        && baseDeclaration.pos === owner.pos && baseDeclaration.end === owner.end
-                    )))) {
-                        proof.push(...bindingProof('class_inheritance', receiver, projectFilesByVirtualPath, base.getText()));
-                    }
-                }
+                for (const base of clause.types) extendsTypes.push(base);
+            }
+        }
+        if (extendsTypes.length === 0) continue;
+
+        const rawProperty = yield* propertyOfTypeGen(checker, branch, propertyName, context.caches);
+        const property = yield* resolvedSymbolGen(checker, rawProperty, context.caches);
+        const propertyDeclarations = property
+            ? yield* resolveHandlesGen(property.declarations, context, false)
+            : [];
+        const methodOwners = propertyDeclarations
+            .map((declaration) => declaration.parent)
+            .filter((node): node is ts.ClassLikeDeclaration => Boolean(node && ts.isClassLikeDeclaration(node)));
+        if (methodOwners.length === 0) continue;
+
+        for (const base of extendsTypes) {
+            const baseName = 'expression' in base ? base.expression : base.typeName;
+            const baseSymbol = yield* resolvedSymbolFromLocationGen(checker, baseName, context.caches);
+            const baseDeclarations = baseSymbol
+                ? yield* resolveHandlesGen(baseSymbol.declarations, context, false)
+                : [];
+            if (methodOwners.some((owner) => baseDeclarations.some((baseDeclaration) => (
+                baseDeclaration.getSourceFile().fileName === owner.getSourceFile().fileName
+                && baseDeclaration.pos === owner.pos && baseDeclaration.end === owner.end
+            )))) {
+                proof.push(...bindingProof('class_inheritance', receiver, context.projectFilesByVirtualPath, base.getText()));
             }
         }
     }
     return { ...candidates, bindingProofs: proof };
 }
 
-function directCandidates(
+function* directCandidatesGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-): CandidateSet {
-    const overloads = overloadCandidates(checker, call, projectFilesByVirtualPath);
+    context: AnalysisContext,
+): ts.APIRequestGenerator<CandidateSet> {
+    const [overloads, binding, resolvedSig] = yield* ts.all(
+        overloadCandidatesGen(checker, call, context),
+        checker.getSymbolAtLocation.gen(call.expression),
+        checker.getResolvedSignature.gen(call),
+    );
     if (overloads.length > 1) {
         return {
             decision: 'ambiguous',
@@ -1236,10 +1502,11 @@ function directCandidates(
         };
     }
 
-    const binding = checker.getSymbolAtLocation(call.expression);
-    const symbol = resolvedSymbol(checker, binding);
-    const symbolTargets = implementationsForSymbol(checker, symbol, projectFilesByVirtualPath);
-    const signature = signatureTarget(checker, call, projectFilesByVirtualPath);
+    const symbol = yield* resolvedSymbolGen(checker, binding, context.caches);
+    const [symbolTargets, signature] = yield* ts.all(
+        implementationsForSymbolGen(checker, symbol, context),
+        signatureTargetGen(checker, call, context, resolvedSig),
+    );
     const targets = uniqueTargets(signature ? [...symbolTargets, signature] : symbolTargets);
 
     if (targets.length > 1) {
@@ -1252,13 +1519,13 @@ function directCandidates(
     if (targets.length === 1) {
         const proofs: TypeScriptBindingProof[] = [];
         if (ts.isNewExpression(call) && signature?.kind === 'constructor') {
-            proofs.push(...bindingProof('constructor_origin', call, projectFilesByVirtualPath));
+            proofs.push(...bindingProof('constructor_origin', call, context.projectFilesByVirtualPath));
         }
         // A signature target alone does not prove a lexical symbol binding.
         if (symbolTargets.some((target) => targetKey(target) === targetKey(targets[0]))) {
             if (binding && (binding.flags & ts.SymbolFlags.Alias) !== 0) {
-                for (const handle of binding.declarations) {
-                    let declaration: ts.Node | undefined = handle.resolve();
+                const aliasDeclarations = yield* resolveHandlesGen(binding.declarations, context, false);
+                for (let declaration of aliasDeclarations as (ts.Node | undefined)[]) {
                     while (declaration && declaration.kind !== ts.SyntaxKind.ImportDeclaration) {
                         declaration = declaration.parent;
                     }
@@ -1268,15 +1535,15 @@ function directCandidates(
                     proofs.push(...bindingProof(
                         module.text.startsWith('.') ? 'relative_import' : 'absolute_import',
                         call.expression,
-                        projectFilesByVirtualPath,
+                        context.projectFilesByVirtualPath,
                         module.text,
                     ));
-                    proofs.push(...bindingProof('alias_binding', call.expression, projectFilesByVirtualPath, module.text));
+                    proofs.push(...bindingProof('alias_binding', call.expression, context.projectFilesByVirtualPath, module.text));
                 }
-            } else if (targets[0].file === projectFilesByVirtualPath.get(
+            } else if (targets[0].file === context.projectFilesByVirtualPath.get(
                 path.posix.normalize(call.getSourceFile().fileName.replace(/\\/g, '/')),
             )?.projectPath) {
-                proofs.push(...bindingProof('same_file_definition', call.expression, projectFilesByVirtualPath));
+                proofs.push(...bindingProof('same_file_definition', call.expression, context.projectFilesByVirtualPath));
             }
         }
         return {
@@ -1287,10 +1554,11 @@ function directCandidates(
         };
     }
 
-    const declarations = symbol?.declarations.flatMap(handle => { const node = handle.resolve(); return node ? [node] : []; }) ?? [];
-    const declarationCount = declarations.length;
-    const hasProjectDeclaration = declarations.some((declaration) => (
-        declarationBelongsToProject(declaration, projectFilesByVirtualPath)
+    const declHandles = symbol?.declarations ?? [];
+    const projectDeclarations = yield* resolveHandlesGen(declHandles, context, true);
+    const declarationCount = context.skipExternalHandles ? declHandles.length : projectDeclarations.length;
+    const hasProjectDeclaration = projectDeclarations.some((declaration) => (
+        declarationBelongsToProject(declaration, context.projectFilesByVirtualPath)
     ));
     return {
         decision: declarationCount > 0 && hasProjectDeclaration ? 'unresolved' : 'unsupported',
@@ -1301,16 +1569,25 @@ function directCandidates(
     };
 }
 
-function evidenceForCall(
+function* evidenceForCallGen(
     checker: ts.Checker,
     call: ts.CallExpression | ts.NewExpression,
     sourceFile: ts.SourceFile,
     projectFile: ProjectFile,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    context: AnalysisContext,
     dispatchContext: ProjectDispatchContext,
-): TypeScriptCallEvidence {
-    const member = memberCandidates(checker, call, projectFilesByVirtualPath, dispatchContext);
-    const candidates = member ?? directCandidates(checker, call, projectFilesByVirtualPath);
+    preFetchedRawReceiverType?: ts.Type,
+    preFetchedReceiverType?: ts.Type,
+): ts.APIRequestGenerator<TypeScriptCallEvidence> {
+    const member = yield* memberCandidatesGen(
+        checker,
+        call,
+        context,
+        dispatchContext,
+        preFetchedRawReceiverType,
+        preFetchedReceiverType,
+    );
+    const candidates = member ?? (yield* directCandidatesGen(checker, call, context));
     const [target] = candidates.targets;
 
     return {
@@ -1332,50 +1609,272 @@ function evidenceForCall(
     };
 }
 
+function resolveBatchApi(program: ts.Program, explicitApi?: NativeTypeScriptApi): NativeTypeScriptApi | undefined {
+    if (explicitApi && typeof explicitApi.batch === 'function') return explicitApi;
+    const projectApi = (program.getProject() as unknown as { readonly api?: NativeTypeScriptApi }).api;
+    return projectApi && typeof projectApi.batch === 'function' ? projectApi : undefined;
+}
+
+/**
+ * Pre-fetches receiver types and deduplicated `isTypeAssignableTo` checks for
+ * a chunk of calls so repeated receiver types across calls in the same batch
+ * never send duplicate assignability checks over IPC.
+ */
+function prewarmMemberReceiversForChunk(
+    api: NativeTypeScriptApi,
+    checker: ts.Checker,
+    chunk: readonly CallWorkItem[],
+    dispatchContext: ProjectDispatchContext,
+    caches: AnalysisCaches,
+): {
+    readonly rawByIndex: Map<number, ts.Type>;
+    readonly effectiveByIndex: Map<number, ts.Type>;
+} {
+    const rawByIndex = new Map<number, ts.Type>();
+    const effectiveByIndex = new Map<number, ts.Type>();
+
+    const memberEntries: { readonly index: number; readonly receiver: ts.Expression }[] = [];
+    for (let index = 0; index < chunk.length; index++) {
+        const expr = chunk[index].call.expression;
+        const receiver = receiverForExpression(expr);
+        if (receiver && propertyNameForExpression(expr)) {
+            memberEntries.push({ index, receiver });
+        }
+    }
+    if (memberEntries.length === 0) return { rawByIndex, effectiveByIndex };
+
+    // Wave 1: raw receiver types for every member call in the chunk.
+    const rawTypes = api.batch(
+        ...memberEntries.map(({ receiver }) => checker.getTypeAtLocation.gen(receiver)),
+    );
+    const thisParamIndices: { readonly entryIndex: number; readonly type: ts.Type }[] = [];
+    for (let i = 0; i < memberEntries.length; i++) {
+        const entry = memberEntries[i];
+        const rawType = rawTypes[i];
+        rawByIndex.set(entry.index, rawType);
+        if (entry.receiver.kind === ts.SyntaxKind.ThisKeyword && (rawType.flags & ts.TypeFlags.TypeParameter) !== 0) {
+            thisParamIndices.push({ entryIndex: i, type: rawType });
+        } else {
+            effectiveByIndex.set(entry.index, rawType);
+        }
+    }
+
+    // Wave 2: polymorphic `this` constraints (only for class methods calling `this.m()`).
+    if (thisParamIndices.length > 0) {
+        const uncachedThisTypes = new Map<number, ts.Type>();
+        for (const { type } of thisParamIndices) {
+            if (!caches.baseConstraintByTypeId.has(type.id)) {
+                uncachedThisTypes.set(type.id, type);
+            }
+        }
+        if (uncachedThisTypes.size > 0) {
+            const uniqueList = [...uncachedThisTypes.values()];
+            const constraints = api.batch(
+                ...uniqueList.map((type) => checker.getBaseConstraintOfType.gen(type)),
+            );
+            for (let i = 0; i < uniqueList.length; i++) {
+                caches.baseConstraintByTypeId.set(uniqueList[i].id, constraints[i]);
+            }
+        }
+        for (const { entryIndex, type } of thisParamIndices) {
+            const constraint = caches.baseConstraintByTypeId.get(type.id);
+            const effective = constraint && (constraint.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0
+                ? constraint
+                : type;
+            effectiveByIndex.set(memberEntries[entryIndex].index, effective);
+        }
+    }
+
+    // Wave 3 & 4: expand union branches and precompute deduplicated class assignability.
+    if (dispatchContext.classTypes.length === 0) return { rawByIndex, effectiveByIndex };
+
+    const unionTypes = new Map<number, ts.UnionType>();
+    for (const type of effectiveByIndex.values()) {
+        if (type.isUnionType()) unionTypes.set(type.id, type);
+    }
+    const unionBranchesById = new Map<number, readonly ts.Type[]>();
+    if (unionTypes.size > 0) {
+        const uniqueUnions = [...unionTypes.values()];
+        const expanded = api.batch(...uniqueUnions.map((type) => type.getTypes.gen()));
+        for (let i = 0; i < uniqueUnions.length; i++) {
+            unionBranchesById.set(uniqueUnions[i].id, expanded[i] ?? []);
+        }
+    }
+
+    const uncachedBranches = new Map<number, ts.Type>();
+    for (const type of effectiveByIndex.values()) {
+        if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0) continue;
+        const branches = type.isUnionType() ? (unionBranchesById.get(type.id) ?? []) : [type];
+        for (const branch of branches) {
+            if ((branch.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0) continue;
+            if (!caches.assignableClassesByTypeId.has(branch.id)) {
+                uncachedBranches.set(branch.id, branch);
+            }
+        }
+    }
+
+    if (uncachedBranches.size > 0) {
+        const branchList = [...uncachedBranches.values()];
+        const classTypes = dispatchContext.classTypes;
+        const classCount = classTypes.length;
+        const matchedByBranch = branchList.map((): ts.Type[] => []);
+        const checkCount = branchList.length * classCount;
+        for (let start = 0; start < checkCount; start += ASSIGNABILITY_BATCH_SIZE) {
+            const end = Math.min(start + ASSIGNABILITY_BATCH_SIZE, checkCount);
+            const checks: ts.AnyAPIRequestGenerator<boolean>[] = [];
+            for (let index = start; index < end; index++) {
+                const branch = branchList[Math.floor(index / classCount)];
+                checks.push(checker.isTypeAssignableTo.gen(classTypes[index % classCount], branch));
+            }
+            const results = api.batch(...checks);
+            for (let index = start; index < end; index++) {
+                if (results[index - start]) {
+                    matchedByBranch[Math.floor(index / classCount)].push(classTypes[index % classCount]);
+                }
+            }
+        }
+        for (let index = 0; index < branchList.length; index++) {
+            caches.assignableClassesByTypeId.set(branchList[index].id, matchedByBranch[index]);
+        }
+    }
+
+    return { rawByIndex, effectiveByIndex };
+}
+
 function analyzeProgramEvidence(
     program: ts.Program,
     projectFiles: readonly ProjectFile[],
     collectDiagnostics: boolean,
     startedAt: number,
     sourceFiles?: ReadonlySet<string>,
+    explicitApi?: NativeTypeScriptApi,
+    executionMode: 'batched' | 'serial' = 'batched',
 ): TypeScriptProjectEvidence {
+    const api = resolveBatchApi(program, explicitApi);
+    const batched = executionMode === 'batched' && Boolean(api);
     const projectFilesByVirtualPath = new Map(projectFiles.map((file) => [file.virtualPath, file]));
+    const projectCanonicalPaths = new Set(
+        projectFiles.map((file) => program.getCanonicalFileName(file.virtualPath)),
+    );
     const checker = program.getProject().checker;
-    const dispatchContext = collectProjectDispatchContext(checker, program, projectFilesByVirtualPath);
+
+    // Fetch missing SourceFiles for project files only (never external .d.ts files).
+    const resolvedSourceFilesByVirtualPath = new Map<string, ts.SourceFile>();
+    const missingFiles: ProjectFile[] = [];
+    for (const projectFile of projectFiles) {
+        if (projectFile.sourceFile) {
+            resolvedSourceFilesByVirtualPath.set(projectFile.virtualPath, projectFile.sourceFile);
+        } else {
+            missingFiles.push(projectFile);
+        }
+    }
+    if (missingFiles.length > 0) {
+        if (batched && api) {
+            const fetched = api.batch(...missingFiles.map((file) => program.getSourceFile.gen(file.virtualPath)));
+            for (let index = 0; index < missingFiles.length; index++) {
+                const sf = fetched[index];
+                if (sf) resolvedSourceFilesByVirtualPath.set(missingFiles[index].virtualPath, sf);
+            }
+        } else {
+            for (const file of missingFiles) {
+                const sf = program.getSourceFile(file.virtualPath);
+                if (sf) resolvedSourceFilesByVirtualPath.set(file.virtualPath, sf);
+            }
+        }
+    }
+
+    // Preserve program.getSourceFileNames() order so concrete class dispatch
+    // candidates keep the compiler program's exact order without fetching
+    // external .d.ts files over IPC.
+    const allProjectSourceFiles: ts.SourceFile[] = [];
+    const seenDispatchFiles = new Set<string>();
+    for (const fileName of program.getSourceFileNames()) {
+        const normalized = path.posix.normalize(fileName.replace(/\\/g, '/'));
+        const sf = resolvedSourceFilesByVirtualPath.get(normalized);
+        if (sf && !seenDispatchFiles.has(normalized)) {
+            seenDispatchFiles.add(normalized);
+            allProjectSourceFiles.push(sf);
+        }
+    }
+    for (const [normalized, sf] of resolvedSourceFilesByVirtualPath) {
+        if (!seenDispatchFiles.has(normalized)) {
+            allProjectSourceFiles.push(sf);
+        }
+    }
+    const dispatchContext = collectProjectDispatchContext(api, checker, allProjectSourceFiles, batched);
+    const caches: AnalysisCaches = {
+        resolvedSymbolById: new Map(),
+        propertyOfTypeByKey: new Map(),
+        implementationsBySymbolId: new Map(),
+        assignableClassesByTypeId: new Map(),
+        baseConstraintByTypeId: new Map(),
+    };
+    const context: AnalysisContext = {
+        projectFilesByVirtualPath,
+        projectCanonicalPaths,
+        caches,
+        skipExternalHandles: batched,
+    };
+
     const occurrencesByFile = new Map<string, TypeScriptCallEvidence[]>();
+    const workItems: CallWorkItem[] = [];
 
     for (const projectFile of projectFiles) {
         if (sourceFiles && !sourceFiles.has(projectFile.projectPath)) continue;
-        const sourceFile = program.getSourceFile(projectFile.virtualPath);
-        if (!sourceFile || sourceFile.isDeclarationFile) {
-            occurrencesByFile.set(projectFile.projectPath, []);
-            continue;
-        }
+        const sourceFile = resolvedSourceFilesByVirtualPath.get(projectFile.virtualPath);
+        const fileOccurrences: TypeScriptCallEvidence[] = [];
+        occurrencesByFile.set(projectFile.projectPath, fileOccurrences);
+        if (!sourceFile || sourceFile.isDeclarationFile) continue;
 
-        const occurrences: TypeScriptCallEvidence[] = [];
         const visit = (node: ts.Node): void => {
             if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-                occurrences.push(evidenceForCall(
-                    checker,
-                    node,
-                    sourceFile,
-                    projectFile,
-                    projectFilesByVirtualPath,
-                    dispatchContext,
-                ));
+                workItems.push({ call: node, sourceFile, projectFile, fileOccurrences });
             }
             node.forEachChild(visit);
         };
         visit(sourceFile);
-        occurrencesByFile.set(projectFile.projectPath, occurrences);
     }
 
-    const diagnostics = collectDiagnostics
-        ? {
-            syntactic: program.getSyntacticDiagnostics().length,
-            semantic: program.getSemanticDiagnostics().length,
+    if (api && workItems.length > 0) {
+        const chunkSize = batched ? CALL_BATCH_CHUNK_SIZE : 1;
+        for (let start = 0; start < workItems.length; start += chunkSize) {
+            const chunk = workItems.slice(start, start + chunkSize);
+            const prewarmed = batched
+                ? prewarmMemberReceiversForChunk(api, checker, chunk, dispatchContext, caches)
+                : undefined;
+            const results = api.batch(
+                ...chunk.map((item, index) => evidenceForCallGen(
+                    checker,
+                    item.call,
+                    item.sourceFile,
+                    item.projectFile,
+                    context,
+                    dispatchContext,
+                    prewarmed?.rawByIndex.get(index),
+                    prewarmed?.effectiveByIndex.get(index),
+                )),
+            );
+            for (let index = 0; index < chunk.length; index++) {
+                chunk[index].fileOccurrences.push(results[index]);
+            }
         }
-        : undefined;
+    }
+
+    let diagnostics: { readonly syntactic: number; readonly semantic: number } | undefined;
+    if (collectDiagnostics) {
+        if (batched && api) {
+            const [syntactic, semantic] = api.batch(
+                program.getSyntacticDiagnostics.gen(),
+                program.getSemanticDiagnostics.gen(),
+            );
+            diagnostics = { syntactic: syntactic.length, semantic: semantic.length };
+        } else {
+            diagnostics = {
+                syntactic: program.getSyntacticDiagnostics().length,
+                semantic: program.getSemanticDiagnostics().length,
+            };
+        }
+    }
 
     return {
         language: 'typescript',
@@ -1393,14 +1892,17 @@ export function analyzeTypeScriptProgram(
     sourceFiles: readonly TypeScriptProgramSourceFile[],
     providerOptions: Pick<TypeScriptCompilerProviderOptions, 'collectDiagnostics'> & {
         readonly sourceFiles?: ReadonlySet<string>;
+        readonly api?: NativeTypeScriptApi;
+        readonly executionMode?: 'batched' | 'serial';
     } = {},
 ): TypeScriptProjectEvidence {
     const startedAt = performance.now();
     const projectFiles = sourceFiles.map(({ projectPath, sourceFile }): ProjectFile => ({
         projectPath: normalizeProjectPath(projectPath),
-        virtualPath: path.posix.normalize(sourceFile.fileName.replace(/\\\\/g, '/')),
+        virtualPath: path.posix.normalize(sourceFile.fileName.replace(/\\/g, '/')),
         source: sourceFile.text,
         sourceMap: new Utf8SourceMap(sourceFile.text),
+        sourceFile,
     }));
     return analyzeProgramEvidence(
         program,
@@ -1408,12 +1910,16 @@ export function analyzeTypeScriptProgram(
         providerOptions.collectDiagnostics ?? false,
         startedAt,
         providerOptions.sourceFiles,
+        providerOptions.api,
+        providerOptions.executionMode ?? 'batched',
     );
 }
 
 export function analyzeTypeScriptProject(
     input: SemanticProjectInput,
-    providerOptions: TypeScriptCompilerProviderOptions = {},
+    providerOptions: TypeScriptCompilerProviderOptions & {
+        readonly executionMode?: 'batched' | 'serial';
+    } = {},
 ): TypeScriptProjectEvidence {
     const startedAt = performance.now();
 
@@ -1435,8 +1941,15 @@ export function analyzeTypeScriptProject(
             createPrograms: [{ rootFiles: projectFiles.map(file => file.virtualPath), compilerOptions }],
         });
         try {
-            return analyzeProgramEvidence(snapshot.operation.createdPrograms[0], projectFiles,
-                providerOptions.collectDiagnostics ?? false, startedAt);
+            return analyzeProgramEvidence(
+                snapshot.operation.createdPrograms[0],
+                projectFiles,
+                providerOptions.collectDiagnostics ?? false,
+                startedAt,
+                undefined,
+                api,
+                providerOptions.executionMode ?? 'batched',
+            );
         } finally { snapshot.dispose(); }
     } finally { api.close(); }
 }

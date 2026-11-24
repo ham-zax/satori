@@ -161,6 +161,11 @@ export class TypeScriptProgramSession {
         });
     }
 
+    getApi(): InstanceType<typeof API> {
+        if (this.disposed) throw new Error('TypeScript program session is disposed.');
+        return this.api;
+    }
+
     getProgram(): Program {
         if (this.disposed) throw new Error('TypeScript program session is disposed.');
         const refreshed = !this.snapshot || this.changed.size > 0;

@@ -534,3 +534,39 @@ expect(external).run();
 
     assert.equal(call?.receiverType, 'Matchers');
 });
+
+test('batched TS 7.1 IPC execution matches serial execution byte-for-byte', () => {
+    const batched = analyzeTypeScriptProject(project(), {
+        collectDiagnostics: true,
+        executionMode: 'batched',
+    });
+    const serial = analyzeTypeScriptProject(project(), {
+        collectDiagnostics: true,
+        executionMode: 'serial',
+    });
+
+    assert.deepEqual(
+        [...batched.occurrencesByFile.entries()],
+        [...serial.occurrencesByFile.entries()],
+    );
+    assert.deepEqual(batched.diagnostics, serial.diagnostics);
+});
+
+test('batched dispatch matches serial when calls and classes exceed one request batch', () => {
+    const classes = Array.from({ length: 600 }, (_, i) =>
+        `class Worker${i} { run${i}(): void {} }`);
+    const calls = Array.from({ length: 256 }, (_, i) =>
+        `function call${i}(receiver: Worker${i}) { receiver.run${i}(); }`);
+    const file = 'src/workers.ts';
+    const input: SemanticProjectInput = {
+        language: 'typescript',
+        sourceFiles: [{ path: file, source: [...classes, ...calls].join('\n'), sourceHash: 'workers' }],
+        auxiliaryFiles: [],
+    };
+
+    const batched = analyzeTypeScriptProject(input);
+    const serial = analyzeTypeScriptProject(input, { executionMode: 'serial' });
+
+    assert.equal(serial.occurrencesByFile.get(file)?.length, calls.length);
+    assert.deepEqual(batched.occurrencesByFile, serial.occurrencesByFile);
+});

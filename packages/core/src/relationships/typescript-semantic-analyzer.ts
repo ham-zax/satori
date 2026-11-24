@@ -59,6 +59,7 @@ const DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET: TypeScriptSemanticResourceBud
 type ProjectMode = 'configured' | 'inferred';
 
 interface ProgramSession {
+    getApi(): InstanceType<typeof ts.API>;
     getProgram(): ts.Program;
     getResourceLimitFailure(): string | undefined;
     resolveModuleName(containingFile: string, specifier: string, mode: ts.ResolutionMode): string | undefined;
@@ -535,7 +536,9 @@ function sourceFileForProgram(program: ts.Program, absolutePath: string): ts.Sou
     const normalized = normalizeAbsolute(absolutePath);
     const direct = program.getSourceFile(normalized);
     if (direct) return direct;
-    return program.getSourceFileNames().map(name => program.getSourceFile(name)!).find((sourceFile) => normalizeAbsolute(sourceFile.fileName) === normalized);
+    // Match by filename string before fetching so external .d.ts files are never pulled over IPC.
+    const match = program.getSourceFileNames().find((name) => normalizeAbsolute(name) === normalized);
+    return match ? program.getSourceFile(match) : undefined;
 }
 
 function unionReverseDependencies(
@@ -700,10 +703,11 @@ function projectGlobalSourceFiles(
             globalFiles.add(plan.relativeFiles[index]);
         }
     }
-    for (const sourceFile of program.getSourceFileNames().map(name => program.getSourceFile(name)!)) {
-        const relative = relativeInsideRoot(plan.rootPath, normalizeAbsolute(sourceFile.fileName));
+    for (const fileName of program.getSourceFileNames()) {
+        const relative = relativeInsideRoot(plan.rootPath, normalizeAbsolute(fileName));
         if (!relative || globalFiles.has(relative) || !manifestPaths.has(relative)) continue;
-        if (sourceCanAffectProjectGlobals(sourceFile)) globalFiles.add(relative);
+        const sourceFile = program.getSourceFile(fileName);
+        if (sourceFile && sourceCanAffectProjectGlobals(sourceFile)) globalFiles.add(relative);
     }
     return globalFiles;
 }
@@ -1219,6 +1223,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             }
             const claimsStartedAt = performance.now();
             const evidence = analyzeTypeScriptProgram(program, programSources, {
+                api: activeSession.getApi(),
                 sourceFiles: new Set([...affected].filter((file) => manifestByPath.has(file))),
             });
             this.assertEvidenceSourcesCurrent(input, evidence, affected);

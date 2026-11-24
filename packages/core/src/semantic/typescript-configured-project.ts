@@ -271,6 +271,7 @@ export class TypeScriptLanguageServiceSession {
     get configuredFiles(): readonly string[] { return this.project.fileNames; }
     get projectReferences(): readonly ts.ProjectReference[] { return this.project.projectReferences ?? []; }
     get options(): ts.CompilerOptions { return this.project.options; }
+    getApi(): InstanceType<typeof ts.API> { return this.session.getApi(); }
     getProgram(): ts.Program { return this.session.getProgram(); }
     getResourceLimitFailure(): string | undefined { return this.session.getResourceLimitFailure(); }
     resolveModuleName(containingFile: string, specifier: string, mode: ts.ResolutionMode): string | undefined {

@@ -23,6 +23,7 @@ export {
 } from './sidecar-validators';
 export {
     readRelationshipAnalysisEvidence,
+    readRelationshipManifestSidecar,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
 } from './sidecar-reads';
@@ -30,6 +31,7 @@ export type {
     PublicationNavigation,
     ReadRelationshipAnalysisEvidenceInput,
     ReadRelationshipAnalysisEvidenceResult,
+    ReadRelationshipManifestSidecarResult,
     ReadRelationshipSidecarInput,
     ReadRelationshipSidecarResult,
     ReadSymbolRegistrySidecarInput,

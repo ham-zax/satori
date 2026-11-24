@@ -171,6 +171,8 @@ test("stale call graph preserves published seed, edges, authority, and actual fr
         assert.deepEqual(result.navigationAuthority, before.navigationAuthority);
         assert.equal(result.nodes.find(node => node.symbolId === "target")?.freshness?.sourceState, "stale");
         assert.equal(result.nodes.find(node => node.symbolId === "caller")?.freshness?.sourceState, "fresh");
+        assert.deepEqual(Object.keys(result.nodes[0]?.freshness ?? {}), ["sourceState"]);
+        assert.equal(result.graph?.registryBuiltAt, "2026-10-20");
         for (const warning of ["NAVIGATION_SOURCE_DRIFT_DETECTED", "CALL_GRAPH_PUBLISHED_SPANS", "CALL_GRAPH_SOURCE_FRESHNESS_PARTIAL"]) assert.ok(result.warnings?.includes(warning));
     }
     assert.equal((await f.callGraph({ publishedSource: Buffer.from("wrong") })).reason, "stale_symbol_ref");

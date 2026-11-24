@@ -1,5 +1,6 @@
 import {
     readRelationshipAnalysisEvidence,
+    readRelationshipManifestSidecar,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
@@ -69,6 +70,15 @@ export type NavigationResolutionClaimsState =
     }
     | NavigationStoreFailure;
 export type NavigationRelationshipsState = NavigationStoreRelationshipsOk | NavigationStoreFailure;
+
+export type NavigationRelationshipManifestState =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        manifest: RelationshipManifest;
+    }
+    | NavigationStoreFailure;
 
 export interface NavigationStoreInput {
     normalizedRootPath: string;
@@ -407,6 +417,31 @@ function publicRelationshipState(state: LoadedRelationshipState): NavigationRela
     };
 }
 
+async function readRelationshipManifestState(
+    input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
+): Promise<NavigationRelationshipManifestState> {
+    const result = await readRelationshipManifestSidecar({
+        normalizedRootPath: input.normalizedRootPath,
+        expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
+        publicationId: input.publicationId,
+        navigationRoot: input.navigationRoot,
+    });
+    if (result.status !== 'ok') {
+        return buildFailure(
+            result.rootPath,
+            result.reason,
+            result.status === 'corrupt' ? 'incompatible' : result.status,
+            result.status === 'corrupt' ? 'corrupt' : undefined,
+        );
+    }
+    return {
+        status: 'ok',
+        rootPath: result.rootPath,
+        manifestHash: result.manifestHash,
+        manifest: result.manifest,
+    };
+}
+
 async function readRegistryState(input: NavigationStoreInput): Promise<NavigationRegistryState> {
     const result = await readSymbolRegistrySidecar(input);
     if (result.status !== 'ok') {
@@ -458,6 +493,7 @@ const RESOLUTION_CLAIM_SCAN_FILES_PER_READ = 64;
  */
 export class JsonNavigationStore {
     private readonly registries: PublicationStateCache<NavigationRegistryState>;
+    private readonly relationshipManifests: PublicationStateCache<NavigationRelationshipManifestState>;
     private readonly relationships: PublicationStateCache<LoadedRelationshipState>;
     private readonly shardReuseRetentionMs: number;
 
@@ -466,6 +502,13 @@ export class JsonNavigationStore {
         const lowMemoryThresholdBytes = options.lowMemoryThresholdBytes ?? DEFAULT_NAVIGATION_LOW_MEMORY_BYTES;
         this.shardReuseRetentionMs = Math.max(0, options.shardReuseRetentionMs ?? DEFAULT_SHARD_REUSE_RETENTION_MS);
         this.registries = new PublicationStateCache({
+            maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
+            idleMs,
+            maxRootsUnderPressure: 1,
+            lowMemoryThresholdBytes,
+            availableMemoryBytes: options.availableMemoryBytes,
+        });
+        this.relationshipManifests = new PublicationStateCache({
             maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
             idleMs,
             maxRootsUnderPressure: 1,
@@ -589,6 +632,45 @@ export class JsonNavigationStore {
                 owner: null,
             };
         }
+    }
+
+    /**
+     * Validate and return the relationship manifest + shard layout without
+     * decompressing every per-file relationship shard. Callers that need
+     * relationship edges or resolution claims still go through `getRelationships`.
+     */
+    public async getRelationshipManifest(
+        input: NavigationStoreInput & { expectedSymbolRegistryManifestHash?: string },
+    ): Promise<NavigationRelationshipManifestState> {
+        let expectedSymbolRegistryManifestHash = input.expectedSymbolRegistryManifestHash;
+        if (!expectedSymbolRegistryManifestHash) {
+            const registryState = await this.readRegistry(input);
+            if (registryState.status !== 'ok') return registryState;
+            expectedSymbolRegistryManifestHash = registryState.manifestHash;
+        }
+        const relationshipInput = {
+            normalizedRootPath: input.normalizedRootPath,
+            publicationId: input.publicationId,
+            navigationRoot: input.navigationRoot,
+            expectedSymbolRegistryManifestHash,
+        };
+        const identity = relationshipIdentity(relationshipInput);
+        if (this.relationships.has(input.normalizedRootPath, identity)) {
+            const loaded = await this.readRelationships(relationshipInput);
+            if (loaded.status !== 'ok') return loaded;
+            return {
+                status: 'ok',
+                rootPath: loaded.rootPath,
+                manifestHash: loaded.manifestHash,
+                manifest: loaded.manifest,
+            };
+        }
+        return this.relationshipManifests.get(
+            input.normalizedRootPath,
+            identity,
+            () => readRelationshipManifestState(relationshipInput),
+            (state) => state.status === 'ok',
+        );
     }
 
     public async getRelationships(input: NavigationRelationshipsQueryInput): Promise<NavigationRelationshipsState> {

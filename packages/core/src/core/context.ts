@@ -1230,7 +1230,7 @@ export class Context {
     > {
         const navigation = this.getPublicationNavigationAddress(publication);
         if (!navigation) return undefined;
-        const state = await this.navigationStore.getRelationships({
+        const state = await this.navigationStore.getRelationshipManifest({
             normalizedRootPath: publication.publication.canonicalRoot,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,

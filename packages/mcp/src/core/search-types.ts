@@ -1139,8 +1139,12 @@ export type CallGraphResponseReason =
     | "missing_provider_config"
     | "vector_backend_unavailable";
 
+export interface CallGraphNodeFreshness {
+    sourceState: NavigationFileFreshness["sourceState"];
+}
+
 export interface CallGraphNodeResult {
-    freshness?: NavigationFileFreshness;
+    freshness?: CallGraphNodeFreshness;
     symbolId: string;
     symbolLabel?: string;
     file: string;
@@ -1356,6 +1360,8 @@ export interface CallGraphTraversalResponseEnvelope {
     returnedNoteCount?: number;
     graph?: {
         builtAt: string;
+        /** Symbol registry build timestamp hoisted once for the entire graph. */
+        registryBuiltAt?: string;
         /** Count of nodes returned in this traversal response. */
         nodeCount: number;
         /** Count of edges returned in this traversal response. */

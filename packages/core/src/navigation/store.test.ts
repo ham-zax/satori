@@ -356,3 +356,60 @@ test('relationship replacement and LRU eviction release shard reuse timers immed
     assert.equal(replacementState.shardsByReuseKey, undefined);
     assert.ok(clearTimer.mock.calls.some(call => call.arguments[0] === setTimer.mock.calls[1]?.result));
 });
+
+test('getRelationshipManifest validates layout without reading shard bodies and agrees with getRelationships on failures', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-rel-manifest-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const input = await writePublication(root, 'publication-a');
+    const store = new JsonNavigationStore();
+
+    const readFile = t.mock.method(fs.promises, 'readFile');
+    const first = await store.getRelationshipManifest(input);
+    const coldReads = readFile.mock.calls.map((call) => String(call.arguments[0]));
+    readFile.mock.restore();
+
+    assert.equal(first.status, 'ok');
+    assert.equal(
+        coldReads.some((file) => file.includes(`${path.sep}by-file${path.sep}`)),
+        false,
+        'manifest validation must not read per-file relationship shards',
+    );
+    assert.equal(store.hasResidentRelationships(input), false);
+
+    // Warm manifest lookup must not touch disk.
+    const warmReadFile = t.mock.method(fs.promises, 'readFile');
+    const warm = await store.getRelationshipManifest(input);
+    const warmReads = warmReadFile.mock.calls.length;
+    warmReadFile.mock.restore();
+    assert.equal(warm.status, 'ok');
+    assert.equal(warmReads, 0);
+
+    // Differential check against full read for manifest hash mismatch.
+    const mismatched = { ...input, expectedSymbolRegistryManifestHash: 'wrong-hash' };
+    const manifestMismatch = await new JsonNavigationStore().getRelationshipManifest(mismatched);
+    const fullMismatch = await new JsonNavigationStore().getRelationships(mismatched);
+    assert.equal(manifestMismatch.status, fullMismatch.status);
+    assert.equal(manifestMismatch.status, 'incompatible');
+
+    // Differential check: missing shard file in by-file must be rejected as incompatible.
+    const byFileDir = path.join(input.navigationRoot, 'relationships', 'by-file');
+    const shardNames = fs.readdirSync(byFileDir);
+    assert.ok(shardNames.length > 0);
+    const removedShardPath = path.join(byFileDir, shardNames[0]!);
+    const removedShardBytes = fs.readFileSync(removedShardPath);
+    fs.unlinkSync(removedShardPath);
+    const missingShardManifest = await new JsonNavigationStore().getRelationshipManifest(input);
+    const missingShardFull = await new JsonNavigationStore().getRelationships(input);
+    assert.equal(missingShardManifest.status, missingShardFull.status);
+    assert.equal(missingShardManifest.status, 'incompatible');
+    fs.writeFileSync(removedShardPath, removedShardBytes);
+
+    // Differential check: corrupt manifest.json must report corrupt sourceStatus.
+    const manifestPath = path.join(input.navigationRoot, 'relationships', 'manifest.json');
+    fs.writeFileSync(manifestPath, '{ malformed');
+    const corruptManifest = await new JsonNavigationStore().getRelationshipManifest(input);
+    const corruptFull = await new JsonNavigationStore().getRelationships(input);
+    assert.equal(corruptManifest.status, corruptFull.status);
+    assert.equal(corruptManifest.status !== 'ok' ? corruptManifest.sourceStatus : undefined, 'corrupt');
+    assert.equal(corruptFull.status !== 'ok' ? corruptFull.sourceStatus : undefined, 'corrupt');
+});

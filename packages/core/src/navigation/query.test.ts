@@ -197,4 +197,124 @@ test('getGraphNeighbors prioritizes production callers ahead of test callers und
     assert.equal(callersOnly.status, 'ok');
     if (callersOnly.status !== 'ok') return;
     assert.equal(callersOnly.records[0]?.sourceInstanceId, 'runtime-caller');
+
+    // maxTestCallers caps test/fixture caller edges without truncating production callers or callees.
+    const capped = await getGraphNeighbors({ ...input, direction: 'both', limit: 25, maxTestCallers: 3 });
+    assert.equal(capped.status, 'ok');
+    if (capped.status !== 'ok') return;
+    const cappedTestCallers = capped.records.filter(
+        (r) => r.targetInstanceId === target && r.file.includes('.test.'),
+    );
+    const cappedProdCallers = capped.records.filter(
+        (r) => r.targetInstanceId === target && !r.file.includes('.test.'),
+    );
+    const cappedCallees = capped.records.filter((r) => r.sourceInstanceId === target);
+    assert.equal(cappedProdCallers.length, 1);
+    assert.equal(cappedTestCallers.length, 3);
+    assert.equal(cappedCallees.length, 12);
+    assert.ok(capped.warnings.includes('RELATIONSHIP_TEST_CALLERS_CAPPED:12'));
+    assert.equal(capped.warnings.includes('RELATIONSHIP_TRAVERSAL_LIMIT_REACHED'), false);
+    assert.equal(capped.warnings.includes('RELATIONSHIP_TRAVERSAL_TRUNCATED'), false);
+});
+
+test('getGraphNeighbors preserves depth-two production callers reachable through capped test edges and prunes unused nodes', async () => {
+    const target = 'syminst_target';
+    const makeCall = (source: string, destination: string, file: string, line: number): RelationshipRecord => ({
+        sourceKey: source,
+        sourceInstanceId: source,
+        targetKey: destination,
+        targetInstanceId: destination,
+        type: 'CALLS',
+        confidence: 'high',
+        file,
+        span: { startLine: line, endLine: line },
+    });
+    const records: RelationshipRecord[] = [
+        // Depth-1 test callers: test-0, test-1 fill maxTestCallers=2; test-2 is a leaf;
+        // test-3 is only called by another test; test-4 bridges to a depth-2 production caller.
+        makeCall('test-0', target, 'packages/mcp/src/alpha.test.ts', 10),
+        makeCall('test-1', target, 'packages/mcp/src/alpha.test.ts', 11),
+        makeCall('test-2', target, 'packages/mcp/src/alpha.test.ts', 12),
+        makeCall('test-3', target, 'packages/mcp/src/alpha.test.ts', 13),
+        makeCall('test-4', target, 'packages/mcp/src/alpha.test.ts', 14),
+        // Depth-2 callers: only test-4 reaches a production caller.
+        makeCall('test-depth2', 'test-3', 'packages/mcp/src/beta.test.ts', 20),
+        makeCall('prod-depth2', 'test-4', 'packages/mcp/src/prod-entry.ts', 30),
+        // Callees on target that should still fit in normal output slots.
+        ...Array.from({ length: 4 }, (_, i) =>
+            makeCall(target, `callee-${i}`, 'packages/mcp/src/target.ts', 100 + i),
+        ),
+    ];
+    const input: GetGraphNeighborsInput = {
+        normalizedRootPath: '/repo',
+        publicationId: 'fixture',
+        navigationRoot: '/fixture/navigation',
+        expectedSymbolRegistryManifestHash: 'fixture',
+        symbolInstanceId: target,
+        direction: 'callers',
+        depth: 2,
+        allowedTypes: ['CALLS'],
+        limit: 8,
+        maxTestCallers: 2,
+        navigationStore: {
+            getManifest: async () => { throw new Error('unused'); },
+            getRelationships: async () => ({
+                status: 'ok',
+                rootPath: '/repo',
+                manifestHash: 'fixture',
+                records,
+                warnings: [],
+                manifest: {
+                    schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
+                    symbolRegistryManifestHash: 'fixture',
+                    relationshipVersion: 'fixture',
+                    builtAt: '2026-11-25',
+                    providerCoverage: [],
+                    files: [],
+                },
+            }),
+        },
+    };
+
+    const callers = await getGraphNeighbors(input);
+    assert.equal(callers.status, 'ok');
+    if (callers.status !== 'ok') return;
+
+    const edgePairs = callers.records.map((r) => `${r.sourceInstanceId}->${r.targetInstanceId}`);
+    assert.deepEqual(edgePairs, [
+        'test-0->syminst_target',
+        'test-1->syminst_target',
+        'test-4->syminst_target',
+        'prod-depth2->test-4',
+    ]);
+    assert.ok(callers.warnings.includes('RELATIONSHIP_TEST_CALLERS_CAPPED:3'));
+    assert.equal(callers.warnings.includes('RELATIONSHIP_TRAVERSAL_LIMIT_REACHED'), false);
+    assert.deepEqual(callers.visitedSymbolInstanceIds, [
+        target,
+        'test-0',
+        'test-1',
+        'test-4',
+        'prod-depth2',
+    ]);
+    assert.equal(callers.visitedSymbolInstanceIds.includes('test-2'), false);
+    assert.equal(callers.visitedSymbolInstanceIds.includes('test-3'), false);
+    assert.equal(callers.visitedSymbolInstanceIds.includes('test-depth2'), false);
+
+    // Under direction="both" with a tight limit matching kept callers + callees, all callees still fit.
+    const both = await getGraphNeighbors({ ...input, direction: 'both', limit: 8 });
+    assert.equal(both.status, 'ok');
+    if (both.status !== 'ok') return;
+    assert.equal(both.records.length, 8);
+    assert.equal(both.records.filter((r) => r.sourceInstanceId === target).length, 4);
+    assert.ok(both.records.some((r) => r.sourceInstanceId === 'prod-depth2' && r.targetInstanceId === 'test-4'));
+    assert.ok(both.warnings.includes('RELATIONSHIP_TEST_CALLERS_CAPPED:3'));
+    assert.equal(both.warnings.includes('RELATIONSHIP_TRAVERSAL_LIMIT_REACHED'), false);
+    assert.equal(both.warnings.includes('RELATIONSHIP_TRAVERSAL_TRUNCATED'), false);
+
+    const tightBoth = await getGraphNeighbors({ ...input, direction: 'both', limit: 4 });
+    assert.equal(tightBoth.status, 'ok');
+    if (tightBoth.status !== 'ok') return;
+    assert.ok(tightBoth.records.some((r) => r.sourceInstanceId === 'test-4'));
+    assert.ok(tightBoth.records.some((r) => r.sourceInstanceId === 'prod-depth2'));
+    assert.equal(tightBoth.records.filter((r) => r.sourceInstanceId === target).length, 2);
 });

@@ -71,5 +71,11 @@ export interface Reranker {
     getDocumentProjectionVersion?(): string | undefined;
     /** Identity-bearing query projection required by this provider profile. */
     getQueryProjectionVersion?(): string | undefined;
+    /**
+     * Best-effort non-blocking warmup for local reranker providers. Safe to call
+     * before a semantic query reaches rerank; no-op when already warm, closed, or
+     * when background mutations are active.
+     */
+    warmUp?(): void;
     close?(): Promise<void>;
 }

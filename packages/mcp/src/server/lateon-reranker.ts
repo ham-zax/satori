@@ -194,6 +194,7 @@ export class LateOnReranker implements Reranker {
     private readonly rawProfileDigest: string;
     private readonly identity: ReturnType<Reranker["getIdentity"]>;
     private readonly modelDirectory: string;
+    private readonly getActiveMutationCount?: () => number;
     private readonly resolveExecutionPlan: () => LateOnExecutionPlan;
     private readonly workerPath: string;
     private readonly idleShutdownMs: number;
@@ -226,6 +227,7 @@ export class LateOnReranker implements Reranker {
         this.modelDirectory = path.resolve(config.modelDirectory);
         const executionPlan = config.executionPlan;
         const getActiveMutationCount = config.getActiveMutationCount;
+        this.getActiveMutationCount = getActiveMutationCount;
         this.resolveExecutionPlan = executionPlan
             ? () => executionPlan
             : () => resolveHostLateOnExecutionPlan({
@@ -304,6 +306,27 @@ export class LateOnReranker implements Reranker {
             terminationActive: this.termination !== null,
             bootstrap,
         });
+    }
+
+    /**
+     * Start the ONNX worker asynchronously when idle so session initialization
+     * overlaps with pre-rerank search phases. Skips warmup while indexing/sync
+     * mutations are active, after close, or after terminal bootstrap failure.
+     */
+    warmUp(): void {
+        if (
+            this.closed
+            || this.worker
+            || this.termination
+            || this.terminalBootstrapFailure
+            || this.workerState !== "idle"
+        ) {
+            return;
+        }
+        if ((this.getActiveMutationCount?.() ?? 0) > 0) {
+            return;
+        }
+        this.startWorker();
     }
 
     async waitUntilReady(): Promise<void> {

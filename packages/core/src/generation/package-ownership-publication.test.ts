@@ -109,6 +109,43 @@ test('warm publication admission reuses parsed navigation across validation read
     }
 });
 
+test('getPublicationNavigationStatus reports corrupt when a relationship shard body is corrupt while its manifest stays intact', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-corrupt-shard-'));
+    const root = path.join(tempRoot, 'repo');
+    writeFile(root, 'main.py', 'def helper():\n    return 1\n\ndef main():\n    return helper()\n');
+    const vectorsPath = path.join(tempRoot, 'vectors');
+    const fixture = createContext(vectorsPath, new JsonNavigationStore());
+    try {
+        await fixture.context.indexCodebase(root);
+        const publication = fixture.context.getCurrentPublication(root);
+        assert.ok(publication);
+        const navigationRoot = fixture.context.getPublicationNavigationAddress(publication)?.navigationRoot;
+        assert.ok(navigationRoot);
+
+        const byFileDir = path.join(navigationRoot, 'relationships', 'by-file');
+        const shardFiles = fs.readdirSync(byFileDir);
+        assert.ok(shardFiles.length > 0, 'expected at least one relationship shard file');
+        const shardPath = path.join(byFileDir, shardFiles[0]!);
+        const originalShard = fs.readFileSync(shardPath);
+        fs.writeFileSync(shardPath, '{ malformed shard body');
+
+        const coldFixture = createContext(vectorsPath, new JsonNavigationStore());
+        try {
+            const coldPublication = coldFixture.context.getCurrentPublication(root);
+            assert.ok(coldPublication);
+            assert.equal(await coldFixture.context.getPublicationNavigationStatus(coldPublication), 'corrupt');
+        } finally {
+            await coldFixture.context.dispose();
+            await coldFixture.database.close();
+            fs.writeFileSync(shardPath, originalShard);
+        }
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 function ownerFor(
     ownership: NonNullable<ReturnType<Context['getPublicationPackageOwnership']>>,
     filePath: string,

@@ -1196,6 +1196,66 @@ test("LateOn diagnostics callback failure never changes rerank behavior", async 
     );
 });
 
+test("LateOn warmUp starts the worker asynchronously when idle, is idempotent, and releases after idleShutdownMs", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-warmup-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "warmup-pids.log");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, { pidLogPath }),
+        idleShutdownMs: 60,
+    });
+    t.after(() => reranker.close());
+
+    assert.equal(reranker.getOperationalState(), "idle");
+    reranker.warmUp();
+    assert.equal(reranker.getOperationalState(), "loading");
+    // Second warmUp while loading must not spawn another worker.
+    reranker.warmUp();
+    await reranker.waitUntilReady();
+    assert.equal(reranker.getOperationalState(), "ready");
+    assert.equal(readWorkerPids(pidLogPath).length, 1);
+
+    // Calling warmUp while ready is a no-op.
+    reranker.warmUp();
+    assert.equal(readWorkerPids(pidLogPath).length, 1);
+
+    // Unused warmed worker releases after idleShutdownMs.
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    assert.equal(reranker.getOperationalState(), "idle");
+    assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+});
+
+test("LateOn warmUp skips when mutations are active or reranker is closed, and close cleans up mid-warmup", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-warmup-skip-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "warmup-skip-pids.log");
+    let activeMutations = 1;
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, { pidLogPath, readyDelayMilliseconds: 120 }),
+        getActiveMutationCount: () => activeMutations,
+    });
+    t.after(() => reranker.close());
+
+    reranker.warmUp();
+    assert.equal(reranker.getOperationalState(), "idle");
+    assert.equal(readWorkerPids(pidLogPath).length, 0);
+
+    activeMutations = 0;
+    reranker.warmUp();
+    assert.equal(reranker.getOperationalState(), "loading");
+    await reranker.close();
+    assert.equal(reranker.getOperationalState(), "closed");
+    assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+
+    // Calling warmUp after close must remain closed without spawning.
+    reranker.warmUp();
+    assert.equal(reranker.getOperationalState(), "closed");
+});
+
 const realLateOnModelDirectory = process.env.SATORI_LATEON_MODEL_PATH;
 test("LateOn v6 accepts query-v2 and the canonical document projection through the real tokenizer and model", {
     skip: !realLateOnModelDirectory || !fs.existsSync(path.join(realLateOnModelDirectory, "model.onnx")),

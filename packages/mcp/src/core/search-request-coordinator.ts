@@ -1008,6 +1008,23 @@ export class SearchRequestCoordinator {
             collection_probe: 'collectionProbe',
         } as const;
 
+        const earlyQueryPlan = this.searchQuerySupport.buildSearchQueryPlan(
+            parsedOperators.semanticQuery,
+            parsedOperators,
+        );
+        if (
+            (earlyQueryPlan.route.kind === "conceptual"
+                || earlyQueryPlan.route.kind === "mixed")
+            && this.readiness.getTrackedRootReadiness?.()?.resolveTrackedRoot?.(
+                input.path,
+                ['indexed'],
+            )?.info.status === 'indexed'
+        ) {
+            // Overlap LateOn ONNX session startup with front-door readiness, freshness,
+            // and vector retrieval for indexed roots instead of paying cold init in rerank.
+            this.reranker?.warmUp?.();
+        }
+
         try {
             const frontDoor = await runSearchFrontDoor({
                 path: input.path,
@@ -1089,9 +1106,9 @@ export class SearchRequestCoordinator {
                         }
                         let effectiveWatcherObservation = this.readiness.getWatcherObservation(effectiveRoot);
                         if (effectiveWatcherObservation.coverage === 'starting') {
-                            const deadline = Date.now() + 1500;
+                            const deadline = Date.now() + 150;
                             while (Date.now() < deadline) {
-                                await new Promise((resolve) => setTimeout(resolve, 50));
+                                await new Promise((resolve) => setTimeout(resolve, 25));
                                 effectiveWatcherObservation = this.readiness.getWatcherObservation(effectiveRoot);
                                 if (effectiveWatcherObservation.coverage === 'ready') {
                                     break;
@@ -1301,7 +1318,7 @@ export class SearchRequestCoordinator {
                     requestedPath: absolutePath,
                 });
                 const semanticQuery = parsedOperators.semanticQuery;
-                const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery, parsedOperators);
+                const queryPlan = earlyQueryPlan;
                 const entrypointOwnerSeeking = queryPlan.entrypointIntent.kinds.some((kind) => (
                     kind === "installed_command_ownership"
                     || kind === "application_startup_ownership"
@@ -1643,6 +1660,8 @@ export class SearchRequestCoordinator {
                         }
                     };
                 }
+
+                this.reranker?.warmUp?.();
 
                 let entrypointOwnerEvidence: EntrypointOwnerEvidenceResolution | undefined;
                 if (

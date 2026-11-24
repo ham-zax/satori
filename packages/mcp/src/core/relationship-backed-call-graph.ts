@@ -50,6 +50,8 @@ export type RelationshipBackedCallGraphInput = {
     direction: CallGraphDirection;
     depth: number;
     limit: number;
+    /** Override the default cap on test/fixture caller edges for production targets (`null` disables). */
+    maxTestCallers?: number | null;
     pathScope?: PublishedPathScope;
     /**
      * Publication-authorized source reader for the Python source-backed
@@ -118,6 +120,7 @@ export type RelationshipBackedCallGraphResult = {
     returnedNoteCount: number;
     graph: {
         builtAt: string;
+        registryBuiltAt?: string;
         nodeCount: number;
         edgeCount: number;
     };
@@ -242,6 +245,7 @@ function resolutionEvidenceWithinPathScope(
 }
 
 const MAX_DETAILED_TEST_SUPPRESSED_CALLER_NOTES = 3;
+const MAX_DETAILED_TEST_CALLER_EDGES = 3;
 const INBOUND_COVERAGE_PARTIAL_WARNING = "CALL_GRAPH_INBOUND_COVERAGE_PARTIAL";
 
 export function shouldInspectInboundSourceReferences(input: {
@@ -582,6 +586,13 @@ export class RelationshipBackedCallGraph {
     }
 
     public async build(input: RelationshipBackedCallGraphInput): Promise<RelationshipBackedCallGraphResult | null> {
+        const effectiveMaxTestCallers = input.maxTestCallers === null
+            ? undefined
+            : input.maxTestCallers !== undefined
+                ? input.maxTestCallers
+                : (!isTestOrFixturePath(input.resolvedSymbol.file)
+                    ? MAX_DETAILED_TEST_CALLER_EDGES
+                    : undefined);
         const neighbors = await getGraphNeighbors({
             normalizedRootPath: input.codebaseRoot,
             publicationId: input.publicationId,
@@ -592,6 +603,7 @@ export class RelationshipBackedCallGraph {
             depth: input.depth,
             direction: input.direction,
             allowedTypes: ["CALLS"],
+            ...(effectiveMaxTestCallers !== undefined ? { maxTestCallers: effectiveMaxTestCallers } : {}),
             ...(hasPublishedPathScope(input.pathScope)
                 ? {
                     recordFilter: (record: RelationshipRecord) => (

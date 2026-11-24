@@ -520,3 +520,436 @@ test("read freshness compares again after a watcher restart or a new checkpoint"
     await republished.assess();
     assert.equal(republished.comparisonCalls(), 2);
 });
+
+test("fullSourceComparison prefers stat-reusing observation once without duplicating pending-watcher scans", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let observationCalls = 0;
+    let fullHashCalls = 0;
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            observationCalls += 1;
+            return { status: "matches" };
+        },
+        compareAllSourceToFreshnessCheckpoint: async () => {
+            fullHashCalls += 1;
+            return { status: "matches" };
+        },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "starting");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 0,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map(),
+        coverage: "starting",
+        coverageGapSinceEpoch: 0,
+    });
+
+    const decision = await manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+    });
+
+    assert.equal(observationCalls, 1, "must run one stat-reusing scan, not two scans");
+    assert.equal(fullHashCalls, 0, "must not force full-file re-hashing when observation comparison is available");
+    assert.equal(decision.mode, "skipped_source_unchanged");
+    assert.deepEqual(decision.sourceFreshness, {
+        state: "index_snapshot",
+        reason: "watcher_starting",
+    });
+});
+
+test("fullSourceComparison coalesces concurrent calls for the same epoch and splits after a new watcher event", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let comparisonCalls = 0;
+    let inspectCalls = 0;
+    let secondInspectDone!: () => void;
+    const secondReadyToJoin = new Promise<void>((resolve) => { secondInspectDone = resolve; });
+    let firstStarted!: () => void;
+    const firstInFlight = new Promise<void>((resolve) => { firstStarted = resolve; });
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => {
+            inspectCalls += 1;
+            if (inspectCalls === 2) {
+                // Signal right after second caller's checkpoint check resolves so it joins the in-flight comparison.
+                queueMicrotask(secondInspectDone);
+            }
+            return {
+                status: "valid",
+                observationToken: "checkpoint-observation",
+                publicationId: "publication-1",
+            };
+        },
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            if (comparisonCalls === 1) {
+                firstStarted();
+                await gate;
+            }
+            return { status: "matches" };
+        },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+    });
+
+    const firstPromise = manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+    });
+    await firstInFlight;
+    const secondPromise = manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+    });
+    await secondReadyToJoin;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(comparisonCalls, 1, "concurrent caller on same epoch must coalesce");
+
+    // A new watcher event advances flightEpoch, so a third caller must not join the stale flight.
+    assert.equal(manager.recordWatcherEvent(root, "source_changed"), 2);
+    const thirdPromise = manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+    });
+
+    releaseFirst();
+    const [first, second, third] = await Promise.all([firstPromise, secondPromise, thirdPromise]);
+    assert.equal(comparisonCalls, 2);
+    assert.equal(first.mode, "skipped_source_unchanged");
+    assert.equal(second.mode, "skipped_source_unchanged");
+    assert.deepEqual(third.sourceFreshness, {
+        state: "verified",
+        reason: "full_source_comparison",
+    });
+});
+
+test("fullSourceComparison reuses differing changedPaths until watcher event, restart, or new publication", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let checkpointPublicationId = "publication-1";
+    let comparisonCalls = 0;
+    let currentPaths = ["src/a.ts", "src/b.ts"];
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: checkpointPublicationId,
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            return { status: "differs", changedPaths: currentPaths };
+        },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+        setWatcherCoverage(root: string, coverage: string): void;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+    });
+
+    const reported: string[][] = [];
+    const run = () => manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+        onSourceChangedPaths: (paths) => reported.push([...paths]),
+    });
+
+    const first = await run();
+    const second = await run();
+    assert.equal(comparisonCalls, 1, "second full comparison on same ready epoch must reuse differing result");
+    assert.deepEqual(first.sourceFreshness, { state: "changed", reason: "full_source_comparison" });
+    assert.deepEqual(second.sourceFreshness, first.sourceFreshness);
+    assert.deepEqual(reported, [["src/a.ts", "src/b.ts"], ["src/a.ts", "src/b.ts"]]);
+
+    // Witness invalidation 1: watcher event
+    currentPaths = ["src/a.ts", "src/c.ts"];
+    manager.recordWatcherEvent(root, "source_changed");
+    await run();
+    assert.equal(comparisonCalls, 2);
+    assert.deepEqual(reported[2], ["src/a.ts", "src/c.ts"]);
+
+    // Witness invalidation 2: watcher restart
+    internal.setWatcherCoverage(root, "starting");
+    internal.setWatcherCoverage(root, "ready");
+    await run();
+    assert.equal(comparisonCalls, 3);
+
+    // Witness invalidation 3: new checkpoint publication
+    checkpointPublicationId = "publication-2";
+    await run();
+    assert.equal(comparisonCalls, 4);
+});
+
+test("assessReadFreshness rechecks differingComparison and snapshots fresh epoch after watcher event during checkpoint inspection", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let manager!: SyncManager;
+    let triggerEventInCheckpoint = false;
+    let comparisonCalls = 0;
+    let comparisonResult: { status: "differs"; changedPaths: string[] } | { status: "matches" } = {
+        status: "differs",
+        changedPaths: ["src/a.ts"],
+    };
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => {
+            if (triggerEventInCheckpoint) {
+                triggerEventInCheckpoint = false;
+                assert.equal(manager.recordWatcherEvent(root, "source_changed"), 2);
+            }
+            return {
+                status: "valid",
+                observationToken: "checkpoint-observation",
+                publicationId: "publication-1",
+            };
+        },
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            return comparisonResult;
+        },
+    };
+    manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, {
+            observedEventEpoch: number;
+            comparedThroughEventEpoch: number;
+            latestEpochByReason: Map<string, number>;
+            coverage: string;
+            differingComparison?: {
+                publicationId: string;
+                comparedEventEpoch: number;
+                changedPaths?: readonly string[];
+            };
+        }>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+    });
+
+    // Populate differingComparison at epoch 1.
+    const first = await manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+    });
+    assert.equal(comparisonCalls, 1);
+    assert.deepEqual(first.sourceFreshness, { state: "unverified", reason: "watcher_event_pending" });
+    assert.equal(internal.watcherObservations.get(root)?.differingComparison?.comparedEventEpoch, 1);
+
+    // Watcher event arrives during checkpoint inspection: must invalidate epoch-1 cache
+    // and run with fresh epoch 2 so a match covers epoch 2 completely.
+    triggerEventInCheckpoint = true;
+    comparisonResult = { status: "matches" };
+    const second = await manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+    });
+    assert.equal(comparisonCalls, 2);
+    assert.equal(manager.getWatcherObservation(root).observedEventEpoch, 2);
+    assert.equal(manager.getWatcherObservation(root).comparedThroughEventEpoch, 2);
+    assert.equal(manager.getWatcherObservation(root).pending, false);
+    assert.deepEqual(second.sourceFreshness, { state: "verified", reason: "watcher_continuity" });
+});
+
+test("fullSourceComparison rechecks differingComparison and snapshots fresh epoch after watcher event during exact path comparison", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let manager!: SyncManager;
+    let triggerEventInExactComparison = false;
+    let fullComparisonCalls = 0;
+    let currentPaths = ["src/a.ts"];
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourcePathsToFreshnessCheckpoint: async () => {
+            if (triggerEventInExactComparison) {
+                triggerEventInExactComparison = false;
+                assert.equal(manager.recordWatcherEvent(root, "source_changed"), 2);
+            }
+            return { status: "matches" };
+        },
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            fullComparisonCalls += 1;
+            return { status: "differs", changedPaths: currentPaths };
+        },
+    };
+    manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, {
+            observedEventEpoch: number;
+            comparedThroughEventEpoch: number;
+            latestEpochByReason: Map<string, number>;
+            coverage: string;
+            differingComparison?: {
+                publicationId: string;
+                comparedEventEpoch: number;
+                changedPaths?: readonly string[];
+            };
+        }>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+    });
+
+    const reported: string[][] = [];
+    const run = () => manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+        exactSourceComparisonPaths: ["src/other.ts"],
+        onSourceChangedPaths: (paths) => reported.push([...paths]),
+    });
+
+    // Seed differingComparison at epoch 1.
+    await run();
+    assert.equal(fullComparisonCalls, 1);
+    assert.equal(internal.watcherObservations.get(root)?.differingComparison?.comparedEventEpoch, 1);
+    assert.deepEqual(reported, [["src/a.ts"]]);
+
+    // Watcher event arrives while exact-path comparison is in flight:
+    // must invalidate epoch-1 differingComparison and snapshot epoch 2 for fullSourceComparison.
+    triggerEventInExactComparison = true;
+    currentPaths = ["src/a.ts", "src/b.ts"];
+    await run();
+    assert.equal(fullComparisonCalls, 2);
+    assert.equal(internal.watcherObservations.get(root)?.differingComparison?.comparedEventEpoch, 2);
+    assert.deepEqual(reported[1], ["src/a.ts", "src/b.ts"]);
+
+    // Subsequent call at epoch 2 with no new event reuses the epoch-2 differingComparison.
+    await run();
+    assert.equal(fullComparisonCalls, 2);
+    assert.deepEqual(reported[2], ["src/a.ts", "src/b.ts"]);
+});

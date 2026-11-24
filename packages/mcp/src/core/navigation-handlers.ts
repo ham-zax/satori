@@ -2667,6 +2667,9 @@ export class NavigationHandlers {
                 direction,
                 depth,
                 limit,
+                // Internal unprojected callers (detect_changes) inspect full blast radius;
+                // public call_graph caps excess test callers to keep responses compact.
+                ...(!projectEvidence ? { maxTestCallers: null } : {}),
                 ...(callGraphPathScope ? { pathScope: callGraphPathScope } : {}),
                 readAuthorizedSourceLines,
                 findExactSourceReferences,
@@ -2706,12 +2709,15 @@ export class NavigationHandlers {
                             && !(error instanceof WorkspaceAuthorizationError)
                             && !(error instanceof AuthorizedSourceReadError)) throw error;
                     }
-                    freshness = { indexedAt: null, stalenessBucket: "unknown",
-                        registryBuiltAt: registryState.registry.manifest.builtAt, sourceState };
+                    freshness = { sourceState };
                     fileFreshnessByPath.set(node.file, freshness);
                 }
                 node.freshness = freshness;
             }
+            relationshipBackedGraph.graph = {
+                ...relationshipBackedGraph.graph,
+                registryBuiltAt: registryState.registry.manifest.builtAt,
+            };
             if ([...fileFreshnessByPath.values()].some(value => value.sourceState !== "fresh")) {
                 relationshipBackedGraph.warnings = [...(relationshipBackedGraph.warnings ?? []), "CALL_GRAPH_SOURCE_FRESHNESS_PARTIAL"];
             }

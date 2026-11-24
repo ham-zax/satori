@@ -58,6 +58,12 @@ export interface GetGraphNeighborsInput extends GetRelationshipManifestInput {
     allowedConfidences?: Array<RelationshipRecord['confidence']>;
     recordFilter?: (record: RelationshipRecord) => boolean;
     limit?: number;
+    /**
+     * Optional cap on admitted incoming caller edges from test/fixture files.
+     * Production callers are ordered first, so capping excess test callers keeps
+     * bounded responses compact without starving runtime callers or callees.
+     */
+    maxTestCallers?: number;
 }
 
 export interface GetGraphNeighborsOk {
@@ -527,7 +533,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
     // Keep each traversal directional. Switching direction at an intermediate
     // node would include siblings that are neither callers nor callees.
     const [callers, callees] = await Promise.all([
-        traverseGraphNeighbors({ ...input, direction: 'callers' }, relationshipSidecar),
+        traverseGraphNeighbors({ ...input, direction: 'callers' }, relationshipSidecar, true),
         traverseGraphNeighbors({ ...input, direction: 'callees' }, relationshipSidecar),
     ]);
     const limit = Number.isFinite(input.limit) ? Math.max(1, Number(input.limit)) : Number.MAX_SAFE_INTEGER;
@@ -555,6 +561,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
 async function traverseGraphNeighbors(
     input: GetGraphNeighborsInput,
     relationshipSidecar: RelationshipQueryOk,
+    prioritizeConnectedCallers = false,
 ): Promise<GetGraphNeighborsOk> {
 
     const includeCallers = input.direction === 'callers' || input.direction === 'both';
@@ -590,8 +597,25 @@ async function traverseGraphNeighbors(
     const visited = new Set<string>([input.symbolInstanceId]);
     const visitedSymbolInstanceIds = [input.symbolInstanceId];
     const selectedRecords = new Map<string, RelationshipRecord>();
+    const testCallerEdgeKeys = new Set<string>();
+    const parentEdgeByNode = new Map<string, { key: string; parent: string }>();
     const skippedLowConfidence = new Set<string>();
     const suppressedLowConfidenceRecords = new Map<string, RelationshipRecord>();
+    const maxTestCallers = typeof input.maxTestCallers === 'number' && Number.isFinite(input.maxTestCallers)
+        ? Math.max(0, Math.floor(input.maxTestCallers))
+        : Number.MAX_SAFE_INTEGER;
+    const hasTestCallerCap = maxTestCallers < Number.MAX_SAFE_INTEGER;
+    const traversalLimit = hasTestCallerCap && Number.isFinite(maxRecords)
+        ? Math.max(maxRecords * 4, maxRecords + maxTestCallers * 4)
+        : maxRecords;
+    let nonTestSelectedCount = 0;
+    let traversalLimitReached = false;
+    const omittedTestCallerKeys = new Set<string>();
+    const isTestCallerEdge = (record: RelationshipRecord, currentSymbolId: string): boolean => (
+        includeCallers
+        && record.targetInstanceId === currentSymbolId
+        && isTestOrFixturePath(record.file)
+    );
     let frontier = [input.symbolInstanceId];
 
     for (let depth = 1; depth <= maxDepth; depth += 1) {
@@ -614,6 +638,7 @@ async function traverseGraphNeighbors(
                     continue;
                 }
                 const recordKey = buildRelationshipRecordKey(record);
+                let effectiveRecord = record;
                 if (!allowedConfidences.has(record.confidence)) {
                     let supported = isProofBackedAuthoritativeCall(record);
                     // Categorical proof authority lets a proof-backed edge cross the
@@ -628,68 +653,173 @@ async function traverseGraphNeighbors(
                             }
                         }
                     }
-                    if (supported) {
-                        const supportedLowConfidenceRecord: RelationshipRecord = {
-                            ...record,
-                            confidence: 'medium',
-                            strategy: 'rule',
-                        };
-                        if (!selectedRecords.has(recordKey)) {
-                            if (selectedRecords.size >= maxRecords) {
-                                break;
-                            }
-                            selectedRecords.set(recordKey, supportedLowConfidenceRecord);
-                        }
-
-                        const peerSymbolInstanceId = supportedLowConfidenceRecord.sourceInstanceId === symbolInstanceId
-                            ? supportedLowConfidenceRecord.targetInstanceId
-                            : supportedLowConfidenceRecord.sourceInstanceId;
-                        if (peerSymbolInstanceId && !visited.has(peerSymbolInstanceId)) {
-                            visited.add(peerSymbolInstanceId);
-                            visitedSymbolInstanceIds.push(peerSymbolInstanceId);
-                            nextFrontier.push(peerSymbolInstanceId);
-                        }
+                    if (!supported) {
+                        skippedLowConfidence.add(recordKey);
+                        suppressedLowConfidenceRecords.set(recordKey, record);
                         continue;
                     }
-                    skippedLowConfidence.add(recordKey);
-                    suppressedLowConfidenceRecords.set(recordKey, record);
-                    continue;
+                    effectiveRecord = {
+                        ...record,
+                        confidence: 'medium',
+                        strategy: 'rule',
+                    };
                 }
 
                 if (!selectedRecords.has(recordKey)) {
-                    if (selectedRecords.size >= maxRecords) {
+                    if (
+                        (hasTestCallerCap ? nonTestSelectedCount >= maxRecords : selectedRecords.size >= maxRecords)
+                        || selectedRecords.size >= traversalLimit
+                    ) {
+                        traversalLimitReached = true;
                         break;
                     }
-                    selectedRecords.set(recordKey, record);
+                    const testCaller = isTestCallerEdge(effectiveRecord, symbolInstanceId);
+                    selectedRecords.set(recordKey, effectiveRecord);
+                    if (testCaller) {
+                        testCallerEdgeKeys.add(recordKey);
+                    } else {
+                        nonTestSelectedCount += 1;
+                    }
                 }
 
-                const peerSymbolInstanceId = record.sourceInstanceId === symbolInstanceId
-                    ? record.targetInstanceId
-                    : record.sourceInstanceId;
+                const peerSymbolInstanceId = effectiveRecord.sourceInstanceId === symbolInstanceId
+                    ? effectiveRecord.targetInstanceId
+                    : effectiveRecord.sourceInstanceId;
                 if (!peerSymbolInstanceId || visited.has(peerSymbolInstanceId)) {
                     continue;
                 }
                 visited.add(peerSymbolInstanceId);
                 visitedSymbolInstanceIds.push(peerSymbolInstanceId);
+                parentEdgeByNode.set(peerSymbolInstanceId, { key: recordKey, parent: symbolInstanceId });
                 nextFrontier.push(peerSymbolInstanceId);
             }
 
-            if (selectedRecords.size >= maxRecords) {
+            if (traversalLimitReached || (!hasTestCallerCap && selectedRecords.size >= maxRecords)) {
                 break;
             }
         }
 
         frontier = [...new Set(nextFrontier)];
-        if (frontier.length === 0 || selectedRecords.size >= maxRecords) {
+        if (frontier.length === 0 || traversalLimitReached || (!hasTestCallerCap && selectedRecords.size >= maxRecords)) {
             break;
         }
     }
+
+    let finalRecords: RelationshipRecord[];
+    if (!hasTestCallerCap || testCallerEdgeKeys.size === 0) {
+        finalRecords = Array.from(selectedRecords.values());
+    } else {
+        // Preserve any test caller edges that bridge to a production caller at deeper hops.
+        const bridgingTestEdgeKeys = new Set<string>();
+        for (const [key, record] of selectedRecords) {
+            if (testCallerEdgeKeys.has(key)) continue;
+            let cursor = record.targetInstanceId;
+            while (cursor && cursor !== input.symbolInstanceId) {
+                const parentLink = parentEdgeByNode.get(cursor);
+                if (!parentLink) break;
+                if (testCallerEdgeKeys.has(parentLink.key)) {
+                    bridgingTestEdgeKeys.add(parentLink.key);
+                }
+                cursor = parentLink.parent;
+            }
+        }
+
+        const compactedRecords = new Map<string, RelationshipRecord>();
+        const reachableFromRoot = new Set<string>([input.symbolInstanceId]);
+        let includedNonBridgingTestCallers = 0;
+
+        for (const [key, record] of selectedRecords) {
+            if (!testCallerEdgeKeys.has(key) || bridgingTestEdgeKeys.has(key)) {
+                compactedRecords.set(key, record);
+                if (record.sourceInstanceId) reachableFromRoot.add(record.sourceInstanceId);
+                if (record.targetInstanceId) reachableFromRoot.add(record.targetInstanceId);
+                continue;
+            }
+            if (!record.targetInstanceId || !reachableFromRoot.has(record.targetInstanceId)) {
+                omittedTestCallerKeys.add(key);
+                continue;
+            }
+            if (includedNonBridgingTestCallers >= maxTestCallers) {
+                omittedTestCallerKeys.add(key);
+                continue;
+            }
+            compactedRecords.set(key, record);
+            includedNonBridgingTestCallers += 1;
+            if (record.sourceInstanceId) reachableFromRoot.add(record.sourceInstanceId);
+        }
+
+        if (compactedRecords.size <= maxRecords) {
+            finalRecords = Array.from(compactedRecords.values());
+        } else {
+            const priorityEntries: Array<[string, RelationshipRecord]> = [];
+            const nonBridgingTestEntries: Array<[string, RelationshipRecord]> = [];
+            for (const entry of compactedRecords.entries()) {
+                if (testCallerEdgeKeys.has(entry[0]) && !bridgingTestEdgeKeys.has(entry[0])) {
+                    nonBridgingTestEntries.push(entry);
+                } else {
+                    priorityEntries.push(entry);
+                }
+            }
+            const keptKeySet = new Set<string>();
+            const keptNodes = new Set<string>([input.symbolInstanceId]);
+            for (const [key, record] of priorityEntries) {
+                if (keptKeySet.size >= maxRecords) {
+                    traversalLimitReached = true;
+                    break;
+                }
+                keptKeySet.add(key);
+                if (record.sourceInstanceId) keptNodes.add(record.sourceInstanceId);
+                if (record.targetInstanceId) keptNodes.add(record.targetInstanceId);
+            }
+            for (const [key, record] of nonBridgingTestEntries) {
+                if (
+                    keptKeySet.size >= maxRecords
+                    || !record.targetInstanceId
+                    || !keptNodes.has(record.targetInstanceId)
+                ) {
+                    omittedTestCallerKeys.add(key);
+                    continue;
+                }
+                keptKeySet.add(key);
+                if (record.sourceInstanceId) keptNodes.add(record.sourceInstanceId);
+            }
+            finalRecords = [];
+            for (const [key, record] of compactedRecords.entries()) {
+                if (keptKeySet.has(key)) finalRecords.push(record);
+            }
+        }
+        if (prioritizeConnectedCallers) {
+            // The shared caller/callee limit takes a prefix of this direction.
+            // Keep paths to production callers ahead of optional test leaves.
+            const requiredCallers: RelationshipRecord[] = [];
+            const testLeaves: RelationshipRecord[] = [];
+            for (const record of finalRecords) {
+                const key = buildRelationshipRecordKey(record);
+                if (testCallerEdgeKeys.has(key) && !bridgingTestEdgeKeys.has(key)) {
+                    testLeaves.push(record);
+                } else {
+                    requiredCallers.push(record);
+                }
+            }
+            finalRecords = [...requiredCallers, ...testLeaves];
+        }
+    }
+
+    const usedNodeIds = new Set<string>([input.symbolInstanceId]);
+    for (const record of finalRecords) {
+        if (record.sourceInstanceId) usedNodeIds.add(record.sourceInstanceId);
+        if (record.targetInstanceId) usedNodeIds.add(record.targetInstanceId);
+    }
+    const finalVisitedSymbolInstanceIds = visitedSymbolInstanceIds.filter((id) => usedNodeIds.has(id));
 
     const warnings = [...relationshipSidecar.warnings];
     if (skippedLowConfidence.size > 0) {
         warnings.push(`RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:${skippedLowConfidence.size}`);
     }
-    if (selectedRecords.size >= maxRecords) {
+    if (omittedTestCallerKeys.size > 0) {
+        warnings.push(`RELATIONSHIP_TEST_CALLERS_CAPPED:${omittedTestCallerKeys.size}`);
+    }
+    if (traversalLimitReached || finalRecords.length >= maxRecords) {
         warnings.push('RELATIONSHIP_TRAVERSAL_LIMIT_REACHED');
     }
 
@@ -697,9 +827,9 @@ async function traverseGraphNeighbors(
         status: 'ok',
         rootPath: relationshipSidecar.rootPath,
         manifest: relationshipSidecar.manifest,
-        records: Array.from(selectedRecords.values()),
+        records: finalRecords,
         suppressedLowConfidenceRecords: Array.from(suppressedLowConfidenceRecords.values()).sort(compareRelationshipQueryRecords),
-        visitedSymbolInstanceIds,
+        visitedSymbolInstanceIds: finalVisitedSymbolInstanceIds,
         warnings: uniqSortedWarnings(warnings),
     };
 }

@@ -135,6 +135,22 @@ export type ReadRelationshipAnalysisEvidenceResult =
         reason: string;
     };
 
+export type ReadRelationshipManifestSidecarResult =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        manifest: RelationshipManifest;
+        reason?: undefined;
+    }
+    | {
+        status: 'missing' | 'incompatible' | 'corrupt';
+        rootPath: string;
+        reason: string;
+        manifestHash?: undefined;
+        manifest?: undefined;
+    };
+
 export type ReadRelationshipSidecarResult =
     | {
         status: 'ok';
@@ -477,7 +493,12 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
 }
 
 // Relationship reads
-export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {
+export async function readRelationshipManifestSidecar(
+    input: Pick<
+        ReadRelationshipSidecarInput,
+        'normalizedRootPath' | 'expectedSymbolRegistryManifestHash' | 'publicationId' | 'navigationRoot'
+    >,
+): Promise<ReadRelationshipManifestSidecarResult> {
     const rootPath = path.resolve(input.navigationRoot);
     if (!publicationNavigationPathMatchesIdentity(rootPath, input.publicationId)) {
         return {
@@ -553,9 +574,21 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         };
     }
 
-    const records: RelationshipRecord[] = [];
-    const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
-    const warnings: string[] = [];
+    for (const file of manifest.files) {
+        const expectedShardPath = path.posix.join(
+            RELATIONSHIPS_DIR_NAME,
+            'by-file',
+            fileShardName(file.path, file.hash),
+        );
+        if (file.shardPath !== expectedShardPath) {
+            return {
+                status: 'incompatible',
+                rootPath,
+                reason: `relationship manifest has a non-deterministic shard path for ${file.path}`,
+            };
+        }
+    }
+
     try {
         const expectedShardNames = manifest.files.map((file) => path.basename(file.shardPath)).sort(compareStrings);
         const actualShardNames = (await fs.promises.readdir(byFileDir, { withFileTypes: true }))
@@ -572,6 +605,34 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 reason: 'relationship shard set does not exactly match the relationship manifest',
             };
         }
+    } catch (error) {
+        return {
+            status: isCorruptShardError(error) ? 'corrupt' : 'incompatible',
+            rootPath,
+            reason: error instanceof Error ? error.message : String(error),
+        };
+    }
+
+    return {
+        status: 'ok',
+        rootPath,
+        manifestHash,
+        manifest,
+    };
+}
+
+export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {
+    const manifestLayout = await readRelationshipManifestSidecar(input);
+    if (manifestLayout.status !== 'ok') {
+        return manifestLayout;
+    }
+    const { rootPath, manifest, manifestHash } = manifestLayout;
+    const readableRoot = rootPath;
+
+    const records: RelationshipRecord[] = [];
+    const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+    const warnings: string[] = [];
+    try {
         const shardReuse = input.shardReuse;
         const shardResult = await visitShardsInByteBudget(
             readableRoot,

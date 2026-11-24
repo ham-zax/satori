@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,14 +83,12 @@ function resolveInitialGlue({ checkOnly, oldManifest, diskGlue, commit, hasReusa
     }
     return { glue: diskGlue, canReuseCache: true };
 }
-function writeFileAtomic(targetPath, contents) {
-    const tempPath = `${targetPath}.${process.pid}.tmp`;
-    try {
-        writeFileSync(tempPath, contents);
-        renameSync(tempPath, targetPath);
-    } catch (error) {
-        rmSync(tempPath, { force: true });
-        throw error;
+function publishBundle(stagingRoot, assetRoot) {
+    if (existsSync(assetRoot)) {
+        // Exchange both directory entries in one Linux filesystem operation.
+        execFileSync('mv', ['--exchange', '--no-copy', '-T', stagingRoot, assetRoot]);
+    } else {
+        renameSync(stagingRoot, assetRoot);
     }
 }
 function filesUnder(dir) {
@@ -170,7 +168,6 @@ if (!checkOnly) {
     if (version.status !== 0 || !new RegExp(`\\b${emscripten.replaceAll('.', '\\.')}\\b`).test(version.stdout)) {
         fail(`emcc ${emscripten} is required: ${version.error?.message ?? version.stdout.trim()}`);
     }
-    mkdirSync(path.join(assetRoot, 'extended'), { recursive: true });
 }
 
 // Every compile runs in a memory-capped systemd scope with swap disabled: a
@@ -266,9 +263,15 @@ const initialGlueState = resolveInitialGlue({
 let glue = initialGlueState.glue;
 const canReuseCache = initialGlueState.canReuseCache;
 
+const stagingRoot = checkOnly ? null : mkdtempSync(path.join(path.dirname(assetRoot), '.cbm-extractor-'));
 try {
+if (stagingRoot) {
+    if (existsSync(assetRoot)) cpSync(assetRoot, stagingRoot, { recursive: true });
+    mkdirSync(path.join(stagingRoot, 'extended'), { recursive: true });
+}
 for (const plan of plans) {
     const { row, dir, scannerC, stubs, sourceSha256, pack, file, output, previous, cachedOnDisk } = plan;
+    const stagedOutput = stagingRoot ? path.join(stagingRoot, path.relative(assetRoot, output)) : output;
     const cached = canReuseCache && cachedOnDisk;
     const knownFailure = findKnownFailure(oldManifest?.failures ?? [], row, sourceSha256, memoryFailure, checkOnly);
     if (knownFailure) {
@@ -326,19 +329,16 @@ for (const plan of plans) {
                 fail(`${row.cbmLanguage}: emitted JS differs from shared glue at byte ${index < 0 ? Math.min(glue.length, emittedGlue.length) : index}`);
             }
             glue = emittedGlue;
-            copyFileSync(tempWasm, output);
+            copyFileSync(tempWasm, stagedOutput);
             built++;
-            console.log(`built ${row.cbmLanguage} (${pack}, ${(statSync(output).size / 1048576).toFixed(2)} MiB)`);
+            console.log(`built ${row.cbmLanguage} (${pack}, ${(statSync(stagedOutput).size / 1048576).toFixed(2)} MiB)`);
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
     } else reused++;
-    const metadata = absentExtended ? { sizeBytes: previous.sizeBytes, sha256: previous.sha256 } : moduleMetadata(output);
+    const metadata = absentExtended ? { sizeBytes: previous.sizeBytes, sha256: previous.sha256 } : moduleMetadata(stagedOutput);
     modules.push({ cbmLanguage: row.cbmLanguage, satoriLanguageId: row.satoriLanguageId, file,
         ...metadata, sourceSha256, pack });
-}
-} finally {
-    if (sharedObjRoot) rmSync(sharedObjRoot, { recursive: true, force: true });
 }
 if (!glue) fail('no shared Emscripten glue');
 const manifest = { schemaVersion: 1, cbmCommit: commit, emscripten,
@@ -348,11 +348,14 @@ if (checkOnly) {
     if (readFileSync(manifestPath, 'utf8') !== rendered) fail('manifest is stale');
     console.log(`Manifest current: ${modules.length} modules`);
 } else {
-    if (!existsSync(gluePath) || !readFileSync(gluePath).equals(glue)) {
-        writeFileAtomic(gluePath, glue);
-    }
-    writeFileAtomic(manifestPath, rendered);
+    const buildErrors = failures.filter((entry) => !isMemoryFailureReason(entry.reason));
+    if (buildErrors.length > 0) fail(`emcc failed for ${buildErrors.map((entry) => entry.cbmLanguage).join(', ')}`);
+    writeFileSync(path.join(stagingRoot, 'cbm-extractor.js'), glue);
+    writeFileSync(path.join(stagingRoot, 'manifest.json'), rendered);
+    publishBundle(stagingRoot, assetRoot);
     console.log(`Manifest written: ${modules.length} modules, ${built} built, ${reused} reused, ${((Date.now() - startTime) / 1000).toFixed(1)} s`);
 }
-const buildErrors = failures.filter((entry) => !isMemoryFailureReason(entry.reason));
-if (buildErrors.length > 0) fail(`emcc failed for ${buildErrors.map((entry) => entry.cbmLanguage).join(', ')}`);
+} finally {
+    if (sharedObjRoot) rmSync(sharedObjRoot, { recursive: true, force: true });
+    if (stagingRoot) rmSync(stagingRoot, { recursive: true, force: true });
+}

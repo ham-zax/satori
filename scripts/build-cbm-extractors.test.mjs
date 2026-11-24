@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,7 +25,7 @@ function loadProductionPredicates() {
       'findKnownFailure',
       'isMemoryFailureReason',
       'resolveInitialGlue',
-      'writeFileAtomic',
+      'publishBundle',
     ]);
     const functions = new Map();
     const visit = (node) => {
@@ -38,10 +39,11 @@ function loadProductionPredicates() {
     assert.deepEqual([...functions.keys()].sort(), [...requiredNames].sort(), 'production predicates must remain available');
     const declarations = [...functions.values()].join('\n');
     return vm.runInNewContext(
-      `(() => { ${declarations}\nreturn { fail, sha256, findKnownFailure, isMemoryFailureReason, resolveInitialGlue, writeFileAtomic }; })()`,
+      `(() => { ${declarations}\nreturn { fail, sha256, findKnownFailure, isMemoryFailureReason, resolveInitialGlue, publishBundle }; })()`,
       {
         createHash,
-        writeFileSync: fs.writeFileSync,
+        execFileSync,
+        existsSync: fs.existsSync,
         renameSync: fs.renameSync,
         rmSync: fs.rmSync,
         process,
@@ -50,7 +52,7 @@ function loadProductionPredicates() {
   } finally { api.close(); }
 }
 
-const { sha256, findKnownFailure, isMemoryFailureReason, resolveInitialGlue, writeFileAtomic } = loadProductionPredicates();
+const { sha256, findKnownFailure, isMemoryFailureReason, resolveInitialGlue, publishBundle } = loadProductionPredicates();
 
 test('check mode accepts source-matched memory failures across budgets', () => {
   const recordedSixGigFailures = [
@@ -144,14 +146,19 @@ test('resolveInitialGlue enforces strict --check while recovering from interrupt
   assert.equal(reusable.canReuseCache, true);
 });
 
-test('writeFileAtomic replaces target cleanly without leaving temporary files', () => {
+test('publishBundle exchanges the entire staging and asset directories', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-cbm-atomic-'));
   try {
-    const target = path.join(dir, 'manifest.json');
-    fs.writeFileSync(target, '{"old":true}\n');
-    writeFileAtomic(target, '{"new":true}\n');
-    assert.equal(fs.readFileSync(target, 'utf8'), '{"new":true}\n');
-    assert.deepEqual(fs.readdirSync(dir), ['manifest.json']);
+    const current = path.join(dir, 'current');
+    const staging = path.join(dir, 'staging');
+    fs.mkdirSync(current);
+    fs.mkdirSync(staging);
+    fs.writeFileSync(path.join(current, 'old.wasm'), 'old');
+    fs.writeFileSync(path.join(staging, 'new.wasm'), 'new');
+    fs.writeFileSync(path.join(staging, 'manifest.json'), '{}');
+    publishBundle(staging, current);
+    assert.deepEqual(fs.readdirSync(current).sort(), ['manifest.json', 'new.wasm']);
+    assert.deepEqual(fs.readdirSync(staging), ['old.wasm']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

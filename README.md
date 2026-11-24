@@ -186,16 +186,16 @@ Tuning set with seven labels corrected to the pinned commits. Wrong guesses cost
 
 Each session needs 1 GiB of free memory at worker start, so memory-limited hosts and containers run fewer sessions with more threads. The worker is released after 2 minutes idle.
 
-**Agent discovery.** Paired OpenCode benchmark (protocol v3, DeepSeek V4.1 Flash, local Potion embeddings on CPU, Voyage `rerank-3`) comparing Satori against native OpenCode search (`grep`, `glob`, bounded 200-line `read`) across two frozen discovery tasks (three runs per arm):
+**Agent discovery (100% local offline).** Paired protocol v4 benchmark (Claive + Pi, DeepSeek V4.1 Flash `xhigh`, local Potion embeddings + LanceDB + local LateOn reranker on CPU, zero external search APIs) comparing Satori against guarded native search (`grep`, `find`, bounded 200-line `read`) across two frozen discovery tasks (three alternating runs per arm, all-run medians):
 
-| Task | Arm | Correct | Input tokens | Tool calls | Source call | Wall time |
-|---|---|---:|---:|---:|---:|---:|
-| `unknown-freshness-reuse` | Native | 1/3 | 63,576 | 23 | 16 [14–24] | 143.9 s |
-| | **Satori** | 1/3 | **17,463 (-72.5%)** | **7 (-69.6%)** | **2 [2–2]** | **84.2 s (-41.5%)** |
-| `known-exact-target` | Native | 2/3 | 16,440 | 14 | 3 [3–5] | 49.1 s |
-| | **Satori** | **3/3** | **12,300 (-25.2%)** | **6 (-57.1%)** | **2 [2–2]** | **32.1 s (-34.7%)** |
+| Task | Arm | Strict v4 Pass | Total input tokens | Reasoning tokens | Tool calls | Source call | Wall time |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `unknown-freshness-reuse` | Native | 0/3 | 201,905 | 6,975 | 25 | 24 [16–26] | 151.4 s |
+| | **Satori (offline)** | **3/3** | **37,549 (-81.4%)** | **1,571 (-77.5%)** | **5 (-80.0%)** | **2 [2–2]** | **58.2 s (-61.6%)** |
+| `known-exact-target` | Native | 2/3 | 77,784 | 2,504 | 13 | 3 [3–3] | 73.5 s |
+| | **Satori (offline)** | **3/3** | **72,022 (-7.4%)** | **1,257 (-49.8%)** | **9 (-30.8%)** | **2 [2–2]** | **52.3 s (-28.8%)** |
 
-Token, tool-call, and wall-time figures are medians on correct runs (one correct run per arm on `unknown-freshness-reuse`). Satori started from a warm index and a harness-supplied first `search_codebase` query; later call and token savings follow from reaching the owner source at call 2 instead of call 16. [Benchmark report and limits](docs/improvements/agent-discovery-benchmark-2026-10-26.md).
+Across all 6 runs per arm, offline Satori passed **6/6 (100%)** strict v4 runs vs **2/6 (33.3%)** for native search (combined medians: **-59.9%** input tokens, **-57.6%** calls, **-46.3%** reasoning tokens, **-35.0%** wall time; zero wrong code claims, zero budget overflows, zero protocol violations). Satori started from a warm local index and a harness-supplied first `search_codebase` query; later call, token, and pass-rate gains follow from reaching the owner source at call 2 instead of call 24 and verifying relations via `call_graph`. [Full v4 benchmark report, passing-only medians, and limits](docs/improvements/agent-discovery-benchmark-2026-11-23.md) ([earlier Oct 26 v3 OpenCode/Voyage report](docs/improvements/agent-discovery-benchmark-2026-10-26.md)).
 
 **Against [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 0.11.0.** Same machine, 5 public repositories; each range spans two runs:
 

@@ -43,6 +43,7 @@ const ROOT_MODULE_CONTROL_FILES = [
     'bun.lockb',
 ] as const;
 const DEFAULT_MAX_SESSIONS = 4;
+const IMPORT_RESOLUTION_BATCH_SIZE = 256;
 // Warm LanguageServices make back-to-back syncs cheap but hold hundreds of MB;
 // release them once syncs stop.
 const DEFAULT_SESSION_IDLE_RELEASE_MS = 2 * 60_000;
@@ -626,6 +627,29 @@ function buildReverseDependencies(
         reverse.set(targetRelative, dependents);
     };
     let unresolvedImports = false;
+    const addImport = (sourceRelative: string, resolvedFileName: string | undefined): void => {
+        if (!resolvedFileName) {
+            unresolvedImports = true;
+            return;
+        }
+        const targetRelative = targetOf(resolvedFileName);
+        if (targetRelative) addEdge(targetRelative, sourceRelative);
+    };
+    const api = session.getApi();
+    const pendingImports: {
+        readonly fileName: string;
+        readonly sourceRelative: string;
+        readonly specifier: ts.StringLiteralLikeNode;
+    }[] = [];
+    const flushImports = (): void => {
+        if (pendingImports.length === 0) return;
+        const resolved = api.batch(...pendingImports.map(({ fileName, specifier }) =>
+            program.getResolvedModuleFromModuleSpecifier.gen(specifier, fileName)));
+        for (let index = 0; index < pendingImports.length; index += 1) {
+            addImport(pendingImports[index].sourceRelative, resolved[index]?.resolvedFileName);
+        }
+        pendingImports.length = 0;
+    };
     for (let index = 0; index < plan.absoluteFiles.length; index += 1) {
         const sourceAbsolute = normalizeAbsolute(plan.absoluteFiles[index]);
         const sourceRelative = plan.relativeFiles[index];
@@ -637,20 +661,21 @@ function buildReverseDependencies(
         for (const requiredLiteral of required) specifiers.add(requiredLiteral);
         for (const imported of specifiers) {
             if (!ts.isStringLiteralLikeNode(imported)) continue;
-            const mode = program.getModeForUsageLocation(sourceFile.fileName, imported);
-            // The program resolves import sites only, so a require() argument
-            // needs the session's resolver to become an edge.
-            const resolved = program.getResolvedModule(sourceFile.fileName, imported.text, mode)?.resolvedFileName
-                ?? (requiredSpecifiers.has(imported)
-                    ? session.resolveModuleName(sourceFile.fileName, imported.text, mode as ts.ResolutionMode)
-                    : undefined);
-            if (!resolved) {
-                unresolvedImports = true;
-                continue;
+            if (requiredSpecifiers.has(imported)) {
+                flushImports();
+                // A bare require() may need the session's resolver because the
+                // program's resolved-module table only includes import sites.
+                const mode = program.getModeForUsageLocation(sourceFile.fileName, imported);
+                const resolved = program.getResolvedModule(sourceFile.fileName, imported.text, mode)?.resolvedFileName
+                    ?? session.resolveModuleName(sourceFile.fileName, imported.text, mode as ts.ResolutionMode);
+                addImport(sourceRelative, resolved);
+            } else {
+                pendingImports.push({ fileName: sourceFile.fileName, sourceRelative, specifier: imported });
+                if (pendingImports.length === IMPORT_RESOLUTION_BATCH_SIZE) flushImports();
             }
-            const targetRelative = targetOf(resolved);
-            if (targetRelative) addEdge(targetRelative, sourceRelative);
         }
+        // Serialized reverse edges record imports before path references.
+        if (sourceFile.referencedFiles.length > 0) flushImports();
         for (const referenced of sourceFile.referencedFiles) {
             const targetAbsolute = normalizeAbsolute(path.resolve(path.dirname(sourceAbsolute), referenced.fileName));
             if (!sourceFileForProgram(program, targetAbsolute)) unresolvedImports = true;
@@ -658,6 +683,7 @@ function buildReverseDependencies(
             if (targetRelative) addEdge(targetRelative, sourceRelative);
         }
     }
+    flushImports();
     return { reverse, unresolvedImports };
 }
 

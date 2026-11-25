@@ -128,6 +128,46 @@ test('a require() edge in a TypeScript file keeps its importer in the delta', as
     }
 });
 
+test('reverse dependencies retain import, require, and path reference order across batches', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-import-batches-')));
+    const analyzer = new TypeScriptSemanticProjectAnalyzer();
+    const write = writerFor(root);
+    const targets = ['src/first.ts', 'src/last.ts', 'src/required.ts', 'src/referenced.ts'];
+    const importer = 'src/importer.ts';
+    const files = [...targets, importer];
+    try {
+        write('tsconfig.json', JSON.stringify({ compilerOptions: COMPILER_OPTIONS, include: ['src'] }));
+        for (const target of targets) write(target, 'export const value = 1;\n');
+        write(importer, [
+            '/// <reference path="./referenced.ts" />',
+            ...Array.from({ length: 256 }, () => 'import "./first";'),
+            'import "./last";',
+            'import "./missing";',
+            'declare const require: (id: string) => unknown;',
+            'export const value = require("./required");',
+        ].join('\n'));
+        const before = registryFor(root, files);
+        await analyzer.analyze({ rootPath: root, language: 'typescript', registry: before });
+        const state = JSON.parse(analyzer.exportRootState(root)!);
+        const snapshot = state.snapshots[0][1];
+        assert.deepEqual(snapshot.reverseDependencies, targets.map(target => [target, [importer]]));
+        assert.equal(snapshot.unresolvedImports, true);
+
+        write('src/last.ts', 'export const value = 2;\n');
+        const delta = await analyzer.analyze({
+            rootPath: root,
+            language: 'typescript',
+            registry: registryFor(root, files),
+            previousRegistry: before,
+            changedFiles: new Set(['src/last.ts']),
+        });
+        assert.deepEqual([...(delta.affectedSourceFiles ?? [])].sort(), [importer, 'src/last.ts']);
+    } finally {
+        await analyzer.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('an unreadable tsconfig only drops its own project instead of failing the analysis', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-broken-config-')));
     const write = (file: string, text: string) => {

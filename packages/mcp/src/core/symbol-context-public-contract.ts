@@ -90,8 +90,21 @@ export const symbolContextRequestSchema = z.object({
     budgets: contextBudgetsSchema.optional(),
 }).strict();
 
+function normalizeExactContractVersion(value: unknown): typeof SYMBOL_CONTEXT_FORMAT_VERSION | undefined {
+    if (value === SYMBOL_CONTEXT_FORMAT_VERSION) {
+        return SYMBOL_CONTEXT_FORMAT_VERSION;
+    }
+    if (typeof value === "string" && value.trim() === String(SYMBOL_CONTEXT_FORMAT_VERSION)) {
+        return SYMBOL_CONTEXT_FORMAT_VERSION;
+    }
+    return undefined;
+}
+
 export const exactSymbolOpenRequestSchema = z.object({
-    contractVersion: z.literal(SYMBOL_CONTEXT_FORMAT_VERSION),
+    contractVersion: z.preprocess(
+        (value) => normalizeExactContractVersion(value) ?? value,
+        z.literal(SYMBOL_CONTEXT_FORMAT_VERSION),
+    ),
     symbolId: z.string().trim().min(1).max(512).optional(),
     symbolLabel: z.string().trim().min(1).max(512).optional(),
     context: symbolContextRequestSchema.optional(),
@@ -178,7 +191,7 @@ export const openSymbolRequestSchema = z.object({
     endLine: z.number().int().positive().optional(),
 }).strict().superRefine((value, ctx) => {
     if (hasExactSymbolMarker(value)) {
-        if (value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
+        if (normalizeExactContractVersion(value.contractVersion) === undefined) {
             ctx.addIssue({
                 code: "custom",
                 path: ["contractVersion"],
@@ -265,11 +278,16 @@ export const openSymbolRequestSchema = z.object({
             message: "endLine must not precede startLine.",
         });
     }
-}).transform(value => hasExactSymbolMarker(value) ? {
-    ...value,
-    ...(value.context === undefined && value.continuation === undefined
-        ? { context: { preset: "definition" as const } } : {}),
-} : value);
+}).transform(value => {
+    if (!hasExactSymbolMarker(value)) return value;
+    const contractVersion = normalizeExactContractVersion(value.contractVersion) ?? value.contractVersion;
+    return {
+        ...value,
+        contractVersion,
+        ...(value.context === undefined && value.continuation === undefined
+            ? { context: { preset: "definition" as const } } : {}),
+    };
+});
 
 export type ExactSymbolOpenRequest = z.infer<typeof exactSymbolOpenRequestSchema>;
 export type SymbolContextPreset = z.infer<typeof symbolContextRequestSchema>["preset"];

@@ -223,7 +223,25 @@ test("omitted format and format='json' preserve exact legacy JSON parity on open
     const rangeOmitted = await readFileTool.execute(rangeBaseArgs, ctx);
     const rangeExplicitJson = await readFileTool.execute({ ...rangeBaseArgs, format: "json" }, ctx);
     assert.deepEqual(rangeExplicitJson, rangeOmitted);
-    assert.ok("structuredContent" in rangeOmitted && rangeOmitted.structuredContent !== undefined);
+    assert.equal("structuredContent" in rangeOmitted, false);
+    assert.equal(rangeOmitted.content[0]?.text, lines.slice(0, 45).join("\n"));
+
+    const rangeExplicitCompact = await readFileTool.execute({ ...rangeBaseArgs, presentation: "compact" }, ctx);
+    assert.equal("structuredContent" in rangeExplicitCompact, false);
+    const compactPayload = JSON.parse(rangeExplicitCompact.content[0]?.text ?? "{}");
+    assert.equal(compactPayload.presentation, "compact");
+    assert.equal(compactPayload.startLine, 1);
+    assert.equal(compactPayload.endLine, 45);
+    assert.equal(compactPayload.source, lines.slice(0, 45).join("\n"));
+
+    const exactStringVersion = await readFileTool.execute({
+        ...exactBaseArgs,
+        open_symbol: {
+            ...exactBaseArgs.open_symbol,
+            contractVersion: "2",
+        },
+    }, ctx);
+    assert.deepEqual(exactStringVersion, exactOmitted);
 });
 
 test("ordinary annotated text stays in annotated mode on continuation", async (t) => {

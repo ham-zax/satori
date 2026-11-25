@@ -90,6 +90,41 @@ test("exact and direct-span schemas implement every frozen discrimination vector
     }
 });
 
+test("exact-symbol schemas coerce string contractVersion '2' to integer 2 while rejecting missing or unsupported versions", () => {
+    for (const rawVersion of ["2", " 2 "]) {
+        const parsedOpen = openSymbolRequestSchema.parse({
+            contractVersion: rawVersion,
+            symbolId: "syminst_a",
+        });
+        assert.equal(parsedOpen.contractVersion, 2);
+
+        const parsedExact = exactSymbolOpenRequestSchema.parse({
+            contractVersion: rawVersion,
+            symbolId: "syminst_a",
+            context: { preset: "definition" },
+        });
+        assert.equal(parsedExact.contractVersion, 2);
+    }
+
+    for (const badVersion of [undefined, null, 1, "1", "2.0", "v2", true]) {
+        const parsedOpen = openSymbolRequestSchema.safeParse({
+            ...(badVersion !== undefined ? { contractVersion: badVersion } : {}),
+            symbolId: "syminst_a",
+            context: { preset: "definition" },
+        });
+        assert.equal(parsedOpen.success, false, `expected rejection for ${String(badVersion)}`);
+        assert.equal(
+            exactSymbolOpenRequestSchema.safeParse({
+                ...(badVersion !== undefined ? { contractVersion: badVersion } : {}),
+                symbolId: "syminst_a",
+                context: { preset: "definition" },
+            }).success,
+            false,
+            `expected exact schema rejection for ${String(badVersion)}`,
+        );
+    }
+});
+
 test("exact request strings are trimmed and blank identity or continuation values are rejected", () => {
     const trimmed = exactSymbolOpenRequestSchema.parse({
         contractVersion: 2,

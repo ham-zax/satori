@@ -68,7 +68,7 @@ export const readFileInputSchema = z.object({
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive). An end_line past the end of the file reads to the last line."),
     mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Defaults to plain, including exact-symbol requests."),
     format: z.enum(["json", "text"]).optional().describe("Response format. Defaults to json; text renders compact line-numbered source and metadata in a single text block."),
-    presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
+    presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit or use full for raw multiline source; use compact to wrap an ordinary read in a one-line JSON envelope."),
     open_symbol: openSymbolRequestSchema.optional().describe("Read bounded symbol source with continuation-aware excerpts using {contractVersion:2, symbolId}; context defaults to {preset:definition}. Explicit context and continuation are mutually exclusive. Direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
     if (input.start_line !== undefined && input.end_line !== undefined && input.start_line > input.end_line) {
@@ -115,7 +115,6 @@ function normalizeRelativePath(value: string): string {
     return value.replace(/\\/g, "/");
 }
 
-const READ_FILE_AUTO_COMPACT_MIN_LINES = 41;
 const TOP_LEVEL_DECLARATION = /^(?:(?:export|default|declare|abstract|async|public|private|protected|static|sealed|final|open|internal|external|pub(?:\([^)]*\))?)\s+)*(?:function|class|interface|type|enum|namespace|module|const|let|var|def|struct|trait|impl|fn|func|record|object|data\s+class|test|it|describe|beforeEach|afterEach|beforeAll|afterAll)\b|^(?:test|it|describe|beforeEach|afterEach|beforeAll|afterAll)(?:\.(?:only|skip|todo))?\s*\(/;
 
 type ReadFileCompactEnvelope = {
@@ -1072,15 +1071,9 @@ export const readFileTool: McpTool = {
                         }],
                     };
                 }
-                const shouldCompact = input.format !== "text" && !input.open_symbol && (
-                    input.presentation === "compact"
-                    || (
-                        input.presentation !== "full"
-                        && hasStart
-                        && hasEnd
-                        && selectedLines.length >= READ_FILE_AUTO_COMPACT_MIN_LINES
-                    )
-                );
+                const shouldCompact = input.format !== "text"
+                    && !input.open_symbol
+                    && input.presentation === "compact";
                 const compactEnvelope = shouldCompact
                     ? compactSourceRange(selectedLines, startLine, endLine, absolutePath)
                     : undefined;
@@ -1110,7 +1103,6 @@ export const readFileTool: McpTool = {
                         type: "text",
                         text: contentWithHint
                     }],
-                    ...(compactEnvelope ? { structuredContent: compactEnvelope } : {}),
                 };
             }
 

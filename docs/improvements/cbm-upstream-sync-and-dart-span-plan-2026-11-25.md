@@ -122,6 +122,32 @@ Batch all extractor changes into **one** sequential Emscripten rebuild and **one
 
 ---
 
+## Open Follow-up: Go Semantic Resolution Slowdown (Deferred)
+
+Status: open, unattributed. Deferred together with the
+[cold-search plan](cold-search-latency-deferred-plan-2026-11-25.md); it is indexing and sync cost,
+not search latency, so it does not depend on that plan.
+
+Observation (from the 25 November cold-search handoff, not re-measured here): the combined
+Slice 1A + 1B update ran 36% slower on `trufflehog` (3,295 Go files) while returning 1,164 more
+results. Slice 1A passed its zero-diff qualification, so the extra results are expected to come
+from the Slice 1B accuracy fixes. That is a hypothesis; nothing has attributed the time to either
+slice, to legitimate new resolution work, or to a hotspot in `go_lsp.c`.
+
+- **Next action:** Build `dd27885c` and `4c3cc648`, then compare the `navigation.semantic`
+  (`language=go`) span on `trufflehog`, three runs each. Then profile `go_lsp.c` phases for
+  unindexed cross-file scans. Use `dd27885c` as the baseline: it is the parent of `4c3cc648` and
+  this plan's base. The handoff named `ec3ed63d`, but that is a sibling commit on the same parent
+  carrying unrelated core and MCP perf changes, so comparing against it conflates the two.
+- **Separating 1A from 1B:** `4c3cc648` is one commit containing both, so a 1A-only build has to
+  be reconstructed.
+- **Why necessary now:** the cause is unattributed, so it is unknown whether the cost is
+  accepted-by-design or avoidable.
+- **Stopping condition:** the extra time is attributed to either legitimate new resolution work or
+  a specific `go_lsp.c` hotspot.
+
+---
+
 ## Explicitly Out of Scope (Skip from CBM)
 
 * `ts_lsp.c` (Satori uses TypeScript 7 compiler API `@typescript/typescript`, strictly more accurate).

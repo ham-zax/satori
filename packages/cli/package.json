@@ -1,6 +1,6 @@
 {
   "name": "@satori-code/cli",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Install, configure, diagnose, and upgrade Satori's local-first MCP runtime for Claude Code, Codex, OpenCode, Cursor, VS Code, and Windsurf.",
   "keywords": [
     "satori",
@@ -42,8 +42,8 @@
     "toml-eslint-parser": "^1.0.3"
   },
   "satoriManagedRuntime": {
-    "mcp": "0.13.1",
-    "core": "0.12.2",
+    "mcp": "0.14.0",
+    "core": "0.13.0",
     "lanceDb": "0.40.0",
     "oxcParser": "0.155.0",
     "typescript": "7.1.0-beta",

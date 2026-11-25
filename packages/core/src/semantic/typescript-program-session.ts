@@ -4,7 +4,7 @@ import path from 'node:path';
 import { API, type CompilerOptions, type ModuleResolver, type Program, type ProjectReference, type RawCompilerOptions, type ResolutionMode, type Snapshot } from './typescript-api';
 import { serverFS } from './typescript-api';
 import {
-    readTypeScriptFileBytes, TypeScriptReadLimitError,
+    readResolvedTypeScriptFileBytes, TypeScriptReadLimitError,
     TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
 } from './typescript-bounded-reader';
 import type { TypeScriptFsBoundary } from './typescript-fs-boundary';
@@ -32,6 +32,7 @@ export class TypeScriptProgramSession {
     private jsonBytes = 0;
     private jsonReadFailure?: string;
     private disposed = false;
+    private activeScopedBoundary?: ReturnType<TypeScriptFsBoundary['createScopedPathResolver']>;
 
     constructor(
         rootPath: string,
@@ -54,77 +55,82 @@ export class TypeScriptProgramSession {
         // paths escaping the repository root + TypeScript lib never reach the OS.
         const recorder = this.observation;
         const fsBoundary = this.boundary;
+        const activeBoundary = () => this.activeScopedBoundary ?? fsBoundary;
         this.api = new API({
             cwd: rootPath,
             runExternalCode: false,
             fs: {
-                directoryExists: fsBoundary || recorder
+                directoryExists: recorder
                     ? (directoryName) => {
-                        if (fsBoundary && !fsBoundary.isAllowedPath(directoryName)) return false;
-                        if (recorder) {
-                            const kind = recorder.recordPath(directoryName);
-                            if (kind === 'other') {
-                                recorder.invalidate();
-                                return fsBoundary ? fsBoundary.directoryExists(directoryName) : serverFS.useOS;
-                            }
-                            return kind === 'directory';
+                        const boundary = activeBoundary();
+                        if (boundary && !boundary.isAllowedPath(directoryName)) return false;
+                        const kind = recorder.recordPath(directoryName);
+                        if (kind === 'other') {
+                            recorder.invalidate();
+                            return boundary ? boundary.directoryExists(directoryName) : serverFS.useOS;
                         }
-                        return fsBoundary!.directoryExists(directoryName);
+                        return kind === 'directory';
                     }
-                    : serverFS.useOS,
-                fileExists: fsBoundary || recorder
+                    : fsBoundary
+                        ? (directoryName) => activeBoundary()!.directoryExists(directoryName)
+                        : serverFS.useOS,
+                fileExists: recorder
                     ? (fileName) => {
-                        if (fsBoundary && !fsBoundary.isAllowedPath(fileName)) return false;
-                        if (recorder) {
-                            const kind = recorder.recordPath(fileName);
-                            if (kind === 'other') {
-                                recorder.invalidate();
-                                return fsBoundary ? fsBoundary.fileExists(fileName) : serverFS.useOS;
-                            }
-                            return kind === 'file';
+                        const boundary = activeBoundary();
+                        if (boundary && !boundary.isAllowedPath(fileName)) return false;
+                        const kind = recorder.recordPath(fileName);
+                        if (kind === 'other') {
+                            recorder.invalidate();
+                            return boundary ? boundary.fileExists(fileName) : serverFS.useOS;
                         }
-                        return fsBoundary!.fileExists(fileName);
+                        return kind === 'file';
                     }
-                    : serverFS.useOS,
-                getAccessibleEntries: fsBoundary || recorder
+                    : fsBoundary
+                        ? (fileName) => activeBoundary()!.fileExists(fileName)
+                        : serverFS.useOS,
+                getAccessibleEntries: recorder
                     ? (directoryName) => {
-                        if (fsBoundary && !fsBoundary.isAllowedPath(directoryName)) {
+                        const boundary = activeBoundary();
+                        if (boundary && !boundary.isAllowedPath(directoryName)) {
                             return { files: [], directories: [], symlinks: undefined };
                         }
-                        if (recorder) {
-                            // The native listing distinguishes files, directories
-                            // and symlinks. Names alone cannot witness its answer.
-                            recorder.invalidate();
-                        }
-                        return fsBoundary ? fsBoundary.getAccessibleEntries(directoryName) : serverFS.useOS;
+                        // The native listing distinguishes files, directories
+                        // and symlinks. Names alone cannot witness its answer.
+                        recorder.invalidate();
+                        return boundary ? boundary.getAccessibleEntries(directoryName) : serverFS.useOS;
                     }
-                    : serverFS.useOS,
-                realpath: fsBoundary || recorder
+                    : fsBoundary
+                        ? (directoryName) => activeBoundary()!.getAccessibleEntries(directoryName)
+                        : serverFS.useOS,
+                realpath: recorder
                     ? (pathName) => {
-                        if (fsBoundary && !fsBoundary.isAllowedPath(pathName)) return pathName;
-                        if (recorder) {
-                            const resolved = recorder.recordRealpath(pathName);
-                            if (resolved) return resolved;
-                            return fsBoundary ? fsBoundary.realpath(pathName) : serverFS.useOS;
-                        }
-                        return fsBoundary!.realpath(pathName);
+                        const boundary = activeBoundary();
+                        if (boundary && !boundary.isAllowedPath(pathName)) return pathName;
+                        const resolved = recorder.recordRealpath(pathName);
+                        if (resolved) return resolved;
+                        return boundary ? boundary.realpath(pathName) : serverFS.useOS;
                     }
-                    : serverFS.useOS,
-                stat: fsBoundary || recorder
+                    : fsBoundary
+                        ? (pathName) => activeBoundary()!.realpath(pathName)
+                        : serverFS.useOS,
+                stat: recorder
                     ? (targetPath) => {
-                        if (fsBoundary && !fsBoundary.isAllowedPath(targetPath)) return undefined;
-                        if (recorder) {
-                            // Path kind alone cannot witness native stat metadata.
-                            recorder.invalidate();
-                        }
-                        return fsBoundary ? fsBoundary.stat(targetPath) : serverFS.useOS;
+                        const boundary = activeBoundary();
+                        if (boundary && !boundary.isAllowedPath(targetPath)) return undefined;
+                        // Path kind alone cannot witness native stat metadata.
+                        recorder.invalidate();
+                        return boundary ? boundary.stat(targetPath) : serverFS.useOS;
                     }
-                    : serverFS.useOS,
+                    : fsBoundary
+                        ? (targetPath) => activeBoundary()!.stat(targetPath)
+                        : serverFS.useOS,
                 writeFile: serverFS.noop,
                 removeFile: serverFS.noop,
                 readFile: (fileName) => {
                     if (this.getResourceLimitFailure()) return undefined;
-                    if (fsBoundary && !fsBoundary.isAllowedPath(fileName)) return undefined;
+                    const boundary = activeBoundary();
+                    const targetPath = boundary ? boundary.resolveAllowedPath(fileName) : fileName;
+                    if (!targetPath) return undefined;
                     const override = this.overrides.get(path.resolve(fileName));
                     if (override !== undefined) {
                         if (!this.admitRead(fileName, Buffer.byteLength(override, 'utf8'))) return undefined;
@@ -133,19 +139,28 @@ export class TypeScriptProgramSession {
                     }
                     try {
                         if (path.extname(fileName).toLowerCase() === '.json') {
-                            const content = readTypeScriptFileBytes(fileName, this.jsonReadLimit(fileName), fsBoundary);
+                            const content = readResolvedTypeScriptFileBytes(
+                                targetPath,
+                                fileName,
+                                this.jsonReadLimit(fileName),
+                                Boolean(boundary),
+                            );
                             if (!this.admitRead(fileName, content.length)) return undefined;
                             this.observation?.recordRead(fileName, content);
                             return content.toString('utf8');
                         }
-                        const targetPath = fsBoundary ? fsBoundary.resolveAllowedPath(fileName) : fileName;
-                        if (!targetPath) return undefined;
                         const stat = fs.statSync(targetPath);
                         if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
-                        const content = readTypeScriptFileBytes(fileName, Math.min(
-                            this.sourceBudget?.maxFileBytes ?? Number.MAX_SAFE_INTEGER,
-                            this.sourceBudget?.maxProjectBytes ?? Number.MAX_SAFE_INTEGER,
-                        ), fsBoundary);
+                        const content = readResolvedTypeScriptFileBytes(
+                            targetPath,
+                            fileName,
+                            Math.min(
+                                this.sourceBudget?.maxFileBytes ?? Number.MAX_SAFE_INTEGER,
+                                this.sourceBudget?.maxProjectBytes ?? Number.MAX_SAFE_INTEGER,
+                            ),
+                            Boolean(boundary),
+                            true,
+                        );
                         if (!this.admitRead(fileName, content.length)) return undefined;
                         this.observation?.recordRead(fileName, content);
                         return content.toString('utf8');
@@ -178,23 +193,34 @@ export class TypeScriptProgramSession {
             this.jsonBytes = 0;
         }
         if (!this.snapshot) {
-            const snapshot = this.api.createSnapshot({
-                createPrograms: [{
-                    rootFiles: this.fileNames,
-                    // Semantic authority comes from built declarations, just as
-                    // in the former language-service host's default behavior.
-                    compilerOptions: { ...this.options, disableSourceOfProjectReferenceRedirect: true },
-                    options: { projectReferences: this.references },
-                }],
-            });
-            this.snapshot = snapshot;
-            this.program = snapshot.operation.createdPrograms[0];
+            this.activeScopedBoundary = this.boundary?.createScopedPathResolver();
+            try {
+                const snapshot = this.api.createSnapshot({
+                    createPrograms: [{
+                        rootFiles: this.fileNames,
+                        // Semantic authority comes from built declarations, just as
+                        // in the former language-service host's default behavior.
+                        compilerOptions: { ...this.options, disableSourceOfProjectReferenceRedirect: true },
+                        options: { projectReferences: this.references },
+                    }],
+                });
+                this.snapshot = snapshot;
+                this.program = snapshot.operation.createdPrograms[0];
+            } finally {
+                this.activeScopedBoundary = undefined;
+            }
         } else if (this.changed.size) {
             const previous = this.snapshot;
-            const next = previous.update({
-                fileNotifications: { changed: [...this.changed] },
-                ensurePrograms: [this.program!.id],
-            });
+            this.activeScopedBoundary = this.boundary?.createScopedPathResolver();
+            let next: Snapshot;
+            try {
+                next = previous.update({
+                    fileNotifications: { changed: [...this.changed] },
+                    ensurePrograms: [this.program!.id],
+                });
+            } finally {
+                this.activeScopedBoundary = undefined;
+            }
             const program = next.getProgram(this.program!.id);
             if (!program) {
                 next.dispose();
@@ -283,9 +309,14 @@ export class TypeScriptProgramSession {
      */
     resolveModuleName(containingFile: string, specifier: string, mode: ResolutionMode): string | undefined {
         if (this.disposed) throw new Error('TypeScript program session is disposed.');
-        this.moduleResolver ??= this.api.createModuleResolver(this.options as RawCompilerOptions);
-        const result = this.moduleResolver.resolveModuleName(specifier, path.dirname(path.resolve(containingFile)), mode);
-        return result.resolvedModule?.resolvedFileName;
+        this.activeScopedBoundary = this.boundary?.createScopedPathResolver();
+        try {
+            this.moduleResolver ??= this.api.createModuleResolver(this.options as RawCompilerOptions);
+            const result = this.moduleResolver.resolveModuleName(specifier, path.dirname(path.resolve(containingFile)), mode);
+            return result.resolvedModule?.resolvedFileName;
+        } finally {
+            this.activeScopedBoundary = undefined;
+        }
     }
 
     updateFile(fileName: string, source: string): void {

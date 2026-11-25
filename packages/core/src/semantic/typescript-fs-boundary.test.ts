@@ -202,3 +202,40 @@ test('an ES2022 program with the repository boundary loads native platform stand
         session.dispose();
     }
 });
+
+test('scoped path resolver matches uncached boundary across files, dirs, missing paths, and symlinks', (t) => {
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-scoped-boundary-'));
+    t.after(() => fs.rmSync(outer, { recursive: true, force: true }));
+    const root = path.join(outer, 'repo');
+    const outside = path.join(outer, 'outside');
+    writeFile(path.join(root, 'src/a.ts'), 'export const a = 1;\n');
+    writeFile(path.join(outside, 'secret.ts'), 'export const s = 2;\n');
+    fs.symlinkSync(path.join(root, 'src/a.ts'), path.join(root, 'src/link-file.ts'));
+    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'linked-dir'));
+    fs.symlinkSync(path.join(outside, 'secret.ts'), path.join(root, 'src/escape.ts'));
+    fs.symlinkSync(path.join(root, 'src/absent.ts'), path.join(root, 'src/dangling.ts'));
+
+    const boundary = new TypeScriptFsBoundary(root);
+    const scoped = boundary.createScopedPathResolver();
+    const candidates = [
+        path.join(root, 'src/a.ts'),
+        path.join(root, 'src'),
+        path.join(root, 'src/missing.ts'),
+        path.join(root, 'missing-dir/sub/file.ts'),
+        path.join(root, 'src/link-file.ts'),
+        path.join(root, 'linked-dir'),
+        path.join(root, 'linked-dir/a.ts'),
+        path.join(root, 'linked-dir/missing.ts'),
+        path.join(root, 'src/escape.ts'),
+        path.join(root, 'src/dangling.ts'),
+        path.join(outside, 'secret.ts'),
+        path.join(outside, 'missing.ts'),
+    ];
+    for (const candidate of candidates) {
+        assert.equal(scoped.isAllowedPath(candidate), boundary.isAllowedPath(candidate), `isAllowedPath ${candidate}`);
+        assert.equal(scoped.resolveAllowedPath(candidate), boundary.resolveAllowedPath(candidate), `resolveAllowedPath ${candidate}`);
+        assert.equal(scoped.directoryExists(candidate), boundary.directoryExists(candidate), `directoryExists ${candidate}`);
+        assert.equal(scoped.fileExists(candidate), boundary.fileExists(candidate), `fileExists ${candidate}`);
+        assert.equal(scoped.realpath(candidate), boundary.realpath(candidate), `realpath ${candidate}`);
+    }
+});

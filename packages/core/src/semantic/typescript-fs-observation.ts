@@ -2,7 +2,7 @@ import { createHash, type Hash } from 'node:crypto';
 import fs from 'node:fs';
 
 import {
-    readTypeScriptFileBytes,
+    readResolvedTypeScriptFileBytes,
     TYPESCRIPT_METADATA_FILE_BYTES, TYPESCRIPT_METADATA_TOTAL_BYTES,
 } from './typescript-bounded-reader';
 import { TypeScriptSourceBudgetTracker, type TypeScriptSourceBudget } from './typescript-configured-project';
@@ -55,7 +55,7 @@ function pathKind(fileName: string): TypeScriptFsObservationKind {
 
 function realpathTarget(fileName: string): string {
     try {
-        return fs.realpathSync(fileName);
+        return fs.realpathSync.native(fileName);
     } catch {
         return '';
     }
@@ -166,37 +166,30 @@ export function verifyTypeScriptFsObservation(
     budget: TypeScriptSourceBudget,
     boundary?: TypeScriptFsBoundary,
 ): boolean {
-    for (const [fileName, kind] of observation.probes) {
-        if (boundary && !boundary.isAllowedPath(fileName)) return false;
-        if (pathKind(fileName) !== kind) return false;
-    }
-    for (const [fileName, target] of observation.realpaths) {
-        if (boundary && (!boundary.isAllowedPath(fileName) || !boundary.isAllowedPath(target))) return false;
-        if (realpathTarget(fileName) !== target) return false;
-    }
-    for (const [directoryName, names] of observation.listings) {
-        if (boundary && !boundary.isAllowedPath(directoryName)) return false;
-        const current = directoryNames(directoryName);
-        if (current.length !== names.length) return false;
-        for (let index = 0; index < names.length; index += 1) {
-            if (current[index] !== names[index]) return false;
-        }
-    }
+    const scoped = boundary?.createScopedPathResolver();
     const sources = new TypeScriptSourceBudgetTracker(budget);
     const metadata = new TypeScriptSourceBudgetTracker({
         maxFileBytes: Math.max(budget.maxFileBytes, TYPESCRIPT_METADATA_FILE_BYTES),
         maxProjectBytes: budget.maxProjectBytes + TYPESCRIPT_METADATA_TOTAL_BYTES,
     });
     const digest = createHash('sha256');
+    const verifiedKinds = new Map<string, TypeScriptFsObservationKind>();
+    const verifiedRealpaths = new Map<string, string>();
     for (const [fileName, role] of observation.reads) {
-        if (boundary && !boundary.isAllowedPath(fileName)) return false;
+        let targetPath: string;
         let bytes: number;
         try {
-            const targetPath = boundary ? boundary.resolveAllowedPath(fileName) : fileName;
-            if (!targetPath) return false;
-            const stat = fs.statSync(targetPath, { throwIfNoEntry: false });
-            if (!stat?.isFile()) return false;
-            bytes = stat.size;
+            if (scoped) {
+                const resolved = scoped.resolveAllowedReadFile(fileName);
+                if (!resolved) return false;
+                targetPath = resolved.targetPath;
+                bytes = resolved.size;
+            } else {
+                const stat = fs.statSync(fileName, { throwIfNoEntry: false });
+                if (!stat?.isFile()) return false;
+                targetPath = fileName;
+                bytes = stat.size;
+            }
         } catch {
             return false;
         }
@@ -210,13 +203,53 @@ export function verifyTypeScriptFsObservation(
         try {
             // The bound is the size just admitted, so a file that grows between
             // the stat and the read is refused instead of allocated unbounded.
-            content = readTypeScriptFileBytes(fileName, bytes, boundary);
+            content = readResolvedTypeScriptFileBytes(targetPath, fileName, bytes, Boolean(scoped), true);
         } catch {
             return false;
         }
         updateReadDigest(digest, fileName, createHash('sha256').update(content).digest('hex'));
+        verifiedKinds.set(fileName, 'file');
+        if (scoped) verifiedRealpaths.set(fileName, targetPath);
     }
-    return digest.digest('hex') === observation.readDigest;
+    if (digest.digest('hex') !== observation.readDigest) return false;
+
+    for (const [fileName, target] of observation.realpaths) {
+        const verified = verifiedRealpaths.get(fileName);
+        if (verified !== undefined) {
+            if (verified !== target) return false;
+            continue;
+        }
+        const resolved = realpathTarget(fileName);
+        if (!resolved || resolved !== target) return false;
+        if (scoped && !scoped.isAllowedCanonicalPath(resolved)) return false;
+    }
+    for (const [directoryName, names] of observation.listings) {
+        if (scoped && !scoped.resolveAllowedPath(directoryName)) return false;
+        const current = directoryNames(directoryName);
+        if (current.length !== names.length) return false;
+        for (let index = 0; index < names.length; index += 1) {
+            if (current[index] !== names[index]) return false;
+        }
+    }
+    for (const [fileName, kind] of observation.probes) {
+        const verifiedKind = verifiedKinds.get(fileName);
+        if (verifiedKind !== undefined) {
+            if (verifiedKind !== kind) return false;
+            continue;
+        }
+        if (kind === 'missing') {
+            if (scoped) {
+                if (!scoped.resolveMissingAllowedPath(fileName)) return false;
+            } else if (pathKind(fileName) !== 'missing') {
+                return false;
+            }
+            continue;
+        }
+        const allowed = scoped ? scoped.resolveAllowedPath(fileName) : fileName;
+        if (!allowed) return false;
+        if (pathKind(allowed) !== kind) return false;
+    }
+    return true;
 }
 
 function isPathPairs(value: unknown, valid: (item: unknown) => boolean): boolean {

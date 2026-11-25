@@ -18,29 +18,28 @@ export class TypeScriptBoundaryError extends Error {
 }
 
 /**
- * Bounds allocation even when a file grows after stat, refuses non-regular
- * files (including FIFOs, sockets, and devices) before opening so reads cannot
- * hang, and enforces repository-root containment when a boundary is supplied.
+ * Reads an already-resolved file path up to `limit` bytes without following a
+ * leaf symlink when `enforceNoFollow` is true, and verifies regular-file type
+ * via `fstatSync` (plus a pre-open `statSync` unless the caller just checked it).
  */
-export function readTypeScriptFileBytes(
+export function readResolvedTypeScriptFileBytes(
+    targetPath: string,
     fileName: string,
     limit: number,
-    boundary?: TypeScriptFsBoundary,
+    enforceNoFollow: boolean,
+    knownRegularFile = false,
 ): Buffer {
-    const targetPath = boundary ? boundary.resolveAllowedPath(fileName) : fileName;
-    if (targetPath === null) {
-        throw new TypeScriptBoundaryError(fileName);
-    }
-
-    // Check file type before openSync so a named pipe (FIFO) never blocks.
-    const preStat = fs.statSync(targetPath);
-    if (!preStat.isFile()) {
-        throw new Error(`TypeScript input '${fileName}' is not a regular file.`);
+    if (!knownRegularFile) {
+        // Check file type before openSync so a named pipe (FIFO) never blocks.
+        const preStat = fs.statSync(targetPath);
+        if (!preStat.isFile()) {
+            throw new Error(`TypeScript input '${fileName}' is not a regular file.`);
+        }
     }
 
     const openFlags = fs.constants.O_RDONLY
         | (fs.constants.O_NONBLOCK ?? 0)
-        | (boundary ? (fs.constants.O_NOFOLLOW ?? 0) : 0);
+        | (enforceNoFollow ? (fs.constants.O_NOFOLLOW ?? 0) : 0);
     const fd = fs.openSync(targetPath, openFlags);
     try {
         const stat = fs.fstatSync(fd);
@@ -58,4 +57,21 @@ export function readTypeScriptFileBytes(
         }
         return Buffer.concat(chunks, total);
     } finally { fs.closeSync(fd); }
+}
+
+/**
+ * Bounds allocation even when a file grows after stat, refuses non-regular
+ * files (including FIFOs, sockets, and devices) before opening so reads cannot
+ * hang, and enforces repository-root containment when a boundary is supplied.
+ */
+export function readTypeScriptFileBytes(
+    fileName: string,
+    limit: number,
+    boundary?: TypeScriptFsBoundary,
+): Buffer {
+    const targetPath = boundary ? boundary.resolveAllowedPath(fileName) : fileName;
+    if (targetPath === null) {
+        throw new TypeScriptBoundaryError(fileName);
+    }
+    return readResolvedTypeScriptFileBytes(targetPath, fileName, limit, Boolean(boundary));
 }

@@ -3,34 +3,62 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { serverFS, type FileSystemCallbacks, type FileSystemEntries, type FileSystemStat } from './typescript-api';
 
-function canonicalizeExistingOrNearest(inputPath: string): string | null {
-    const resolved = path.resolve(inputPath);
+function canonicalizeExistingDirectory(
+    dirPath: string,
+    canonicalDirCache?: Map<string, string | null>,
+): string | null {
+    if (canonicalDirCache) {
+        const cached = canonicalDirCache.get(dirPath);
+        if (cached !== undefined) return cached;
+    }
+    let real: string | null;
     try {
-        return fs.realpathSync.native(resolved);
+        real = fs.realpathSync.native(dirPath);
     } catch {
-        const missing: string[] = [];
-        let current = resolved;
-        for (;;) {
-            // If an existing component is a dangling symlink, reject fail-closed.
-            const lstat = fs.lstatSync(current, { throwIfNoEntry: false });
-            if (lstat?.isSymbolicLink()) {
-                return null;
-            }
-            if (lstat) {
-                try {
-                    const real = fs.realpathSync.native(current);
-                    return missing.length === 0 ? real : path.join(real, ...missing.reverse());
-                } catch {
-                    return null;
-                }
-            }
-            const parent = path.dirname(current);
-            if (parent === current) {
-                return resolved;
-            }
-            missing.push(path.basename(current));
-            current = parent;
+        real = null;
+    }
+    canonicalDirCache?.set(dirPath, real);
+    return real;
+}
+
+function canonicalizeExistingOrNearest(
+    inputPath: string,
+    canonicalDirCache?: Map<string, string | null>,
+): string | null {
+    const resolved = path.resolve(inputPath);
+    // Avoid throwing ENOENT on thousands of absent module-resolution probes.
+    const direct = fs.lstatSync(resolved, { throwIfNoEntry: false });
+    if (direct) {
+        if (canonicalDirCache && !direct.isSymbolicLink() && direct.isDirectory()) {
+            return canonicalizeExistingDirectory(resolved, canonicalDirCache);
         }
+        try {
+            return fs.realpathSync.native(resolved);
+        } catch {
+            return null;
+        }
+    }
+    const missing: string[] = [path.basename(resolved)];
+    let current = path.dirname(resolved);
+    for (;;) {
+        // If an existing component is a dangling symlink, reject fail-closed.
+        const lstat = fs.lstatSync(current, { throwIfNoEntry: false });
+        if (lstat?.isSymbolicLink()) {
+            return null;
+        }
+        if (lstat) {
+            const real = lstat.isDirectory()
+                ? canonicalizeExistingDirectory(current, canonicalDirCache)
+                : canonicalizeExistingDirectory(current);
+            if (!real) return null;
+            return missing.length === 0 ? real : path.join(real, ...missing.reverse());
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return resolved;
+        }
+        missing.push(path.basename(current));
+        current = parent;
     }
 }
 
@@ -114,17 +142,168 @@ export class TypeScriptFsBoundary {
         this.allowedRoots = Object.freeze([...roots]);
     }
 
-    /** Returns the canonical path when contained within the boundary, or `null` when outside/dangling. */
-    resolveAllowedPath(candidatePath: string): string | null {
-        if (!candidatePath || candidatePath.includes('\0')) return null;
-        const canonical = canonicalizeExistingOrNearest(candidatePath);
-        if (!canonical) return null;
+    /** Returns true when an already-canonical path resolves within an allowed root. */
+    isAllowedCanonicalPath(canonicalPath: string): boolean {
+        if (!canonicalPath || canonicalPath.includes('\0')) return false;
         for (const root of this.allowedRoots) {
-            if (isWithinCanonicalRoot(canonical, root)) {
-                return canonical;
+            if (isWithinCanonicalRoot(canonicalPath, root)) {
+                return true;
             }
         }
-        return null;
+        return false;
+    }
+
+    /** Returns the canonical path when contained within the boundary, or `null` when outside/dangling. */
+    resolveAllowedPath(candidatePath: string, canonicalDirCache?: Map<string, string | null>): string | null {
+        if (!candidatePath || candidatePath.includes('\0')) return null;
+        const canonical = canonicalizeExistingOrNearest(candidatePath, canonicalDirCache);
+        if (!canonical) return null;
+        return this.isAllowedCanonicalPath(canonical) ? canonical : null;
+    }
+
+    /** Creates a per-operation resolver that reuses directory realpaths within one synchronous pass. */
+    createScopedPathResolver(): {
+        isAllowedPath: (candidatePath: string) => boolean;
+        resolveAllowedPath: (candidatePath: string) => string | null;
+        resolveMissingAllowedPath: (candidatePath: string) => string | null;
+        resolveAllowedReadFile: (candidatePath: string) => { targetPath: string; size: number } | null;
+        isAllowedCanonicalPath: (canonicalPath: string) => boolean;
+        directoryExists: (directoryName: string) => boolean;
+        fileExists: (fileName: string) => boolean;
+        realpath: (targetPath: string) => string;
+        stat: (targetPath: string) => FileSystemStat | undefined;
+        getAccessibleEntries: (directoryName: string) => FileSystemEntries;
+    } {
+        const canonicalDirCache = new Map<string, string | null>();
+        const missingDirCache = new Map<string, string | null>();
+        const existingDirCache = new Map<string, string | null>();
+
+        const resolveMissingParent = (dirPath: string): string | null => {
+            const cached = missingDirCache.get(dirPath);
+            if (cached !== undefined) return cached;
+            const lstat = fs.lstatSync(dirPath, { throwIfNoEntry: false });
+            if (lstat?.isSymbolicLink()) {
+                missingDirCache.set(dirPath, null);
+                return null;
+            }
+            if (lstat) {
+                const real = lstat.isDirectory()
+                    ? canonicalizeExistingDirectory(dirPath, canonicalDirCache)
+                    : canonicalizeExistingDirectory(dirPath);
+                const allowed = real && this.isAllowedCanonicalPath(real) ? real : null;
+                missingDirCache.set(dirPath, allowed);
+                return allowed;
+            }
+            const parent = path.dirname(dirPath);
+            if (parent === dirPath) {
+                const allowed = this.isAllowedCanonicalPath(dirPath) ? dirPath : null;
+                missingDirCache.set(dirPath, allowed);
+                return allowed;
+            }
+            const parentReal = resolveMissingParent(parent);
+            if (!parentReal) {
+                missingDirCache.set(dirPath, null);
+                return null;
+            }
+            const joined = path.join(parentReal, path.basename(dirPath));
+            const allowed = this.isAllowedCanonicalPath(joined) ? joined : null;
+            missingDirCache.set(dirPath, allowed);
+            return allowed;
+        };
+
+        const resolveExistingDir = (dirPath: string): string | null => {
+            const cached = existingDirCache.get(dirPath);
+            if (cached !== undefined) return cached;
+            const real = canonicalizeExistingDirectory(dirPath, canonicalDirCache);
+            const allowed = real && this.isAllowedCanonicalPath(real) ? real : null;
+            existingDirCache.set(dirPath, allowed);
+            return allowed;
+        };
+
+        const resolveAllowedNonSymlinkLeaf = (resolved: string): string | null => {
+            const parent = path.dirname(resolved);
+            if (parent === resolved) return this.isAllowedCanonicalPath(resolved) ? resolved : null;
+            const parentReal = resolveExistingDir(parent);
+            if (!parentReal) return null;
+            const targetPath = path.join(parentReal, path.basename(resolved));
+            return this.isAllowedCanonicalPath(targetPath) ? targetPath : null;
+        };
+
+        const resolveAllowed = (candidatePath: string): string | null => this.resolveAllowedPath(candidatePath, canonicalDirCache);
+
+        return {
+            isAllowedPath: (candidatePath) => resolveAllowed(candidatePath) !== null,
+            resolveAllowedPath: resolveAllowed,
+            resolveMissingAllowedPath: (candidatePath) => {
+                if (!candidatePath || candidatePath.includes('\0')) return null;
+                const resolved = path.resolve(candidatePath);
+                if (fs.lstatSync(resolved, { throwIfNoEntry: false })) return null;
+                const parent = path.dirname(resolved);
+                if (parent === resolved) return null;
+                const parentReal = resolveMissingParent(parent);
+                if (!parentReal) return null;
+                const joined = path.join(parentReal, path.basename(resolved));
+                return this.isAllowedCanonicalPath(joined) ? joined : null;
+            },
+            resolveAllowedReadFile: (candidatePath) => {
+                if (!candidatePath || candidatePath.includes('\0')) return null;
+                if (process.platform === 'linux') {
+                    const resolved = path.resolve(candidatePath);
+                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    if (!lstat) return null;
+                    if (!lstat.isSymbolicLink()) {
+                        if (!lstat.isFile()) return null;
+                        const targetPath = resolveAllowedNonSymlinkLeaf(resolved);
+                        return targetPath ? { targetPath, size: lstat.size } : null;
+                    }
+                }
+                const targetPath = resolveAllowed(candidatePath);
+                if (!targetPath) return null;
+                const stat = fs.statSync(targetPath, { throwIfNoEntry: false });
+                return stat?.isFile() ? { targetPath, size: stat.size } : null;
+            },
+            isAllowedCanonicalPath: (canonicalPath) => this.isAllowedCanonicalPath(canonicalPath),
+            directoryExists: (directoryName) => {
+                if (!directoryName || directoryName.includes('\0')) return false;
+                const resolved = path.resolve(directoryName);
+                const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                if (!lstat) return false;
+                if (!lstat.isSymbolicLink()) {
+                    if (!lstat.isDirectory()) return false;
+                    return resolveExistingDir(resolved) !== null;
+                }
+                return this.directoryExists(directoryName, canonicalDirCache);
+            },
+            fileExists: (fileName) => {
+                if (!fileName || fileName.includes('\0')) return false;
+                if (process.platform === 'linux') {
+                    const resolved = path.resolve(fileName);
+                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    if (!lstat) return false;
+                    if (!lstat.isSymbolicLink()) {
+                        if (!lstat.isFile()) return false;
+                        return resolveAllowedNonSymlinkLeaf(resolved) !== null;
+                    }
+                }
+                return this.fileExists(fileName, canonicalDirCache);
+            },
+            realpath: (targetPath) => {
+                if (!targetPath || targetPath.includes('\0')) return targetPath;
+                if (process.platform === 'linux') {
+                    const resolved = path.resolve(targetPath);
+                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    if (lstat && !lstat.isSymbolicLink() && (lstat.isFile() || lstat.isDirectory())) {
+                        const allowed = lstat.isDirectory()
+                            ? resolveExistingDir(resolved)
+                            : resolveAllowedNonSymlinkLeaf(resolved);
+                        if (allowed) return allowed;
+                    }
+                }
+                return this.realpath(targetPath, canonicalDirCache);
+            },
+            stat: (targetPath) => this.stat(targetPath, canonicalDirCache),
+            getAccessibleEntries: (directoryName) => this.getAccessibleEntries(directoryName, canonicalDirCache),
+        };
     }
 
     /** True when the candidate resolves inside the repository root (excludes TS built-in libs). */
@@ -137,8 +316,8 @@ export class TypeScriptFsBoundary {
         return this.resolveAllowedPath(candidatePath) !== null;
     }
 
-    directoryExists(directoryName: string): boolean {
-        const allowed = this.resolveAllowedPath(directoryName);
+    directoryExists(directoryName: string, canonicalDirCache?: Map<string, string | null>): boolean {
+        const allowed = this.resolveAllowedPath(directoryName, canonicalDirCache);
         if (!allowed) return false;
         try {
             return fs.statSync(allowed, { throwIfNoEntry: false })?.isDirectory() === true;
@@ -147,8 +326,8 @@ export class TypeScriptFsBoundary {
         }
     }
 
-    fileExists(fileName: string): boolean {
-        const allowed = this.resolveAllowedPath(fileName);
+    fileExists(fileName: string, canonicalDirCache?: Map<string, string | null>): boolean {
+        const allowed = this.resolveAllowedPath(fileName, canonicalDirCache);
         if (!allowed) return false;
         try {
             return fs.statSync(allowed, { throwIfNoEntry: false })?.isFile() === true;
@@ -157,13 +336,13 @@ export class TypeScriptFsBoundary {
         }
     }
 
-    realpath(targetPath: string): string {
-        const allowed = this.resolveAllowedPath(targetPath);
+    realpath(targetPath: string, canonicalDirCache?: Map<string, string | null>): string {
+        const allowed = this.resolveAllowedPath(targetPath, canonicalDirCache);
         return allowed ?? targetPath;
     }
 
-    stat(targetPath: string): FileSystemStat | undefined {
-        const allowed = this.resolveAllowedPath(targetPath);
+    stat(targetPath: string, canonicalDirCache?: Map<string, string | null>): FileSystemStat | undefined {
+        const allowed = this.resolveAllowedPath(targetPath, canonicalDirCache);
         if (!allowed) return undefined;
         try {
             const stat = fs.statSync(allowed, { throwIfNoEntry: false });
@@ -174,8 +353,8 @@ export class TypeScriptFsBoundary {
         }
     }
 
-    getAccessibleEntries(directoryName: string): FileSystemEntries {
-        const allowed = this.resolveAllowedPath(directoryName);
+    getAccessibleEntries(directoryName: string, canonicalDirCache?: Map<string, string | null>): FileSystemEntries {
+        const allowed = this.resolveAllowedPath(directoryName, canonicalDirCache);
         if (!allowed) {
             return { files: [], directories: [], symlinks: undefined };
         }
@@ -191,7 +370,7 @@ export class TypeScriptFsBoundary {
         for (const dirent of dirents) {
             const entryPath = path.join(allowed, dirent.name);
             if (dirent.isSymbolicLink()) {
-                const resolvedEntry = this.resolveAllowedPath(entryPath);
+                const resolvedEntry = this.resolveAllowedPath(entryPath, canonicalDirCache);
                 if (!resolvedEntry) continue;
                 try {
                     const targetStat = fs.statSync(resolvedEntry, { throwIfNoEntry: false });

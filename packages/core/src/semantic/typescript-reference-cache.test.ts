@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { TypeScriptFsObservationRecorder, type TypeScriptFsObservation } from './typescript-fs-observation';
+import { TypeScriptFsBoundary } from './typescript-fs-boundary';
+import { TypeScriptFsObservationRecorder, verifyTypeScriptFsObservation, type TypeScriptFsObservation } from './typescript-fs-observation';
 import {
     TypeScriptReferenceDeclarationCache, REFERENCE_DECLARATION_FORMAT, REFERENCE_DECLARATION_METADATA_BYTES,
     type TypeScriptReferenceCacheWitness, type TypeScriptReferenceDeclarationState,
@@ -524,5 +525,65 @@ test('reference cache saves nothing when a computation observed more paths than 
         assert.equal(fs.existsSync(metadataPath(stateDirectory, root)), false);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('scoped boundary verification enforces symlink, missing-probe, and containment invariants', () => {
+    const outer = tempRoot();
+    const root = path.join(outer, 'repo');
+    const outside = path.join(outer, 'outside');
+    try {
+        write(root, 'lib/src/index.ts', 'export const index = 1;\n');
+        write(outside, 'secret.ts', 'export const secret = 2;\n');
+        fs.symlinkSync(path.join(root, 'lib/src'), path.join(root, 'lib/linked-dir'));
+        const boundary = new TypeScriptFsBoundary(root);
+
+        // Valid symlinked directory inside repo is allowed for existing files and realpaths.
+        const inBounds = observe(root, {
+            paths: ['lib/linked-dir/index.ts', 'lib/missing/a.ts', 'lib/missing/b.ts'],
+            realpaths: ['lib/linked-dir/index.ts'],
+            reads: ['lib/linked-dir/index.ts'],
+        });
+        assert.equal(verifyTypeScriptFsObservation(inBounds, TEST_BUDGET, boundary), true);
+
+        // Tampering with the read digest must still fail verification.
+        assert.equal(
+            verifyTypeScriptFsObservation({ ...inBounds, readDigest: '0'.repeat(64) }, TEST_BUDGET, boundary),
+            false,
+        );
+
+        // Missing probe underneath a symlinked ancestor matches boundary.isAllowedPath (rejected).
+        const missingUnderSymlink = observe(root, {
+            paths: ['lib/linked-dir/absent.ts'],
+        });
+        assert.equal(verifyTypeScriptFsObservation(missingUnderSymlink, TEST_BUDGET, boundary), false);
+
+        // Dangling symlink at a probed missing path must be rejected fail-closed.
+        const emptyDigest = observe(root, {}).readDigest;
+        fs.symlinkSync(path.join(root, 'lib/src/nonexistent.ts'), path.join(root, 'lib/dangling.ts'));
+        const danglingProbe: TypeScriptFsObservation = {
+            probes: [[path.join(root, 'lib/dangling.ts'), 'missing']],
+            realpaths: [],
+            reads: [],
+            readDigest: emptyDigest,
+            listings: [],
+        };
+        assert.equal(verifyTypeScriptFsObservation(danglingProbe, TEST_BUDGET, boundary), false);
+
+        // Outside-root paths must be rejected in reads, realpaths, and probes.
+        const outsideRead = observe(outer, { reads: ['outside/secret.ts'] });
+        assert.equal(verifyTypeScriptFsObservation(outsideRead, TEST_BUDGET, boundary), false);
+        const outsideRealpath: TypeScriptFsObservation = {
+            probes: [],
+            realpaths: [[path.join(outside, 'secret.ts'), path.join(outside, 'secret.ts')]],
+            reads: [],
+            readDigest: emptyDigest,
+            listings: [],
+        };
+        assert.equal(verifyTypeScriptFsObservation(outsideRealpath, TEST_BUDGET, boundary), false);
+        const outsideMissing = observe(outer, { paths: ['outside/missing.ts'] });
+        assert.equal(verifyTypeScriptFsObservation(outsideMissing, TEST_BUDGET, boundary), false);
+    } finally {
+        fs.rmSync(outer, { recursive: true, force: true });
     }
 });

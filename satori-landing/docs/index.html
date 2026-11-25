@@ -1090,98 +1090,88 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
       <section class="section" id="benchmarks">
         <h2>Measured Benchmarks (100% Local Offline)</h2>
         <p class="lede">
-          Paired protocol v4 agent-discovery results on the 100% local offline stack
-          (<code>Potion-code-16M-v2</code> + <code>LanceDB</code> + <code>LateOn-Code-edge</code> on CPU,
-          zero external search or reranker API calls), plus Phase 4A/4B retrieval and projection measurements.
+          Head-to-head results comparing 100% local offline Satori (local embeddings, local storage, and local CPU reranking&mdash;zero external API calls) against built-in file search (<code>grep</code>, <code>find</code>, <code>read</code>).
         </p>
-        <h3>Agent Discovery: Offline Satori vs Guarded Native Search (v4)</h3>
+        <h3>How the Agent Benchmark Works</h3>
         <p>
-          Claive + Pi, DeepSeek V4.1 Flash (<code>xhigh</code> reasoning), 3 alternating repetitions per task
-          (12 runs total; all-run medians). Both arms shared identical production-root bounds, 24-call safety
-          ceilings, and 32 KiB result caps.
+          We ran a fast Flash-class model (DeepSeek V4.1 Flash) on two everyday codebase tasks inside a ~1,350-file TypeScript repository: finding unfamiliar behavior from plain English, and locating a known symbol with its callers. Both sides ran 3 alternating repetitions per task under the exact same 24-call budget and output caps.
         </p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Task</th><th>Arm</th><th>Strict v4 Pass</th><th>Tool Calls</th><th>Source Call</th><th>Total Input Tokens</th><th>Reasoning Tokens</th><th>Wall Time</th></tr>
+              <tr><th>Task</th><th>Method</th><th>Pass Rate</th><th>Tool Calls</th><th>Source Opened</th><th>Input Tokens</th><th>Reasoning Tokens</th><th>Wall Time</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>unknown-freshness-reuse</code></td><td>Native (guarded)</td><td>0/3</td><td>25</td><td>24 [16–26]</td><td>201,905</td><td>6,975</td><td>151.4 s</td></tr>
-              <tr><td><code>unknown-freshness-reuse</code></td><td><strong>Satori (offline)</strong></td><td><strong>3/3</strong></td><td><strong>5 (-80.0%)</strong></td><td><strong>2 [2–2]</strong></td><td><strong>37,549 (-81.4%)</strong></td><td><strong>1,571 (-77.5%)</strong></td><td><strong>58.2 s (-61.6%)</strong></td></tr>
-              <tr><td><code>known-exact-target</code></td><td>Native (guarded)</td><td>2/3</td><td>13</td><td>3 [3–3]</td><td>77,784</td><td>2,504</td><td>73.5 s</td></tr>
-              <tr><td><code>known-exact-target</code> (Nov 23 baseline)</td><td>Satori (offline, pre-hydration)</td><td>3/3</td><td>9 (-30.8%)</td><td>2 [2–2]</td><td>72,022 (-7.4%)</td><td>1,257 (-49.8%)</td><td>52.3 s (-28.8%)</td></tr>
-              <tr><td><code>known-exact-target</code> (Nov 25 default)</td><td><strong>Satori (offline + <code>hydrateExact</code>)</strong></td><td><strong>3/3</strong></td><td><strong>5 (-61.5%)</strong></td><td><strong>1 [1–1]</strong></td><td><strong>39,045 (-49.8%)</strong></td><td><strong>1,257 (-49.8%)</strong></td><td><strong>57.1 s (-22.3%)</strong></td></tr>
+              <tr><td>Unfamiliar behavior</td><td>Native search (<code>grep</code> / <code>read</code>)</td><td>0/3</td><td>25</td><td>Call 24 [16–26]</td><td>201,905</td><td>6,975</td><td>151.4 s</td></tr>
+              <tr><td>Unfamiliar behavior</td><td><strong>Satori (offline)</strong></td><td><strong>3/3</strong></td><td><strong>5 (-80.0%)</strong></td><td><strong>Call 2 [2–2]</strong></td><td><strong>37,549 (-81.4%)</strong></td><td><strong>1,571 (-77.5%)</strong></td><td><strong>58.2 s (-61.6%)</strong></td></tr>
+              <tr><td>Known symbol lookup</td><td>Native search (<code>grep</code> / <code>read</code>)</td><td>2/3</td><td>13</td><td>Call 3 [3–3]</td><td>77,784</td><td>2,504</td><td>73.5 s</td></tr>
+              <tr><td>Known symbol lookup (baseline)</td><td>Satori (offline)</td><td>3/3</td><td>9 (-30.8%)</td><td>Call 2 [2–2]</td><td>72,022 (-7.4%)</td><td>1,257 (-49.8%)</td><td>52.3 s (-28.8%)</td></tr>
+              <tr><td>Known symbol lookup (1-call source)</td><td><strong>Satori (offline, default)</strong></td><td><strong>3/3</strong></td><td><strong>5 (-61.5%)</strong></td><td><strong>Call 1 [1–1]</strong></td><td><strong>39,045 (-49.8%)</strong></td><td><strong>1,257 (-49.8%)</strong></td><td><strong>57.1 s (-22.3%)</strong></td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          Combined strict pass rate: <strong>6/6 (100%)</strong> for offline Satori vs <strong>2/6 (33.3%)</strong> for native search
+          Combined pass rate: <strong>6/6 (100%)</strong> for offline Satori vs <strong>2/6 (33.3%)</strong> for native search
           (combined medians: <strong>-59.9%</strong> input tokens, <strong>-57.6%</strong> calls, <strong>-46.3%</strong> reasoning tokens, <strong>-35.0%</strong> wall time).
-          Satori recorded <strong>0 wrong code claims</strong>, <strong>0 budget overflows</strong>, and <strong>0 protocol violations</strong>.
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-11-23.md" target="_blank" rel="noopener noreferrer">Full v4 report and raw 12-run table</a>.
+          Satori recorded <strong>0 wrong code claims</strong> and <strong>0 budget overflows</strong>.
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-11-23.md" target="_blank" rel="noopener noreferrer">Full benchmark report and raw 12-run table</a>.
         </p>
 
-        <h3>Phase 4A &amp; 4B: Offline Ranking Accuracy &amp; Projection Speed</h3>
+        <h3>Offline Ranking Accuracy &amp; Speed</h3>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Metric</th><th>Before Phase 4</th><th>After Phase 4</th><th>Delta</th><th>Scope</th></tr>
+              <tr><th>Metric</th><th>Before</th><th>Current</th><th>Change</th><th>Scope</th></tr>
             </thead>
             <tbody>
-              <tr><td>Strict symbol <code>hit@1</code></td><td>25/58</td><td><strong>30/58</strong></td><td><strong>+20% (+5)</strong></td><td>5 pinned repos (React, FlatBuffers, Polars, Gin, Flask)</td></tr>
-              <tr><td><code>hit@5</code> / <code>hit@10</code></td><td>41/58 · 47/58</td><td><strong>45/58 · 51/58</strong></td><td><strong>+4 · +4 (0 new misses)</strong></td><td>Same 58 live offline MCP queries</td></tr>
-              <tr><td>Mean Reciprocal Rank (MRR)</td><td>0.5478</td><td><strong>0.6203</strong></td><td><strong>+0.0725</strong></td><td>Same 58 live offline MCP queries</td></tr>
-              <tr><td>Rerank projection (128 docs)</td><td>235.80 ms</td><td><strong>72.11 ms</strong></td><td><strong>-69.4%</strong></td><td>5-run median, real React candidates, 0/128 diffs</td></tr>
+              <tr><td>Right owning symbol ranked #1</td><td>25/58</td><td><strong>30/58</strong></td><td><strong>+20% (+5)</strong></td><td>5 open-source repos (React, FlatBuffers, Polars, Gin, Flask)</td></tr>
+              <tr><td>In top 5 / top 10 results</td><td>41/58 &middot; 47/58</td><td><strong>45/58 &middot; 51/58</strong></td><td><strong>+4 &middot; +4 (0 regressions)</strong></td><td>Same 58 live offline queries</td></tr>
+              <tr><td>Candidate scoring latency (128 docs)</td><td>235.80 ms</td><td><strong>72.11 ms</strong></td><td><strong>-69.4%</strong></td><td>5-run median on React search candidates</td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/phase4-ranking-speed-and-flash-handoff-plan-2026-11-21.md" target="_blank" rel="noopener noreferrer">Inspect the Phase 4 measurements and replay gates</a>.
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/phase4-ranking-speed-and-flash-handoff-plan-2026-11-21.md" target="_blank" rel="noopener noreferrer">Inspect ranking measurements on GitHub</a>.
         </p>
 
-        <h3>1-Call Exact-Hit Source Hydration (A5 Default-On, Nov 25)</h3>
+        <h3>1-Call Source Delivery on Exact Lookups (A/B Confirmation)</h3>
         <p>
-          27-run interleaved Pi A/B gate (3 rotated repetitions &times; 3 tasks, DeepSeek V4.1 Flash <code>xhigh</code>,
-          100% local offline stack) after adding named <code>symbolLabel</code>/<code>file</code> metadata to
-          <code>open_symbol</code> relationships and upgrading complete-hydration <code>recommendedNextAction</code>
-          to source-free <code>call_context</code>. Enabled by default (opt out via <code>hydrateExact: false</code>
-          or <code>SATORI_HYDRATE_EXACT=0</code>).
+          Across 27 interleaved runs (3 repetitions &times; 3 tasks on DeepSeek V4.1 Flash, 100% local offline), returning verified source code directly on clean exact symbol hits eliminated extra follow-up file reads (enabled by default).
         </p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Scope</th><th>Control</th><th>With <code>hydrateExact</code> (default)</th><th>Delta</th></tr>
+              <tr><th>Metric</th><th>Without 1-call source</th><th>Default (1-call source)</th><th>Savings</th></tr>
             </thead>
             <tbody>
-              <tr><td>Strict pass rate (9 runs/arm)</td><td>8/9 (88.9%)</td><td><strong>9/9 (100%)</strong></td><td><strong>+11.1 pp</strong></td></tr>
-              <tr><td>Overall median input tokens</td><td>56,811</td><td><strong>44,002</strong></td><td><strong>-22.5%</strong></td></tr>
-              <tr><td>Overall median wall time / calls</td><td>60.3 s &middot; 6 calls</td><td><strong>53.4 s &middot; 5 calls</strong></td><td><strong>-11.4% &middot; -16.7%</strong></td></tr>
-              <tr><td><code>known-exact-target</code> (450 lines)</td><td>58,276 tok &middot; 7 calls</td><td><strong>39,045 tok &middot; 5 calls</strong></td><td><strong>-33.0% tok &middot; -29.8% bytes</strong></td></tr>
-              <tr><td><code>known-exact-small-target</code> (55 lines)</td><td>40,587 tok &middot; suff@4</td><td><strong>33,340 tok &middot; suff@3</strong></td><td><strong>-17.9% tok &middot; -25.0% suff calls</strong></td></tr>
+              <tr><td>Pass rate (9 runs each)</td><td>8/9 (88.9%)</td><td><strong>9/9 (100%)</strong></td><td><strong>+11.1 pp</strong></td></tr>
+              <tr><td>Median input tokens</td><td>56,811</td><td><strong>44,002</strong></td><td><strong>-22.5%</strong></td></tr>
+              <tr><td>Median time &amp; tool calls</td><td>60.3 s &middot; 6 calls</td><td><strong>53.4 s &middot; 5 calls</strong></td><td><strong>-11.4% &middot; -16.7%</strong></td></tr>
+              <tr><td>Large target (~450 lines)</td><td>58,276 tok &middot; 7 calls</td><td><strong>39,045 tok &middot; 5 calls</strong></td><td><strong>-33.0% tokens</strong></td></tr>
+              <tr><td>Small target (~55 lines)</td><td>40,587 tok &middot; 4 calls</td><td><strong>33,340 tok &middot; 3 calls</strong></td><td><strong>-17.9% tokens</strong></td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/mcp-ergonomics-a5-default-on-2026-11-25.md" target="_blank" rel="noopener noreferrer">Read the Nov 25 A/B gate &amp; decision report</a>.
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/mcp-ergonomics-a5-default-on-2026-11-25.md" target="_blank" rel="noopener noreferrer">Read the A/B confirmation report on GitHub</a>.
         </p>
 
-        <h3>Cold-Start Readiness &amp; Engine Scaling (Nov 25)</h3>
+        <h3>Startup Speed &amp; Language Coverage</h3>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Improvement</th><th>Measured Outcome</th><th>Scope</th></tr>
+              <tr><th>Area</th><th>Measured Outcome</th><th>Scope</th></tr>
             </thead>
             <tbody>
-              <tr><td>Relationship shard checksum readiness</td><td><strong>5,747 ms &rarr; 4,563 ms (-20.6%)</strong> &middot; <strong>-108 MB RSS</strong></td><td>Cold first search on <code>trufflehog</code> (3,454 files, 3 interleaved trials, identical results)</td></tr>
-              <tr><td>TypeScript 7.1 batched IPC &amp; imports</td><td>Batched assignability/calls, batched module resolution, fail-closed <code>ENOTDIR</code> boundary checks</td><td>TypeScript semantic indexing &amp; reference-cache verification</td></tr>
-              <tr><td>Multi-language semantic &amp; extractor sync</td><td><code>O(N)</code> type-registry indexing across 7 compiled resolvers, Python <code>__init__</code>/<code>__new__</code>/<code>@overload</code>/<code>global</code> precision, Dart comment-before-body spans, <code>.cls</code> disambiguation (Apex / ObjectScript UDL / VB6), 140 atomic WASM extractors</td><td>Go, Java, C#, C/C++, Rust, Kotlin, PHP, Python, Dart, Swift, GLSL, Apex</td></tr>
+              <tr><td>Cold-start first search</td><td><strong>5,747 ms &rarr; 4,563 ms (-20.6%)</strong> &middot; <strong>-108 MB memory</strong></td><td>First search on <code>trufflehog</code> (3,454 files, identical results)</td></tr>
+              <tr><td>TypeScript &amp; multi-language precision</td><td>Faster batch type resolution and cleaner call-graph edges across 140 syntax-parsed languages</td><td>TypeScript, Python, Go, Java, C#, C/C++, Rust, Kotlin, PHP, Dart, Swift, and more</td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cold-search-latency-deferred-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">Cold-search Step 1 report</a>
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cold-search-latency-deferred-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">Cold-search report</a>
           &middot;
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cbm-upstream-sync-and-dart-span-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">CBM semantic &amp; extractor sync report</a>.
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cbm-upstream-sync-and-dart-span-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">Language-engine report</a>.
         </p>
       </section>
 

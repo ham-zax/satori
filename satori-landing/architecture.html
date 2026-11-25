@@ -1295,7 +1295,7 @@
               </div>
               <div class="tool-card">
                 <h3><code>search_codebase</code></h3>
-                <p>Runs freshness-aware hybrid search, exact/lexical recovery, symbol-owned grouping, filters, and optional debug modes.</p>
+                <p>Runs freshness-aware hybrid search, exact/lexical recovery with default-on 1-call bounded source hydration on clean unique exact hits, symbol-owned grouping, filters, and optional debug modes.</p>
                 <p class="refusal">Refuses to serve an incompatible Publication as current evidence.</p>
               </div>
               <div class="tool-card">
@@ -1320,22 +1320,22 @@
               </div>
               <div class="tool-card">
                 <h3><code>detect_changes</code></h3>
-                <p>Maps a Git diff to current indexed symbol seeds and bounded transitive callers for change orientation.</p>
+                <p>Maps a Git diff to current indexed symbol seeds, bounded transitive callers, uncertain call references, and candidate direct seed test references for change orientation.</p>
                 <p class="refusal">Does not claim complete blast-radius coverage when relationship evidence is unavailable or truncated.</p>
               </div>
               <div class="tool-card">
                 <h3><code>read_file</code></h3>
-                <p>Reads bounded source windows or opens one exact indexed symbol through current-source symbol resolution.</p>
+                <p>Reads exact multiline source windows or opens one exact indexed symbol with named caller/callee metadata through current-source symbol resolution.</p>
                 <p class="refusal">It is restricted to tracked searchable roots and is not a general host-filesystem reader.</p>
               </div>
               <div class="tool-card">
                 <h3><code>call_graph</code></h3>
-                <p>Traverses bounded caller/callee relationship context and supported test references for an exact symbol reference.</p>
+                <p>Traverses bounded caller/callee relationship context and supported test references from an exact <code>symbolId</code> or <code>{ file, symbolLabel }</code> reference.</p>
                 <p class="refusal">Unsupported dispatch or missing relationship authority returns a capability/readiness fallback rather than a fabricated edge.</p>
               </div>
               <div class="tool-card">
                 <h3><code>trace_path</code></h3>
-                <p>Finds one deterministic shortest path between exact published symbol IDs over selected persisted relationships.</p>
+                <p>Finds one deterministic shortest path between exact published symbol IDs over selected persisted relationships, with <code>CALLS</code>-only recursion cycle diagnostics.</p>
                 <p class="refusal">Hard depth/node/edge budgets report truncation; an empty result is not global proof that no path exists.</p>
               </div>
               <div class="tool-card">
@@ -1368,11 +1368,12 @@
         </p>
         <div class="grid-2">
           <article class="card">
-            <h3>Atomic Visibility</h3>
+            <h3>Atomic Visibility &amp; Checksum Readiness</h3>
             <p>
-              Indexing builds staged state without disturbing readers. Only a
-              complete generation is promoted to current, so a request cannot mix
-              new vectors with an old symbol graph or vice versa.
+              Indexing builds staged state without disturbing readers—compatible
+              background reindexes keep serving the previous Publication—and
+              search readiness verifies relationship shards by SHA-256 checksum
+              instead of hydrating every edge upfront (-20.6% cold search, -108 MB RSS).
             </p>
           </article>
           <article class="card">

@@ -1135,6 +1135,51 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
         <p>
           <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/phase4-ranking-speed-and-flash-handoff-plan-2026-11-21.md" target="_blank" rel="noopener noreferrer">Inspect the Phase 4 measurements and replay gates</a>.
         </p>
+
+        <h3>1-Call Exact-Hit Source Hydration (A5 Default-On, Nov 25)</h3>
+        <p>
+          27-run interleaved Pi A/B gate (3 rotated repetitions &times; 3 tasks, DeepSeek V4.1 Flash <code>xhigh</code>,
+          100% local offline stack) after adding named <code>symbolLabel</code>/<code>file</code> metadata to
+          <code>open_symbol</code> relationships and upgrading complete-hydration <code>recommendedNextAction</code>
+          to source-free <code>call_context</code>. Enabled by default (opt out via <code>hydrateExact: false</code>
+          or <code>SATORI_HYDRATE_EXACT=0</code>).
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Scope</th><th>Control</th><th>With <code>hydrateExact</code> (default)</th><th>Delta</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Strict pass rate (9 runs/arm)</td><td>8/9 (88.9%)</td><td><strong>9/9 (100%)</strong></td><td><strong>+11.1 pp</strong></td></tr>
+              <tr><td>Overall median input tokens</td><td>56,811</td><td><strong>44,002</strong></td><td><strong>-22.5%</strong></td></tr>
+              <tr><td>Overall median wall time / calls</td><td>60.3 s &middot; 6 calls</td><td><strong>53.4 s &middot; 5 calls</strong></td><td><strong>-11.4% &middot; -16.7%</strong></td></tr>
+              <tr><td><code>known-exact-target</code> (450 lines)</td><td>58,276 tok &middot; 7 calls</td><td><strong>39,045 tok &middot; 5 calls</strong></td><td><strong>-33.0% tok &middot; -29.8% bytes</strong></td></tr>
+              <tr><td><code>known-exact-small-target</code> (55 lines)</td><td>40,587 tok &middot; suff@4</td><td><strong>33,340 tok &middot; suff@3</strong></td><td><strong>-17.9% tok &middot; -25.0% suff calls</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/mcp-ergonomics-a5-default-on-2026-11-25.md" target="_blank" rel="noopener noreferrer">Read the Nov 25 A/B gate &amp; decision report</a>.
+        </p>
+
+        <h3>Cold-Start Readiness &amp; Engine Scaling (Nov 25)</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Improvement</th><th>Measured Outcome</th><th>Scope</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Relationship shard checksum readiness</td><td><strong>5,747 ms &rarr; 4,563 ms (-20.6%)</strong> &middot; <strong>-108 MB RSS</strong></td><td>Cold first search on <code>trufflehog</code> (3,454 files, 3 interleaved trials, identical results)</td></tr>
+              <tr><td>TypeScript 7.1 batched IPC &amp; imports</td><td>Batched assignability/calls, batched module resolution, fail-closed <code>ENOTDIR</code> boundary checks</td><td>TypeScript semantic indexing &amp; reference-cache verification</td></tr>
+              <tr><td>Multi-language semantic &amp; extractor sync</td><td><code>O(N)</code> type-registry indexing across 7 compiled resolvers, Python <code>__init__</code>/<code>__new__</code>/<code>@overload</code>/<code>global</code> precision, Dart comment-before-body spans, <code>.cls</code> disambiguation (Apex / ObjectScript UDL / VB6), 140 atomic WASM extractors</td><td>Go, Java, C#, C/C++, Rust, Kotlin, PHP, Python, Dart, Swift, GLSL, Apex</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cold-search-latency-deferred-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">Cold-search Step 1 report</a>
+          &middot;
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/cbm-upstream-sync-and-dart-span-plan-2026-11-25.md" target="_blank" rel="noopener noreferrer">CBM semantic &amp; extractor sync report</a>.
+        </p>
       </section>
 
       <section class="section" id="reranker">
@@ -1464,8 +1509,10 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
               Searches by behavior or identifier with <code>runtime</code>,
               <code>docs</code>, or <code>mixed</code> scope, path operators,
               filters, agent-supplied <code>alt_terms</code> searched as fused
-              extra passes, owner-symbol grouping, freshness checks, structured
-              warnings, and optional debug modes.
+              extra passes, owner-symbol grouping, default-on 1-call bounded
+              source hydration (<code>hydrateExact</code>) on clean unique exact
+              symbol hits, freshness checks, structured warnings, and optional
+              debug modes.
             </p>
           </div>
           <div class="panel">
@@ -1496,37 +1543,44 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
             <h3>call_graph</h3>
             <p>
               Traverses bounded caller/callee relationship context and supported
-              test references from an exact symbol reference. Output follows the
-              language's declared capability boundary.
+              test references from either an exact <code>symbolId</code> or a
+              direct <code>{ file, symbolLabel }</code> reference. Output follows
+              the language's declared capability boundary.
             </p>
           </div>
           <div class="panel">
             <h3>trace_path</h3>
             <p>
               Finds one deterministic shortest path between two exact published symbol IDs over
-              selected persisted CALLS, IMPORTS, EXPORTS, or TESTS relationships with hard traversal budgets.
+              selected persisted CALLS, IMPORTS, EXPORTS, or TESTS relationships with hard traversal budgets
+              and <code>CALLS</code>-only recursion cycle diagnostics.
             </p>
           </div>
           <div class="panel">
             <h3>find_references</h3>
             <p>
-              Scans validated published source for exact textual occurrences of one canonical symbol,
+              Scans validated published source for exact textual occurrences of one canonical symbol
+              (by <code>symbolId</code> or <code>{ file, symbolLabel }</code>),
               independent of semantic ranking, with exact spans and explicit complete/partial coverage.
             </p>
           </div>
           <div class="panel">
             <h3>detect_changes</h3>
             <p>
-              Maps a Git diff to current indexed symbol seeds and bounded
-              transitive callers so agents can orient a change without treating
-              the result as complete blast-radius proof.
+              Maps a Git diff to current indexed symbol seeds, bounded
+              transitive callers, <code>uncertainCallReferences</code>, and
+              candidate <code>directSeedTestReferences</code> so agents can
+              orient a change without treating the result as complete
+              blast-radius proof.
             </p>
           </div>
           <div class="panel">
             <h3>read_file</h3>
             <p>
-              Reads bounded source windows or opens one exact indexed symbol. It
-              is restricted to tracked searchable roots and is not a general
+              Reads exact multiline source windows or opens one exact indexed
+              symbol (<code>open_symbol</code>) with named caller/callee
+              relationships and opt-in line-numbered <code>format: "text"</code>.
+              Restricted to tracked searchable roots; never a general
               host-filesystem reader.
             </p>
           </div>
@@ -1563,8 +1617,10 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
               repairs an old Publication; reindex is the only fix.
             </p>
             <p>
-              A failed build leaves the previous complete Publication in
-              authority when possible; partial staging is never promoted.
+              While a compatible background reindex runs, reads and searches
+              continue serving the previous completed Publication without
+              blocking. A failed build leaves that previous Publication in
+              authority; partial staging is never promoted.
             </p>
           </div>
           <div class="panel">

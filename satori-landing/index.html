@@ -334,16 +334,16 @@
               <code>6/6 strict v4 pass</code>
             </div>
             <ul class="receipt-list">
-              <li><b>Target at call 1, source at call 2 (<code>6/6</code>):</b> exact AST owner span before reading a line.</li>
-              <li><b>Proven callers via <code>call_graph</code>:</b> verified <code>executeSearchAttempt</code> without 20 blind greps.</li>
+              <li><b>1-call exact hydration &amp; AST spans:</b> clean exact symbol hits inline verified source on call 1 (<code>-22.5%</code> extra tokens, <code>9/9</code> pass in Nov 25 A/B); unknown queries hit target at call 1 and source at call 2.</li>
+              <li><b>Proven callers via <code>call_graph</code> &amp; <code>open_symbol</code>:</b> named callers/callees and direct <code>file + symbolLabel</code> lookup without 20 blind greps.</li>
               <li><b>100% pass rate, zero overflows:</b> <code>3/3</code> on unknown behavior and <code>3/3</code> on exact targets with zero wrong code claims.</li>
             </ul>
           </article>
         </div>
 
         <p class="plain-metrics-note" data-reveal>
-          Paired protocol v4 benchmark (DeepSeek V4.1 Flash <code>xhigh</code>, 12 runs, 100% local offline Potion + LanceDB + LateOn on CPU vs guarded native search).
-          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/agent-discovery-benchmark-2026-11-23.md" target="_blank" rel="noopener noreferrer">Read the method &amp; raw tables &rarr;</a>
+          Paired protocol v4 benchmark (DeepSeek V4.1 Flash <code>xhigh</code>, 12 runs, 100% local offline Potion + LanceDB + LateOn on CPU vs guarded native search) plus Nov 25 27-run interleaved <code>hydrateExact</code> A/B.
+          <a href="docs/index.html#benchmarks">Read the method &amp; raw tables &rarr;</a>
         </p>
       </section>
 
@@ -463,9 +463,9 @@
             Every answer comes from one atomic Publication&mdash;search, owners, calls, and exact source always agree. Incremental sync keeps it current on disk with zero cloud calls.
           </p>
           <dl class="strata-facts">
-            <div><dt>Exact lookup</dt><dd>14&ndash;65 ms p50</dd></div>
+            <div><dt>Exact lookup</dt><dd>14&ndash;65 ms p50 &middot; 1-call source hydration</dd></div>
             <div><dt>Offline stack</dt><dd>Potion &middot; BM25 &middot; LateOn &middot; LanceDB</dd></div>
-            <div><dt>Navigation</dt><dd>11 languages &middot; ~140 searched</dd></div>
+            <div><dt>Navigation</dt><dd>11 languages &middot; 140 WASM extractors</dd></div>
           </dl>
           <a class="text-link" href="architecture.html">Inspect the architecture <span aria-hidden="true">&rarr;</span></a>
         </div>
@@ -474,8 +474,8 @@
           <article class="stratum" role="listitem" data-reveal>
             <span class="stratum-key">Search</span>
             <div>
-              <h3>Semantic + lexical retrieval</h3>
-              <p>Meaning, BM25, exact paths, identifiers, and configuration keys.</p>
+              <h3>Semantic + lexical + exact hydration</h3>
+              <p>Meaning, BM25, paths, and identifiers&mdash;with bounded source inlined directly on clean unique exact symbol hits.</p>
             </div>
             <code>find intent without losing literals</code>
           </article>
@@ -483,7 +483,7 @@
             <span class="stratum-key">Owners</span>
             <div>
               <h3>Symbols + structural spans</h3>
-              <p>Parser-derived functions, classes, file outlines, and exact spans.</p>
+              <p>Parser-derived functions, classes, file outlines, and exact spans across 140 atomically published WASM extractors.</p>
             </div>
             <code>rank evidence around real owners</code>
           </article>
@@ -491,7 +491,7 @@
             <span class="stratum-key">Trace</span>
             <div>
               <h3>Supported relationships</h3>
-              <p>Callers, callees, imports, and exports&mdash;fail-closed when ambiguous.</p>
+              <p>O(N) semantic indexing across 7 compiled resolvers, batched TypeScript 7.1 IPC, and Python <code>__init__</code>/<code>@overload</code> precision&mdash;fail-closed when ambiguous.</p>
             </div>
             <code>advisory, conservative, fail-closed</code>
           </article>
@@ -499,7 +499,7 @@
             <span class="stratum-key">Truth</span>
             <div>
               <h3>Freshness + atomic Publications</h3>
-              <p>Source checkpoints and background incremental sync with read-only repo access.</p>
+              <p>Checksum-verified relationship shards (-20.6% cold search, -108 MB RSS), background sync, and zero-downtime reads during compatible reindex.</p>
             </div>
             <code>know which repo state answered</code>
           </article>

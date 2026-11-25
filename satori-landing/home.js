@@ -183,19 +183,20 @@
       codex: { mode: "api", inRate: 2.5, cacheRate: 0.25, outRate: 10.0 },
       quota: { mode: "quota" },
     };
-    // Per-task median deltas (Satori offline vs guarded native, Nov 23 2026 post-ergonomics v4 suite):
+    // Per-task median deltas (Satori offline vs guarded native, Nov 23 2026 v4 + Nov 25 2026 default-on hydrateExact):
     // unknown: 201,905 -> 37,549 input (29,081 uncached + 135,275 cached), 9,807 -> 2,991 output (5,404 reasoning), 93.3s, 20 calls.
-    // blended (50/50 avg of unknown + known medians): 85,059 input (11,982 uncached + 73,077 cached), 4,033 output (3,326 reasoning), 57.3s, 12 calls.
+    // known (with default-on hydrateExact): 77,784 -> 39,045 input (3,772 uncached + 34,967 cached), 1,250 output (1,247 reasoning), 16.4s, 8 calls.
+    // blended (50/50 avg of unknown + known medians): 101,548 input (16,426 uncached + 85,122 cached), 4,033 output (3,326 reasoning), 54.8s, 14 calls.
     const MIX = {
       blended: {
-        uncachedIn: 11982,
-        cachedIn: 73077,
-        totalIn: 85059,
+        uncachedIn: 16426,
+        cachedIn: 85122,
+        totalIn: 101548,
         out: 4033,
         reasoning: 3326,
-        wallSec: 57.3,
-        calls: 12,
-        quotaMult: 2.6,
+        wallSec: 54.8,
+        calls: 14,
+        quotaMult: 3.7,
       },
       unknown: {
         uncachedIn: 29081,

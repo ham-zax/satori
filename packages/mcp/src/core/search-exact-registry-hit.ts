@@ -46,6 +46,55 @@ import type { FinalizedSearchResults } from "./search-result-finalization.js";
 export const EXACT_HYDRATION_MAX_SOURCE_BYTES = 12_288;
 export const EXACT_HYDRATION_MAX_LINES = 200;
 
+export function resolveHydrateExact(explicit?: boolean): boolean {
+    if (explicit !== undefined) {
+        return explicit;
+    }
+    return process.env.SATORI_HYDRATE_EXACT !== "0";
+}
+
+function refineHydratedRecommendedNextAction(
+    action: SearchGroupedResponseEnvelope["recommendedNextAction"],
+    hydratedExactSource: SearchHydratedExactSource,
+): SearchGroupedResponseEnvelope["recommendedNextAction"] {
+    if (!action || !hydratedExactSource.completeSymbolReturned || action.tool !== "read_file") {
+        return action;
+    }
+    const rawOpenSymbol = action.args?.open_symbol;
+    if (!rawOpenSymbol || typeof rawOpenSymbol !== "object") {
+        return action;
+    }
+    const openSymbol = rawOpenSymbol as Record<string, unknown>;
+    const rawContext = openSymbol.context;
+    if (!rawContext || typeof rawContext !== "object") {
+        return action;
+    }
+    const context = rawContext as Record<string, unknown>;
+    if (context.preset !== "definition") {
+        return action;
+    }
+    return {
+        ...action,
+        args: {
+            ...action.args,
+            open_symbol: {
+                ...openSymbol,
+                context: {
+                    ...context,
+                    preset: "call_context",
+                    include: {
+                        ...(context.include && typeof context.include === "object"
+                            ? (context.include as Record<string, unknown>)
+                            : {}),
+                        source: false,
+                    },
+                },
+            },
+        },
+        reason: "Complete symbol source is already in hydratedExactSource; call read_file only if you also need callers, callees, or siblings.",
+    };
+}
+
 export function attachHydratedExactSource(
     envelope: SearchGroupedResponseEnvelope,
     hydratedExactSource: SearchHydratedExactSource | undefined,
@@ -59,7 +108,15 @@ export function attachHydratedExactSource(
         || envelope.results[0]?.target.symbolId !== hydratedExactSource.symbolId
         || envelope.results[0]?.target.file !== hydratedExactSource.file
     ) return envelope;
-    const candidate = { ...envelope, hydratedExactSource };
+    const recommendedNextAction = refineHydratedRecommendedNextAction(
+        envelope.recommendedNextAction,
+        hydratedExactSource,
+    );
+    const candidate: SearchGroupedResponseEnvelope = {
+        ...envelope,
+        ...(recommendedNextAction !== undefined ? { recommendedNextAction } : {}),
+        hydratedExactSource,
+    };
     return Buffer.byteLength(JSON.stringify(candidate), "utf8") <= maxResponseBytes ? candidate : envelope;
 }
 

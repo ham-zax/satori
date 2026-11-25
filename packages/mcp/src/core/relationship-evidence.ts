@@ -37,6 +37,8 @@ export interface RelationshipEvidenceSite {
 
 export interface RelationshipEvidenceItem {
     symbolId: string;
+    symbolLabel?: string;
+    file?: string;
     relationship: RelationshipEvidenceKind;
     source: RelationshipEvidenceSource;
     confidenceClass: RelationshipConfidenceClass;
@@ -101,6 +103,10 @@ type RelationshipEvidenceAvailableInput = {
     limitations?: readonly RelationshipEvidenceLimitation[];
     siteStatusByFile?: ReadonlyMap<string, RelationshipSiteStatus>;
     failedDynamicSourceFiles?: ReadonlySet<string>;
+    resolveSymbolMetadata?: (symbolId: string) => {
+        symbolLabel?: string;
+        file?: string;
+    } | undefined;
 };
 
 type RelationshipEvidenceUnavailableInput = {
@@ -157,8 +163,12 @@ function projectAvailableRelationshipEvidence(
         }
 
         const isDynamic = edge.kind === "dynamic";
+        const peerSymbolId = input.relationship === "caller" ? edge.srcSymbolId : edge.dstSymbolId;
+        const symbolMeta = input.resolveSymbolMetadata?.(peerSymbolId);
         return [{
-            symbolId: input.relationship === "caller" ? edge.srcSymbolId : edge.dstSymbolId,
+            symbolId: peerSymbolId,
+            ...(symbolMeta?.symbolLabel ? { symbolLabel: symbolMeta.symbolLabel } : {}),
+            ...(symbolMeta?.file ? { file: symbolMeta.file } : {}),
             relationship: input.relationship,
             source: isDynamic ? "source_backed_dynamic" : "relationship_graph",
             confidenceClass: confidenceClass(edge.confidence),

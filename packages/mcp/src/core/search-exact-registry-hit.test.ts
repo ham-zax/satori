@@ -301,8 +301,13 @@ test("exact hydration preserves the finalized results, action, and requested res
     assert.equal(indexed.envelope.resultIndex?.entries.length, 1);
     const indexedBytes = Buffer.byteLength(JSON.stringify(indexed.envelope), "utf8");
     assert.deepEqual(attachHydratedExactSource(indexed.envelope, hydrated, indexedBytes), indexed.envelope);
+    const attachedIndexed = attachHydratedExactSource(indexed.envelope, hydrated, baseInput.maxResponseBytes);
+    assert.deepEqual(attachedIndexed.hydratedExactSource, hydrated);
+    assert.deepEqual(attachedIndexed.resultIndex, indexed.envelope.resultIndex);
+    assert.deepEqual(attachedIndexed.results, indexed.envelope.results);
+    assert.equal(attachedIndexed.recommendedNextAction?.tool, "read_file");
     assert.deepEqual(
-        attachHydratedExactSource(indexed.envelope, hydrated, baseInput.maxResponseBytes),
-        { ...indexed.envelope, hydratedExactSource: hydrated },
+        (attachedIndexed.recommendedNextAction?.args as { open_symbol?: { context?: unknown } } | undefined)?.open_symbol?.context,
+        { preset: "call_context", include: { source: false } },
     );
 });

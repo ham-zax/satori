@@ -15,7 +15,7 @@ import {
 } from "./search-constants.js";
 import { resolveFrozenSearchResultLimit } from "./search-policy.js";
 import { classifyPathCategory } from "./search-ranking-policy.js";
-import { buildExactRegistryHitEnvelope, buildHydratedExactSource } from "./search-exact-registry-hit.js";
+import { buildExactRegistryHitEnvelope, buildHydratedExactSource, resolveHydrateExact } from "./search-exact-registry-hit.js";
 import type { FinalizedSearchResults } from "./search-result-finalization.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
@@ -454,7 +454,7 @@ export async function runExactRegistryFastPath(
                 : buildSearchGroupPreview(symbol.label, sourceContent, input.previewMaxBytes),
         };
     })));
-    const hydrationEligible = input.hydrateExact === true
+    const hydrationEligible = resolveHydrateExact(input.hydrateExact)
         && exactRegistryMatch.status === "hit"
         && resultSymbols.length === 1
         && exactMatches.length === 1

@@ -145,8 +145,14 @@ function renderRelationshipSection(title: string, rel: SymbolContextRelationship
                     ))
                     .join(", ")
                 : "no-site";
+            const symbolDescriptor = item.symbolLabel
+                ? `${sanitizeHeaderText(item.symbolLabel)} (${item.symbolId})`
+                : item.symbolId;
+            const fileNote = item.file && item.sites.items.every((site) => site.file !== item.file)
+                ? ` in ${item.file}`
+                : "";
             lines.push(
-                `- ${item.symbolId} @ ${sitesText} [${item.confidenceClass}, ${item.source}, ${item.sites.status}]`,
+                `- ${symbolDescriptor}${fileNote} @ ${sitesText} [${item.confidenceClass}, ${item.source}, ${item.sites.status}]`,
             );
         }
         return lines;

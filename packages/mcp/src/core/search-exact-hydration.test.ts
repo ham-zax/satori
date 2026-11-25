@@ -228,7 +228,7 @@ function withTempRepo(run: (root: string) => Promise<void>): Promise<void> {
     });
 }
 
-test("default hydrateExact omitted/false produces byte-identical envelope with no hydratedExactSource", async () => {
+test("default hydrateExact omitted hydrates clean unique exact hits while explicit false disables hydration", async () => {
     await withTempRepo(async (root) => {
         const relFile = "src/service.ts";
         const fileText = [
@@ -260,27 +260,31 @@ test("default hydrateExact omitted/false produces byte-identical envelope with n
             makeInput(root, "computeInvoiceTotal"),
             host,
         );
+        const explicitTrue = await runExactRegistryFastPath(
+            makeInput(root, "computeInvoiceTotal", { hydrateExact: true }),
+            host,
+        );
         const explicitFalse = await runExactRegistryFastPath(
             makeInput(root, "computeInvoiceTotal", { hydrateExact: false }),
             host,
         );
 
         assert.equal(omitted.kind, "handled");
+        assert.equal(explicitTrue.kind, "handled");
         assert.equal(explicitFalse.kind, "handled");
-        if (omitted.kind !== "handled" || explicitFalse.kind !== "handled") return;
+        if (omitted.kind !== "handled" || explicitTrue.kind !== "handled" || explicitFalse.kind !== "handled") return;
         assert.equal(omitted.finalized.kind, "ok");
+        assert.equal(explicitTrue.finalized.kind, "ok");
         assert.equal(explicitFalse.finalized.kind, "ok");
-        if (omitted.finalized.kind !== "ok" || explicitFalse.finalized.kind !== "ok") return;
+        if (omitted.finalized.kind !== "ok" || explicitTrue.finalized.kind !== "ok" || explicitFalse.finalized.kind !== "ok") return;
         assert.equal(omitted.finalized.envelope.resultMode, "grouped");
+        assert.equal(explicitTrue.finalized.envelope.resultMode, "grouped");
         assert.equal(explicitFalse.finalized.envelope.resultMode, "grouped");
-        if (omitted.finalized.envelope.resultMode !== "grouped" || explicitFalse.finalized.envelope.resultMode !== "grouped") return;
+        if (omitted.finalized.envelope.resultMode !== "grouped" || explicitTrue.finalized.envelope.resultMode !== "grouped" || explicitFalse.finalized.envelope.resultMode !== "grouped") return;
 
-        assert.equal(omitted.hydratedExactSource, undefined);
+        assert.deepEqual(omitted.hydratedExactSource, explicitTrue.hydratedExactSource);
+        assert.equal(omitted.hydratedExactSource?.completeSymbolReturned, true);
         assert.equal(explicitFalse.hydratedExactSource, undefined);
-        assert.equal(
-            JSON.stringify(omitted.finalized.envelope),
-            JSON.stringify(explicitFalse.finalized.envelope),
-        );
     });
 });
 
@@ -346,11 +350,52 @@ test("clean unique non-oversized exact hit with hydrateExact=true returns comple
             sourceAuthority: "publication_hash_matched",
         });
 
-        // Every existing field is preserved identically
+        // Existing result/count/continuation fields are preserved identically,
+        // while recommendedNextAction shifts from redundant source-definition read
+        // to source-free call_context when the complete symbol is already hydrated.
         assert.deepEqual(hydEnv.results, ctrlEnv.results);
-        assert.deepEqual(hydEnv.recommendedNextAction, ctrlEnv.recommendedNextAction);
         assert.deepEqual(hydEnv.resultCounts, ctrlEnv.resultCounts);
         assert.deepEqual(hydEnv.continuation, ctrlEnv.continuation);
+        assert.ok(ctrlEnv.recommendedNextAction);
+        assert.equal(hydEnv.recommendedNextAction?.tool, "read_file");
+        const ctrlActionArgs = ctrlEnv.recommendedNextAction.args as { open_symbol: Record<string, unknown> };
+        assert.deepEqual(hydEnv.recommendedNextAction?.args, {
+            ...ctrlActionArgs,
+            open_symbol: {
+                ...ctrlActionArgs.open_symbol,
+                context: {
+                    preset: "call_context",
+                    include: { source: false },
+                },
+            },
+        });
+        assert.match(hydEnv.recommendedNextAction?.reason ?? "", /already in hydratedExactSource/);
+
+        // SATORI_HYDRATE_EXACT=0 disables hydration when hydrateExact is omitted,
+        // while explicit hydrateExact=true still overrides it.
+        const prevEnv = process.env.SATORI_HYDRATE_EXACT;
+        process.env.SATORI_HYDRATE_EXACT = "0";
+        try {
+            const envDisabled = await runExactRegistryFastPath(
+                makeInput(root, "resolveBillingPlan"),
+                host,
+            );
+            assert.equal(envDisabled.kind, "handled");
+            if (envDisabled.kind === "handled") {
+                assert.equal(envDisabled.hydratedExactSource, undefined);
+            }
+            const explicitTrueOverride = await runExactRegistryFastPath(
+                makeInput(root, "resolveBillingPlan", { hydrateExact: true }),
+                host,
+            );
+            assert.equal(explicitTrueOverride.kind, "handled");
+            if (explicitTrueOverride.kind === "handled") {
+                assert.equal(explicitTrueOverride.hydratedExactSource?.completeSymbolReturned, true);
+            }
+        } finally {
+            if (prevEnv === undefined) delete process.env.SATORI_HYDRATE_EXACT;
+            else process.env.SATORI_HYDRATE_EXACT = prevEnv;
+        }
     });
 });
 

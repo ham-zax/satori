@@ -568,6 +568,7 @@ function projectRelationshipPage(input: {
     pageSize: number;
     cursor?: string;
     currentSiteFile?: string;
+    symbolsByInstanceId?: ReadonlyMap<string, SymbolRecord>;
 }): {
     projection: SymbolContextRelationshipProjection;
     continuation?: SymbolContextContinuation;
@@ -603,6 +604,18 @@ function projectRelationshipPage(input: {
         suppressionNotes: value.suppressionNotes,
         limitations: value.limitations,
         siteStatusByFile,
+        ...(input.symbolsByInstanceId
+            ? {
+                resolveSymbolMetadata: (symbolId: string) => {
+                    const record = input.symbolsByInstanceId?.get(symbolId);
+                    if (!record) return undefined;
+                    return {
+                        ...(record.label ? { symbolLabel: record.label } : {}),
+                        ...(record.file ? { file: record.file } : {}),
+                    };
+                },
+            }
+            : {}),
     });
     if (!truncated || edges.length === 0 || !value.fingerprint || !page.nextCursor) {
         return { projection };
@@ -1357,6 +1370,7 @@ export async function composeSymbolContext(
                 returnedCount: count,
                 pageSize: relationshipContinuation.pageSize,
                 cursor: relationshipContinuation.cursor,
+                symbolsByInstanceId: snapshot.registry.symbolsByInstanceId,
             }),
         });
         let fittedPage: ComposedSymbolContext | undefined;
@@ -1416,6 +1430,7 @@ export async function composeSymbolContext(
                 composition,
                 returnedCount,
                 pageSize: input.budgets.maxEdgesPerDirection,
+                symbolsByInstanceId: snapshot.registry.symbolsByInstanceId,
             });
             const candidate = withRelationshipPage({
                 context,

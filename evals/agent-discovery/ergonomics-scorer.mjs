@@ -619,7 +619,60 @@ function updateStatementProgress(ctx, statement, defaultFile, repoRoot, progress
     return true;
 }
 
+function symbolContextTextWitnessesRelation(ctx, relation, repoRoot, ownerFile) {
+    if (ctx.parsedJson !== null || !ctx.rooted || !ownerFile || !relation.targetSymbol) return false;
+    if (relation.relation !== "caller" && relation.relation !== "callee") return false;
+    const isFile = (file, expected) => resolveCandidateInsideRoot(file, repoRoot)?.relativePath === expected;
+    const lines = String(ctx.rawOutput ?? "").split(/\r\n|\n|\r/);
+    const header = /^# (.+?):\d+-\d+\s*\|\s*(.+)$/.exec(lines[0] ?? "");
+    if (!header) return false;
+    if (!isFile(header[1], ownerFile)) return false;
+    if (extractSymbolIdentifierFromLabel(header[2]) !== relation.targetSymbol) return false;
+
+    const sectionPrefix = relation.relation === "caller" ? "Callers (" : "Callees (";
+    let inSection = false;
+    for (let i = 1; i < lines.length; i += 1) {
+        const line = lines[i];
+        if (line.startsWith(sectionPrefix)) {
+            inSection = true;
+            continue;
+        }
+        if (inSection && !line.startsWith("- ")) {
+            inSection = false;
+            continue;
+        }
+        if (!inSection) continue;
+        // Format: - <symbolLabel> (<symbolId>) [in <file>] @ <siteFile>:<line>[, ...] [...]
+        const itemMatch = /^- (.+?)\s+@\s+(.+?)\s+\[[^\]]+\]$/.exec(line);
+        if (!itemMatch) continue;
+        let descriptor = itemMatch[1].trim();
+        let peerFile = null;
+        const inFileMatch = /\s+in\s+([^\s]+)$/.exec(descriptor);
+        if (inFileMatch) {
+            peerFile = inFileMatch[1];
+            descriptor = descriptor.slice(0, inFileMatch.index).trim();
+        }
+        const labelPart = descriptor.replace(/\s+\([^()]+\)$/, "").trim();
+        if (extractSymbolIdentifierFromLabel(labelPart) !== relation.symbol) continue;
+        const sites = itemMatch[2].split(",").map((entry) => entry.trim());
+        const expectedSiteFile = relation.relation === "caller" ? relation.file : ownerFile;
+        for (const site of sites) {
+            const siteMatch = /^(.+?):(\d+)(?:-\d+)?$/.exec(site);
+            if (!siteMatch) continue;
+            const siteFile = siteMatch[1];
+            const siteLine = Number.parseInt(siteMatch[2], 10);
+            if (!(siteLine > 0) || !isFile(siteFile, expectedSiteFile)) continue;
+            const effectivePeerFile = peerFile ?? siteFile;
+            if (effectivePeerFile && isFile(effectivePeerFile, relation.file)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function structuredGraphWitnessesRelation(ctx, relation, repoRoot, ownerFile, ownerSiteSeen) {
+    if (symbolContextTextWitnessesRelation(ctx, relation, repoRoot, ownerFile)) return true;
     const response = ctx.parsedJson;
     if (!isRecord(response) || !ctx.rooted || !ownerFile || !relation.targetSymbol) return false;
     const isFile = (file, expected) => resolveCandidateInsideRoot(file, repoRoot)?.relativePath === expected;
@@ -627,6 +680,29 @@ function structuredGraphWitnessesRelation(ctx, relation, repoRoot, ownerFile, ow
         && isFile(node.file, file)
         && [node.name, node.symbol, node.symbolLabel, node.label, node.qualifiedName]
             .some((label) => extractSymbolIdentifierFromLabel(label) === symbol);
+    const caller = relation.relation === "caller";
+    if (response.kind === "symbol_context" && isRecord(response.relationships) && matches(response.symbol, relation.targetSymbol, ownerFile)) {
+        const relSection = caller ? response.relationships.callers : response.relationships.callees;
+        const items = Array.isArray(relSection?.items) ? relSection.items : [];
+        const expectedSiteFile = caller ? relation.file : ownerFile;
+        for (const item of items) {
+            if (!isRecord(item)) continue;
+            const labelMatch = [item.symbolLabel, item.name, item.label].some(
+                (label) => extractSymbolIdentifierFromLabel(label) === relation.symbol,
+            );
+            if (!labelMatch) continue;
+            const siteItems = Array.isArray(item.sites?.items) ? item.sites.items : [];
+            const hasValidSite = siteItems.some((site) => (
+                isRecord(site)
+                && isFile(site.file, expectedSiteFile)
+                && Number.isSafeInteger(site.startLine ?? site.line)
+                && (site.startLine ?? site.line) > 0
+            ));
+            if (!hasValidSite) continue;
+            const peerFile = item.file ?? (caller ? siteItems.find((site) => isRecord(site) && isFile(site.file, relation.file))?.file : null);
+            if (peerFile && isFile(peerFile, relation.file)) return true;
+        }
+    }
     const nodes = new Map((Array.isArray(response.nodes) ? response.nodes : [])
         .filter((node) => isRecord(node) && typeof node.symbolId === "string")
         .map((node) => [node.symbolId, node]));
@@ -634,7 +710,6 @@ function structuredGraphWitnessesRelation(ctx, relation, repoRoot, ownerFile, ow
         && isRecord(edge.site) && isFile(edge.site.file, file)
         && Number.isSafeInteger(edge.site.startLine ?? edge.site.line)
         && (edge.site.startLine ?? edge.site.line) > 0;
-    const caller = relation.relation === "caller";
     for (const edge of Array.isArray(response.edges) ? response.edges : []) {
         if (!isRecord(edge) || (edge.kind !== undefined && edge.kind !== "call")) continue;
         const src = nodes.get(edge.srcSymbolId);
@@ -1049,7 +1124,7 @@ function observeOwnerSpan(ctx, spec, repoRoot, endpoints) {
         payload?.symbol,
         ...(hydrated?.completeSymbolReturned && hydrated.sourceAuthority === "publication_hash_matched"
             ? (Array.isArray(payload.results) ? payload.results : []).flatMap((result) => result?.target?.symbolId === hydrated.symbolId
-                ? [{ ...result.target, file: hydrated.file, span: hydrated.returnedSpan }] : []) : []),
+                ? [{ ...result.target, symbolLabel: result.target.symbolLabel ?? result.displayLabel ?? result.symbolLabel ?? result.name, file: hydrated.file, span: hydrated.returnedSpan }] : []) : []),
     ];
     if (candidates.some((symbol) => symbol
         && resolveInputPath(symbol.file ?? payload.file, repoRoot, ctx.effectiveCwd)?.relativePath === spec.ownerFile

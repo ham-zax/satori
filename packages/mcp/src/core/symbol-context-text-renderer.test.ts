@@ -626,3 +626,121 @@ test("composer-aware text budgeting fails cleanly with resource_limit when a sin
     assert.equal(result.hardResponseLimitBytes, hardLimit);
     assert.ok(result.minimumRequiredResponseBytes > hardLimit);
 });
+
+test("composer populates symbolLabel and file on relationship evidence and text renderer prints them", async () => {
+    const source = [
+        "export function targetFn(): number {",
+        "  return helperFn();",
+        "}",
+        "",
+    ].join("\n");
+    const sourceHash = sha256(Buffer.from(source, "utf8"));
+    const target = makeSymbol({
+        symbolInstanceId: "sym_target",
+        name: "targetFn",
+        label: "function targetFn()",
+        kind: "function",
+        span: { startLine: 1, endLine: 3 },
+        fileHash: sourceHash,
+    });
+    const callerSym = makeSymbol({
+        symbolInstanceId: "sym_caller_1",
+        name: "invokeTarget",
+        label: "function invokeTarget()",
+        kind: "function",
+        file: "src/caller.ts",
+        span: { startLine: 10, endLine: 15 },
+        fileHash: sourceHash,
+    });
+    const calleeSym = makeSymbol({
+        symbolInstanceId: "sym_callee_1",
+        name: "helperFn",
+        label: "function helperFn()",
+        kind: "function",
+        file: "src/helper.ts",
+        span: { startLine: 1, endLine: 5 },
+        fileHash: sourceHash,
+    });
+
+    const request = exactSymbolOpenRequestSchema.parse({
+        contractVersion: 2,
+        symbolId: "sym_target",
+        context: { preset: "call_context" },
+    });
+    const resolved = resolveSymbolContextOperation({ mode: "plain", format: "text", request });
+    assert.equal(resolved.kind, "context");
+    if (resolved.kind !== "context") return;
+
+    const baseDeps = makeComposerDeps(source, [target, callerSym, calleeSym]);
+    const result = await composeSymbolContext(
+        {
+            codebaseRoot: "/repo",
+            relativeFile: "src/worker.ts",
+            symbolId: "sym_target",
+            include: resolved.include,
+            budgets: resolved.budgets,
+        },
+        {
+            ...baseDeps,
+            prepareSnapshot: async (input) => {
+                const prepared = await baseDeps.prepareSnapshot(input);
+                if (prepared.status !== "ready") return prepared;
+                return {
+                    status: "ready",
+                    snapshot: {
+                        ...prepared.snapshot,
+                        relationships: {
+                            status: "available",
+                            authority: "remote_generation_proven",
+                            manifestIdentity: "rel-manifest-named",
+                            callers: {
+                                edges: [{
+                                    srcSymbolId: "sym_caller_1",
+                                    dstSymbolId: "sym_target",
+                                    kind: "call",
+                                    site: { file: "src/caller.ts", startLine: 12 },
+                                    confidence: 0.95,
+                                }],
+                                availableCount: 1,
+                                suppressedCount: 0,
+                                suppressionNotes: [],
+                            },
+                            callees: {
+                                edges: [{
+                                    srcSymbolId: "sym_target",
+                                    dstSymbolId: "sym_callee_1",
+                                    kind: "call",
+                                    site: { file: "src/worker.ts", startLine: 2 },
+                                    confidence: 0.95,
+                                }],
+                                availableCount: 1,
+                                suppressedCount: 0,
+                                suppressionNotes: [],
+                            },
+                        },
+                    },
+                };
+            },
+        },
+    );
+
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.equal(result.context.relationships.callers.status, "ok");
+    assert.equal(result.context.relationships.callees.status, "ok");
+    if (result.context.relationships.callers.status !== "ok" || result.context.relationships.callees.status !== "ok") return;
+    assert.equal(result.context.relationships.callers.items[0]?.symbolLabel, "function invokeTarget()");
+    assert.equal(result.context.relationships.callers.items[0]?.file, "src/caller.ts");
+    assert.equal(result.context.relationships.callees.items[0]?.symbolLabel, "function helperFn()");
+    assert.equal(result.context.relationships.callees.items[0]?.file, "src/helper.ts");
+
+    const rendered = renderSymbolContextText({
+        codebaseRoot: "/repo",
+        envelope: composePublicSymbolContextEnvelope({
+            effectiveRequest: resolved.effectiveRequest,
+            context: result.context,
+        }),
+    });
+    assert.match(rendered, /Callers \(1\/1\):\n- function invokeTarget\(\) \(sym_caller_1\) @ src\/caller\.ts:12/);
+    assert.match(rendered, /Callees \(1\/1\):\n- function helperFn\(\) \(sym_callee_1\) in src\/helper\.ts @ src\/worker\.ts:2/);
+});

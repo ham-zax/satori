@@ -1670,3 +1670,96 @@ test("Pi replay treats missing recorded totals as unverified", () => {
     assert.equal(replay.fidelity.visibleBytesMatches, null);
     assert.equal(replay.strictPassed, false);
 });
+
+test("symbol_context JSON and format='text' with named relationship metadata witness caller and callee edges", () => {
+    const textOutput = [
+        "# packages/mcp/src/core/search-exact-fast-path.ts:227-660 | function runExactRegistryFastPath()",
+        "symbolId: sym_owner",
+        "codebaseRoot: /repo",
+        "authority: navigation=remote_generation_proven, source=current_at_final_observation/index_snapshot_matched, relationships=remote_generation_proven",
+        "",
+        "227| export async function runExactRegistryFastPath(input, host) {",
+        "228|   if (!isExactRegistryEligible(input, host)) return { kind: 'continue' };",
+        "229|   if (input.navigationAuthority !== \"valid\") return { kind: 'continue' };",
+        "230|   const match = findExactRegistryMatch(registry, input.query);",
+        "231|   return { kind: 'handled', semanticPassesUsed: [], rerankApplied: false };",
+        "660| }",
+        "",
+        "Callers (1/1):",
+        "- method executeSearchAttempt() (sym_caller) @ packages/mcp/src/core/search-request-coordinator.ts:1470 [high, relationship_graph, current_source_validated]",
+        "",
+        "Callees (1/1):",
+        "- function findExactRegistryMatch() (sym_callee) in packages/mcp/src/core/search/exact-registry.ts @ packages/mcp/src/core/search-exact-fast-path.ts:230 [high, relationship_graph, current_source_validated]",
+    ].join("\n");
+
+    const textTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        tools: [{
+            tool: "satori_read_file",
+            input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", codebaseRoot: "/repo", format: "text" },
+            output: textOutput,
+        }],
+    });
+    assert.equal(textTrajectory.sufficient, true);
+    assert.equal(textTrajectory.firstSufficientEvidenceCall, 1);
+
+    const jsonOutput = JSON.stringify({
+        formatVersion: 2,
+        kind: "symbol_context",
+        status: "ok",
+        symbol: {
+            symbolId: "sym_owner",
+            symbolLabel: "function runExactRegistryFastPath()",
+            file: "packages/mcp/src/core/search-exact-fast-path.ts",
+            span: { startLine: 227, endLine: 660 },
+        },
+        source: {
+            excerpts: [{
+                startLine: 227,
+                endLine: 660,
+                content: [
+                    "export async function runExactRegistryFastPath(input, host) {",
+                    "  if (!isExactRegistryEligible(input, host)) return { kind: 'continue' };",
+                    "  if (input.navigationAuthority !== \"valid\") return { kind: 'continue' };",
+                    "  const match = findExactRegistryMatch(registry, input.query);",
+                    "  return { kind: 'handled', semanticPassesUsed: [], rerankApplied: false };",
+                    "}",
+                ].join("\n"),
+            }],
+        },
+        relationships: {
+            callers: {
+                status: "ok",
+                items: [{
+                    symbolId: "sym_caller",
+                    symbolLabel: "method executeSearchAttempt()",
+                    file: "packages/mcp/src/core/search-request-coordinator.ts",
+                    relationship: "caller",
+                    sites: { status: "current_source_validated", items: [{ file: "packages/mcp/src/core/search-request-coordinator.ts", startLine: 1470 }] },
+                }],
+            },
+            callees: {
+                status: "ok",
+                items: [{
+                    symbolId: "sym_callee",
+                    symbolLabel: "function findExactRegistryMatch()",
+                    file: "packages/mcp/src/core/search/exact-registry.ts",
+                    relationship: "callee",
+                    sites: { status: "current_source_validated", items: [{ file: "packages/mcp/src/core/search-exact-fast-path.ts", startLine: 230 }] },
+                }],
+            },
+        },
+    });
+    const jsonTrajectory = scoreEvidenceTrajectory({
+        repoRoot: "/repo",
+        task: KNOWN_TASK,
+        tools: [{
+            tool: "satori_read_file",
+            input: { path: "/repo/packages/mcp/src/core/search-exact-fast-path.ts", codebaseRoot: "/repo" },
+            output: jsonOutput,
+        }],
+    });
+    assert.equal(jsonTrajectory.sufficient, true);
+    assert.equal(jsonTrajectory.firstSufficientEvidenceCall, 1);
+});

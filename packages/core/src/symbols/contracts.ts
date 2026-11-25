@@ -180,6 +180,8 @@ export interface RelationshipManifestFile {
     shardPath: string;
     relationshipCount: number;
     analysisEvidencePresent: boolean;
+    shardBytes?: number;
+    shardSha256?: string;
 }
 
 export function canonicalizeSymbolSpanForHash(span: SymbolSpan): string {
@@ -212,6 +214,10 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNonNegativeInteger(value: unknown): value is number {
     return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isSha256Hex(value: unknown): value is string {
+    return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
 export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistryManifest {
@@ -324,6 +330,10 @@ export function isRelationshipManifest(value: unknown): value is RelationshipMan
         && file.shardPath.startsWith('relationships/by-file/')
         && isNonNegativeInteger(file.relationshipCount)
         && typeof file.analysisEvidencePresent === 'boolean'
+        && (
+            (file.shardBytes === undefined && file.shardSha256 === undefined)
+            || (isNonNegativeInteger(file.shardBytes) && isSha256Hex(file.shardSha256))
+        )
         && !seenPaths.has(file.path)
         && Boolean(seenPaths.add(file.path))
         && !seenShards.has(file.shardPath)

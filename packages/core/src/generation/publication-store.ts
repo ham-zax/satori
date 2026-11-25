@@ -273,6 +273,9 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         || (value.status === 'complete' && (
             !isRecord(value.navigation)
             || value.navigation.relativeRoot !== 'navigation'
+            || (value.navigation.relationshipManifestHash !== undefined
+                && (typeof value.navigation.relationshipManifestHash !== 'string'
+                    || !/^[0-9a-f]{64}$/.test(value.navigation.relationshipManifestHash)))
         ))
         || (value.status === 'partial' && value.navigation !== null)
     ) {
@@ -310,7 +313,12 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         packageOwnership: value.packageOwnership,
         navigation: value.navigation === null
             ? null
-            : Object.freeze({ relativeRoot: 'navigation' as const }),
+            : Object.freeze({
+                relativeRoot: 'navigation' as const,
+                ...(isRecord(value.navigation) && typeof value.navigation.relationshipManifestHash === 'string'
+                    ? { relationshipManifestHash: value.navigation.relationshipManifestHash }
+                    : {}),
+            }),
     };
     return Object.freeze(publication);
 }

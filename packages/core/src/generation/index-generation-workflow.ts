@@ -724,6 +724,7 @@ export class IndexGenerationWorkflow {
         indexedFiles: number;
         totalChunks: number;
         status: Publication['status'];
+        relationshipManifestHash?: string;
     }): Publication {
         const format = this.ports.buildPublicationFormat();
         return Object.freeze({
@@ -750,7 +751,12 @@ export class IndexGenerationWorkflow {
             }),
             packageOwnership: true,
             navigation: input.status === 'complete'
-                ? Object.freeze({ relativeRoot: 'navigation' as const })
+                ? Object.freeze({
+                    relativeRoot: 'navigation' as const,
+                    ...(input.relationshipManifestHash !== undefined
+                        ? { relationshipManifestHash: input.relationshipManifestHash }
+                        : {}),
+                })
                 : null,
         });
     }
@@ -1009,6 +1015,7 @@ export class IndexGenerationWorkflow {
                     indexedFiles: result.processedFiles,
                     totalChunks: result.totalChunks,
                     status: 'complete',
+                    relationshipManifestHash: navigationCandidate.relationshipManifestHash,
                 });
                 if (publicationBuildStartedAt !== undefined) perfTrace('publication.build', performance.now() - publicationBuildStartedAt);
                 const activationStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
@@ -1669,6 +1676,7 @@ export class IndexGenerationWorkflow {
                         indexedFiles: searchablePreparedFileHashes.size,
                         totalChunks,
                         status: 'complete',
+                        relationshipManifestHash: preparedNavigation.relationshipManifestHash,
                     });
                     try {
                         this.ports.activatePublication(publication, mutationLease);

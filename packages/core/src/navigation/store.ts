@@ -4,6 +4,7 @@ import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
+    verifyRelationshipSidecarChecksums,
 } from '../symbols';
 import { PublicationStateCache } from './publication-state-cache';
 import type { RelationshipAnalysisEvidence } from '../relationships';
@@ -79,6 +80,8 @@ export type NavigationRelationshipManifestState =
         manifest: RelationshipManifest;
     }
     | NavigationStoreFailure;
+
+export type NavigationRelationshipVerificationState = NavigationRelationshipManifestState;
 
 export interface NavigationStoreInput {
     normalizedRootPath: string;
@@ -494,6 +497,7 @@ const RESOLUTION_CLAIM_SCAN_FILES_PER_READ = 64;
 export class JsonNavigationStore {
     private readonly registries: PublicationStateCache<NavigationRegistryState>;
     private readonly relationshipManifests: PublicationStateCache<NavigationRelationshipManifestState>;
+    private readonly relationshipVerifications: PublicationStateCache<NavigationRelationshipVerificationState>;
     private readonly relationships: PublicationStateCache<LoadedRelationshipState>;
     private readonly shardReuseRetentionMs: number;
 
@@ -509,6 +513,13 @@ export class JsonNavigationStore {
             availableMemoryBytes: options.availableMemoryBytes,
         });
         this.relationshipManifests = new PublicationStateCache({
+            maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
+            idleMs,
+            maxRootsUnderPressure: 1,
+            lowMemoryThresholdBytes,
+            availableMemoryBytes: options.availableMemoryBytes,
+        });
+        this.relationshipVerifications = new PublicationStateCache({
             maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
             idleMs,
             maxRootsUnderPressure: 1,
@@ -669,6 +680,95 @@ export class JsonNavigationStore {
             input.normalizedRootPath,
             identity,
             () => readRelationshipManifestState(relationshipInput),
+            (state) => state.status === 'ok',
+        );
+    }
+
+    /**
+     * Verifies relationship sidecar integrity without hydrating the in-memory
+     * relationship graph when publication-bound shard checksums are present.
+     * Legacy Publications without checksums fall back to full parsing.
+     */
+    public async verifyRelationships(
+        input: NavigationStoreInput & {
+            expectedSymbolRegistryManifestHash: string;
+            expectedRelationshipManifestHash?: string;
+        },
+        onValidation?: () => void,
+    ): Promise<NavigationRelationshipVerificationState> {
+        const identity = relationshipIdentity(input);
+        if (this.relationships.has(input.normalizedRootPath, identity)) {
+            const loaded = await this.readRelationships(input);
+            if (loaded.status !== 'ok') return loaded;
+            if (
+                input.expectedRelationshipManifestHash !== undefined
+                && loaded.manifestHash !== input.expectedRelationshipManifestHash
+            ) {
+                return buildFailure(
+                    loaded.rootPath,
+                    'relationship manifest hash does not match Publication navigation descriptor',
+                    'incompatible',
+                    'corrupt',
+                );
+            }
+            return {
+                status: 'ok',
+                rootPath: loaded.rootPath,
+                manifestHash: loaded.manifestHash,
+                manifest: loaded.manifest,
+            };
+        }
+
+        const expectedRelationshipManifestHash = input.expectedRelationshipManifestHash;
+        if (expectedRelationshipManifestHash === undefined) {
+            onValidation?.();
+            const full = await this.getRelationships(input);
+            if (full.status !== 'ok') return full;
+            return {
+                status: 'ok',
+                rootPath: full.rootPath,
+                manifestHash: full.manifestHash,
+                manifest: full.manifest,
+            };
+        }
+
+        return this.relationshipVerifications.get(
+            input.normalizedRootPath,
+            relationshipVerificationIdentity({ ...input, expectedRelationshipManifestHash }),
+            async () => {
+                onValidation?.();
+                const verified = await verifyRelationshipSidecarChecksums({
+                    normalizedRootPath: input.normalizedRootPath,
+                    expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
+                    expectedRelationshipManifestHash,
+                    publicationId: input.publicationId,
+                    navigationRoot: input.navigationRoot,
+                });
+                if (verified.status === 'ok') {
+                    return {
+                        status: 'ok',
+                        rootPath: verified.rootPath,
+                        manifestHash: verified.manifestHash,
+                        manifest: verified.manifest,
+                    };
+                }
+                if (verified.status === 'fallback_required') {
+                    const full = await this.getRelationships(input);
+                    if (full.status !== 'ok') return full;
+                    return {
+                        status: 'ok',
+                        rootPath: full.rootPath,
+                        manifestHash: full.manifestHash,
+                        manifest: full.manifest,
+                    };
+                }
+                return buildFailure(
+                    verified.rootPath,
+                    verified.reason,
+                    verified.status === 'corrupt' ? 'incompatible' : verified.status,
+                    verified.status === 'corrupt' ? 'corrupt' : undefined,
+                );
+            },
             (state) => state.status === 'ok',
         );
     }
@@ -899,4 +999,13 @@ function relationshipIdentity(
     input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
 ): string {
     return `${input.publicationId}\0${input.navigationRoot}\0${input.expectedSymbolRegistryManifestHash}`;
+}
+
+function relationshipVerificationIdentity(
+    input: NavigationStoreInput & {
+        expectedSymbolRegistryManifestHash: string;
+        expectedRelationshipManifestHash: string;
+    },
+): string {
+    return `${input.publicationId}\0${input.navigationRoot}\0${input.expectedSymbolRegistryManifestHash}\0${input.expectedRelationshipManifestHash}`;
 }

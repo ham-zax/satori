@@ -340,3 +340,158 @@ test('large navigation shards are gzip-compressed on disk and corrupt gzip shard
     });
     assert.equal(corruptRead.status, 'corrupt');
 });
+
+test('relationship sidecar records accurate on-disk shardBytes and shardSha256 and verifies hardlink reuse', async (t) => {
+    const crypto = await import('node:crypto');
+    const { writeRelationshipSidecarInternal } = await import('./sidecar-writes.js');
+    const { readRelationshipManifestSidecar } = await import('./sidecar-reads.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-rel-checksums-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    const basePublicationId = 'pub-base';
+    const baseNavRoot = path.join(root, basePublicationId, 'navigation');
+    const symbolRegistryManifestHash = 'fixture-symbol-hash';
+    const smallFile = 'src/small.ts';
+    const largeFile = 'src/large.ts';
+    const largeRecords = Array.from({ length: 40 }, (_, index) => ({
+        sourceKey: `src/large.ts::caller${index}`,
+        targetKey: `src/large.ts::callee${index}`,
+        type: 'CALLS' as const,
+        file: largeFile,
+        span: { startLine: index + 1, endLine: index + 1 },
+        confidence: 'high' as const,
+    }));
+
+    await writeRelationshipSidecar({
+        normalizedRootPath: root,
+        navigationRoot: baseNavRoot,
+        symbolRegistryManifestHash,
+        relationshipVersion: 'fixture-version',
+        builtAt: new Date(0).toISOString(),
+        records: largeRecords,
+        files: [
+            { path: smallFile, hash: 'h-small', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+            { path: largeFile, hash: 'h-large', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+        ],
+    });
+
+    const baseManifestRead = await readRelationshipManifestSidecar({
+        normalizedRootPath: root,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        navigationRoot: baseNavRoot,
+        publicationId: basePublicationId,
+    });
+    assert.equal(baseManifestRead.status, 'ok');
+    if (baseManifestRead.status !== 'ok') return;
+
+    for (const entry of baseManifestRead.manifest.files) {
+        const diskBytes = fs.readFileSync(path.join(baseNavRoot, entry.shardPath));
+        assert.equal(entry.shardBytes, diskBytes.length);
+        assert.equal(
+            entry.shardSha256,
+            crypto.createHash('sha256').update(diskBytes).digest('hex'),
+        );
+    }
+
+    // Hardlink reuse succeeds when base shards are intact and preserves checksums.
+    const reusePublicationId = 'pub-reuse-ok';
+    const reuseNavRoot = path.join(root, reusePublicationId, 'navigation');
+    await writeRelationshipSidecarInternal(
+        {
+            normalizedRootPath: root,
+            navigationRoot: reuseNavRoot,
+            symbolRegistryManifestHash,
+            relationshipVersion: 'fixture-version',
+            builtAt: new Date(0).toISOString(),
+            records: [],
+            files: [
+                { path: smallFile, hash: 'h-small', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+                { path: largeFile, hash: 'h-large', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+            ],
+        },
+        {
+            sourceRoot: baseNavRoot,
+            filesByPath: new Map(baseManifestRead.manifest.files.map((entry) => [entry.path, entry])),
+            filesToRewrite: new Set<string>(),
+            sharedFileSizes: new Map<string, number>(),
+        },
+    );
+    const reuseManifestRead = await readRelationshipManifestSidecar({
+        normalizedRootPath: root,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        navigationRoot: reuseNavRoot,
+        publicationId: reusePublicationId,
+    });
+    assert.equal(reuseManifestRead.status, 'ok');
+    if (reuseManifestRead.status === 'ok') {
+        assert.deepEqual(reuseManifestRead.manifest.files, baseManifestRead.manifest.files);
+    }
+
+    // Legacy checksum-less base omits checksums instead of stamping unverified shards.
+    const legacyBaseFiles = baseManifestRead.manifest.files.map(({ shardBytes: _b, shardSha256: _s, ...rest }) => rest);
+    const legacyReusePubId = 'pub-reuse-legacy';
+    const legacyReuseNavRoot = path.join(root, legacyReusePubId, 'navigation');
+    await writeRelationshipSidecarInternal(
+        {
+            normalizedRootPath: root,
+            navigationRoot: legacyReuseNavRoot,
+            symbolRegistryManifestHash,
+            relationshipVersion: 'fixture-version',
+            builtAt: new Date(0).toISOString(),
+            records: [],
+            files: [
+                { path: smallFile, hash: 'h-small', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+                { path: largeFile, hash: 'h-large', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+            ],
+        },
+        {
+            sourceRoot: baseNavRoot,
+            filesByPath: new Map(legacyBaseFiles.map((entry) => [entry.path, entry])),
+            filesToRewrite: new Set<string>(),
+            sharedFileSizes: new Map<string, number>(),
+        },
+    );
+    const legacyManifestRead = await readRelationshipManifestSidecar({
+        normalizedRootPath: root,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        navigationRoot: legacyReuseNavRoot,
+        publicationId: legacyReusePubId,
+    });
+    assert.equal(legacyManifestRead.status, 'ok');
+    if (legacyManifestRead.status === 'ok') {
+        for (const entry of legacyManifestRead.manifest.files) {
+            assert.equal(entry.shardBytes, undefined);
+            assert.equal(entry.shardSha256, undefined);
+        }
+    }
+
+    // Same-size byte flip in a reused base shard must fail staging loudly.
+    const smallEntry = baseManifestRead.manifest.files.find((entry) => entry.path === smallFile)!;
+    const smallDiskPath = path.join(baseNavRoot, smallEntry.shardPath);
+    const smallBuf = fs.readFileSync(smallDiskPath);
+    smallBuf[0] = smallBuf[0]! ^ 0x01;
+    fs.writeFileSync(smallDiskPath, smallBuf);
+    await assert.rejects(
+        writeRelationshipSidecarInternal(
+            {
+                normalizedRootPath: root,
+                navigationRoot: path.join(root, 'pub-reuse-corrupt', 'navigation'),
+                symbolRegistryManifestHash,
+                relationshipVersion: 'fixture-version',
+                builtAt: new Date(0).toISOString(),
+                records: [],
+                files: [
+                    { path: smallFile, hash: 'h-small', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+                    { path: largeFile, hash: 'h-large', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+                ],
+            },
+            {
+                sourceRoot: baseNavRoot,
+                filesByPath: new Map(baseManifestRead.manifest.files.map((entry) => [entry.path, entry])),
+                filesToRewrite: new Set<string>(),
+                sharedFileSizes: new Map<string, number>(),
+            },
+        ),
+        /checksum mismatch/,
+    );
+});

@@ -112,6 +112,33 @@ test('relationship manifest validates compatibility anchor', () => {
     }), false);
     assert.equal(isRelationshipManifest({ ...manifest, files: [] }), true);
     assert.equal(isRelationshipManifest({ ...manifest, files: [{ ...manifest.files[0], relationshipCount: -1 }] }), false);
+
+    const validSha256 = 'a'.repeat(64);
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardBytes: 128, shardSha256: validSha256 }],
+    }), true);
+    // Reject half-populated or malformed checksum metadata.
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardBytes: 128 }],
+    }), false);
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardSha256: validSha256 }],
+    }), false);
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardBytes: -1, shardSha256: validSha256 }],
+    }), false);
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardBytes: 128, shardSha256: 'A'.repeat(64) }],
+    }), false);
+    assert.equal(isRelationshipManifest({
+        ...manifest,
+        files: [{ ...manifest.files[0], shardBytes: 128, shardSha256: 'not-hex' }],
+    }), false);
 });
 
 test('symbol kinds have one canonical runtime contract', () => {

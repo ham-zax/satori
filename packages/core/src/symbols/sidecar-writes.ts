@@ -35,12 +35,14 @@ import type {
 import {
     RELATIONSHIPS_DIR_NAME,
     SHARD_GZIP_THRESHOLD_BYTES,
+    SHARD_READ_MAX_BYTES_PER_BATCH,
     SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION,
     SYMBOLS_DIR_NAME,
     buildSymbolIndex,
     compareRelationshipRecords,
     compareStrings,
     fileShardName,
+    hashFileStream,
     hashSerializedString,
     serializeJson,
     serializeShardJson,
@@ -147,17 +149,26 @@ async function writeSerializedJson(filePath: string, serialized: string, timing?
     }
 }
 
-async function writeSerializedShard(filePath: string, serialized: string, timing?: SidecarWriteTiming): Promise<void> {
+async function writeSerializedShard(
+    filePath: string,
+    serialized: string,
+    timing?: SidecarWriteTiming,
+): Promise<{ shardBytes: number; shardSha256: string }> {
     const raw = Buffer.from(serialized, 'utf8');
     const payload = raw.length >= SHARD_GZIP_THRESHOLD_BYTES
         ? zlib.gzipSync(raw, { level: 4 })
         : raw;
+    const shardSha256 = crypto.createHash('sha256').update(payload).digest('hex');
     const startedAt = timing ? performance.now() : 0;
     await fs.promises.writeFile(filePath, payload);
     if (timing) {
         timing.writeMs += performance.now() - startedAt;
         timing.writeCount++;
     }
+    return {
+        shardBytes: payload.length,
+        shardSha256,
+    };
 }
 
 /**
@@ -603,6 +614,24 @@ function shardSharingError(sourcePath: string, targetPath: string, error: unknow
     );
 }
 
+const REUSE_SHARD_STREAM_THRESHOLD_BYTES = Math.floor(
+    SHARD_READ_MAX_BYTES_PER_BATCH / RELATIONSHIP_SHARD_IO_CONCURRENCY,
+);
+
+async function hashShardFileBytes(
+    filePath: string,
+    knownSize: number,
+): Promise<{ bytes: number; sha256: string }> {
+    if (knownSize <= REUSE_SHARD_STREAM_THRESHOLD_BYTES) {
+        const buf = await fs.promises.readFile(filePath);
+        return {
+            bytes: buf.length,
+            sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+        };
+    }
+    return hashFileStream(filePath);
+}
+
 async function linkReusableShard(sourcePath: string, targetPath: string): Promise<number> {
     try {
         const sourceStat = await fs.promises.lstat(sourcePath);
@@ -683,12 +712,31 @@ async function writeRelationshipSidecarInternal(
                         targetPath,
                     );
                     reuse.sharedFileSizes.set(source.shardPath, sharedSize);
+                    let verifiedChecksums: { shardBytes: number; shardSha256: string } | undefined;
+                    if (source.shardBytes !== undefined && source.shardSha256 !== undefined) {
+                        if (sharedSize !== source.shardBytes) {
+                            throw new Error(
+                                `Reusable relationship contribution checksum mismatch for '${filePath}'; reindex is required.`,
+                            );
+                        }
+                        const actual = await hashShardFileBytes(targetPath, sharedSize);
+                        if (actual.bytes !== source.shardBytes || actual.sha256 !== source.shardSha256) {
+                            throw new Error(
+                                `Reusable relationship contribution checksum mismatch for '${filePath}'; reindex is required.`,
+                            );
+                        }
+                        verifiedChecksums = {
+                            shardBytes: source.shardBytes,
+                            shardSha256: source.shardSha256,
+                        };
+                    }
                     return {
                         path: source.path,
                         hash: source.hash,
                         shardPath: source.shardPath,
                         relationshipCount: source.relationshipCount,
                         analysisEvidencePresent: source.analysisEvidencePresent,
+                        ...verifiedChecksums,
                     };
                 }
 
@@ -705,13 +753,19 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                await writeSerializedShard(targetPath, timedSerialize(shard, timing, true), timing);
+                const { shardBytes, shardSha256 } = await writeSerializedShard(
+                    targetPath,
+                    timedSerialize(shard, timing, true),
+                    timing,
+                );
                 return {
                     path: filePath,
                     hash: fileHash,
                     shardPath,
                     relationshipCount: records.length,
                     analysisEvidencePresent: analysisEvidence !== undefined,
+                    shardBytes,
+                    shardSha256,
                 };
             }));
             manifestFiles.push(...batchFiles);

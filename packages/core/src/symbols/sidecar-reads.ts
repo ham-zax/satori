@@ -42,7 +42,7 @@ export const SHARD_GZIP_THRESHOLD_BYTES = 2048;
 // Shard reads are batched by bytes as well as count so one oversized shard
 // batch cannot multiply the transient string + parse peak.
 const SHARD_READ_MAX_FILES_PER_BATCH = 64;
-const SHARD_READ_MAX_BYTES_PER_BATCH = 16 * 1024 * 1024;
+export const SHARD_READ_MAX_BYTES_PER_BATCH = 16 * 1024 * 1024;
 
 // Read boundary input/result contracts
 export interface PublicationNavigation {
@@ -142,6 +142,37 @@ export type ReadRelationshipManifestSidecarResult =
         manifestHash: string;
         manifest: RelationshipManifest;
         reason?: undefined;
+    }
+    | {
+        status: 'missing' | 'incompatible' | 'corrupt';
+        rootPath: string;
+        reason: string;
+        manifestHash?: undefined;
+        manifest?: undefined;
+    };
+
+export interface VerifyRelationshipSidecarChecksumsInput {
+    normalizedRootPath: string;
+    expectedSymbolRegistryManifestHash?: string;
+    expectedRelationshipManifestHash: string;
+    publicationId: string;
+    navigationRoot: string;
+}
+
+export type VerifyRelationshipSidecarChecksumsResult =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        manifest: RelationshipManifest;
+        reason?: undefined;
+    }
+    | {
+        status: 'fallback_required';
+        rootPath: string;
+        manifestHash: string;
+        manifest: RelationshipManifest;
+        reason: string;
     }
     | {
         status: 'missing' | 'incompatible' | 'corrupt';
@@ -611,6 +642,165 @@ export async function readRelationshipManifestSidecar(
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
+    }
+
+    return {
+        status: 'ok',
+        rootPath,
+        manifestHash,
+        manifest,
+    };
+}
+
+export async function hashFileStream(filePath: string): Promise<{ bytes: number; sha256: string }> {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        let bytes = 0;
+        const stream = fs.createReadStream(filePath);
+        stream.on('data', (chunk: Buffer | string) => {
+            const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+            bytes += buf.length;
+            hash.update(buf);
+        });
+        stream.on('error', reject);
+        stream.on('end', () => {
+            resolve({ bytes, sha256: hash.digest('hex') });
+        });
+    });
+}
+
+function isMissingShardError(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && 'code' in error
+        && (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+export async function verifyRelationshipSidecarChecksums(
+    input: VerifyRelationshipSidecarChecksumsInput,
+): Promise<VerifyRelationshipSidecarChecksumsResult> {
+    const manifestLayout = await readRelationshipManifestSidecar(input);
+    if (manifestLayout.status !== 'ok') {
+        return manifestLayout;
+    }
+    const { rootPath, manifest, manifestHash } = manifestLayout;
+    if (manifestHash !== input.expectedRelationshipManifestHash) {
+        return {
+            status: 'corrupt',
+            rootPath,
+            reason: 'relationship manifest hash does not match Publication navigation descriptor',
+        };
+    }
+
+    const files = manifest.files;
+    if (files.some((file) => file.shardBytes === undefined || file.shardSha256 === undefined)) {
+        return {
+            status: 'fallback_required',
+            rootPath,
+            manifestHash,
+            manifest,
+            reason: 'relationship manifest contains legacy entries without shard checksums',
+        };
+    }
+
+    let offset = 0;
+    while (offset < files.length) {
+        const firstFile = files[offset]!;
+        const expectedFirstBytes = firstFile.shardBytes!;
+        if (expectedFirstBytes > SHARD_READ_MAX_BYTES_PER_BATCH) {
+            const shardFilePath = path.join(rootPath, firstFile.shardPath);
+            try {
+                const stat = await fs.promises.stat(shardFilePath);
+                if (stat.size !== expectedFirstBytes) {
+                    return {
+                        status: 'corrupt',
+                        rootPath,
+                        reason: `relationship shard byte length mismatch for '${firstFile.path}'`,
+                    };
+                }
+                const { bytes, sha256 } = await hashFileStream(shardFilePath);
+                if (bytes !== expectedFirstBytes || sha256 !== firstFile.shardSha256) {
+                    return {
+                        status: 'corrupt',
+                        rootPath,
+                        reason: `relationship shard checksum mismatch for '${firstFile.path}'`,
+                    };
+                }
+            } catch (error) {
+                return {
+                    status: isMissingShardError(error) ? 'corrupt' : 'incompatible',
+                    rootPath,
+                    reason: error instanceof Error ? error.message : String(error),
+                };
+            }
+            offset += 1;
+            continue;
+        }
+
+        const batch: typeof files = [];
+        let batchBytes = 0;
+        while (offset < files.length && batch.length < SHARD_READ_MAX_FILES_PER_BATCH) {
+            const file = files[offset]!;
+            const declaredBytes = file.shardBytes!;
+            if (declaredBytes > SHARD_READ_MAX_BYTES_PER_BATCH) break;
+            if (batch.length > 0 && batchBytes + declaredBytes > SHARD_READ_MAX_BYTES_PER_BATCH) break;
+            batch.push(file);
+            batchBytes += declaredBytes;
+            offset += 1;
+        }
+
+        const shardPaths = batch.map((file) => path.join(rootPath, file.shardPath));
+        let stats: fs.Stats[];
+        try {
+            stats = await Promise.all(shardPaths.map((shardFilePath) => fs.promises.stat(shardFilePath)));
+        } catch (error) {
+            return {
+                status: isMissingShardError(error) ? 'corrupt' : 'incompatible',
+                rootPath,
+                reason: error instanceof Error ? error.message : String(error),
+            };
+        }
+        for (let index = 0; index < batch.length; index += 1) {
+            const file = batch[index]!;
+            if (stats[index]!.size !== file.shardBytes) {
+                return {
+                    status: 'corrupt',
+                    rootPath,
+                    reason: `relationship shard byte length mismatch for '${file.path}'`,
+                };
+            }
+        }
+
+        let buffers: Buffer[];
+        try {
+            buffers = await Promise.all(shardPaths.map((shardFilePath) => fs.promises.readFile(shardFilePath)));
+        } catch (error) {
+            return {
+                status: isMissingShardError(error) ? 'corrupt' : 'incompatible',
+                rootPath,
+                reason: error instanceof Error ? error.message : String(error),
+            };
+        }
+
+        for (let index = 0; index < batch.length; index += 1) {
+            const file = batch[index]!;
+            const buf = buffers[index]!;
+            if (buf.length !== file.shardBytes) {
+                return {
+                    status: 'corrupt',
+                    rootPath,
+                    reason: `relationship shard byte length mismatch for '${file.path}'`,
+                };
+            }
+            const actualSha256 = crypto.createHash('sha256').update(buf).digest('hex');
+            if (actualSha256 !== file.shardSha256) {
+                return {
+                    status: 'corrupt',
+                    rootPath,
+                    reason: `relationship shard checksum mismatch for '${file.path}'`,
+                };
+            }
+        }
     }
 
     return {

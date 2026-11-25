@@ -26,6 +26,7 @@ export {
     readRelationshipManifestSidecar,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
+    verifyRelationshipSidecarChecksums,
 } from './sidecar-reads';
 export type {
     PublicationNavigation,
@@ -36,4 +37,6 @@ export type {
     ReadRelationshipSidecarResult,
     ReadSymbolRegistrySidecarInput,
     ReadSymbolRegistrySidecarResult,
+    VerifyRelationshipSidecarChecksumsInput,
+    VerifyRelationshipSidecarChecksumsResult,
 } from './sidecar-reads';

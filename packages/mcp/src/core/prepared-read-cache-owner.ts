@@ -100,6 +100,22 @@ export class PreparedReadCacheOwner {
         return this.dependencies.navigationStore.getSymbolsByFile({ ...input, file });
     }
 
+    public async verifyPreparedNavigationRelationships(
+        preparedRead: PreparedReadState,
+        expectedSymbolRegistryManifestHash: string,
+        operations?: SearchReadinessDebugHint["operations"],
+    ): ReturnType<JsonNavigationStore["verifyRelationships"]> {
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) return this.missingNavigation(preparedRead.root.path);
+        return this.dependencies.navigationStore.verifyRelationships({
+            ...input,
+            expectedSymbolRegistryManifestHash,
+            expectedRelationshipManifestHash: preparedRead.publication.publication.navigation?.relationshipManifestHash,
+        }, () => {
+            if (operations) operations.navigationValidationRuns += 1;
+        });
+    }
+
     public async loadPreparedNavigationCompatibility(
         preparedRead: PreparedReadState,
         expectedSymbolRegistryManifestHash: string,

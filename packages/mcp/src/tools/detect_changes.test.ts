@@ -14,6 +14,7 @@ import {
 } from "@satori-code/core";
 import { ToolHandlers } from "../core/handlers.js";
 import { NavigationHandlers } from "../core/navigation-handlers.js";
+import { PreparedReadCacheOwner } from "../core/prepared-read-cache-owner.js";
 import { RelationshipBackedCallGraph } from "../core/relationship-backed-call-graph.js";
 import { createSessionWorkspacePolicy } from "../core/session-workspace-policy.js";
 import type { CallGraphResponseEnvelope, FileOutlineResponseEnvelope } from "../core/search-types.js";
@@ -163,12 +164,16 @@ test("detectChangesTool preserves unprojected uncertainCallReferences and direct
         files: [],
         providerCoverage: [],
     };
+    const verifiedRelationships = {
+        status: "ok",
+        rootPath: root,
+        manifestHash: "relationships-hash",
+        manifest: relationshipManifest,
+    } as const;
     const navigationStore = {
+        verifyRelationships: async () => verifiedRelationships,
         getRelationships: async () => ({
-            status: "ok",
-            rootPath: root,
-            manifestHash: "relationships-hash",
-            manifest: relationshipManifest,
+            ...verifiedRelationships,
             records: relationships,
             warnings: [],
         }),
@@ -194,6 +199,12 @@ test("detectChangesTool preserves unprojected uncertainCallReferences and direct
         release: () => undefined,
     } as unknown as PublicationLease;
     const host = Object.assign(Object.create(ToolHandlers.prototype), {
+        preparedReadCacheOwner: new PreparedReadCacheOwner({
+            getCurrentPublication: () => lease,
+            getPublicationNavigationAddress: () => ({ publicationId: lease.id, navigationRoot: root }),
+            navigationStore: navigationStore as never,
+            clock: { now: Date.now },
+        }),
         prepareNavigationRead: async () => ({ state: "ready", root: { path: root }, publication: lease }),
         acquirePublicationLease: () => lease,
         isPublicationAdmitted: async () => true,

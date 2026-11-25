@@ -1731,25 +1731,25 @@ export class ToolHandlers {
                 warning: 'RELATIONSHIP_NAVIGATION_UNAVAILABLE:publication_identity_missing',
             };
         }
-        const compatibility = await this.loadPreparedNavigationCompatibility(
+        const relationships = await this.preparedReadCacheOwner.verifyPreparedNavigationRelationships(
             input.preparedRead,
             input.registryManifestHash,
             input.operations,
         );
-        if (compatibility.relationships.status !== 'ok') {
-            const relationshipUnavailableReason = compatibility.relationships.status === 'missing'
+        if (relationships.status !== 'ok') {
+            const relationshipUnavailableReason = relationships.status === 'missing'
                 ? 'missing_relationship_navigation'
                 : 'incompatible_relationship_navigation';
             return {
                 relationshipReady: false,
                 relationshipUnavailableReason,
-                warning: `RELATIONSHIP_NAVIGATION_UNAVAILABLE:${compatibility.relationships.status}`,
+                warning: `RELATIONSHIP_NAVIGATION_UNAVAILABLE:${relationships.status}`,
             };
         }
 
         return {
             relationshipReady: true,
-            relationshipBuiltAt: compatibility.relationships.manifest.builtAt,
+            relationshipBuiltAt: relationships.manifest.builtAt,
         };
     }
 

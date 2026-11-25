@@ -48,3 +48,40 @@ test('readiness cache never substitutes an overlapping root in either warm-up or
         }
     }
 });
+
+test('prepared relationship readiness verifies the bound publication without loading graph records', async (t) => {
+    const state = prepared('publication');
+    const navigationRoot = '/repo/state/publication/navigation';
+    const relationshipManifestHash = 'a'.repeat(64);
+    state.publication = {
+        ...state.publication,
+        publication: {
+            ...state.publication.publication,
+            navigation: { relativeRoot: 'navigation', relationshipManifestHash },
+        },
+    };
+    const navigationStore = new JsonNavigationStore();
+    const expected = {
+        status: 'missing',
+        rootPath: navigationRoot,
+        reason: 'relationship manifest is missing',
+    } as const;
+    const verify = t.mock.method(navigationStore, 'verifyRelationships', async () => expected);
+    const loadGraph = t.mock.method(navigationStore, 'getRelationships');
+    const cache = new PreparedReadCacheOwner({
+        navigationStore,
+        clock: { now: () => 0 },
+        getCurrentPublication: () => state.publication,
+        getPublicationNavigationAddress: () => ({ publicationId: state.publication.id, navigationRoot }),
+    });
+
+    assert.equal(await cache.verifyPreparedNavigationRelationships(state, 'registry-hash'), expected);
+    assert.deepEqual(verify.mock.calls.map(({ arguments: [input] }) => input), [{
+        normalizedRootPath: state.root.path,
+        publicationId: state.publication.id,
+        navigationRoot,
+        expectedSymbolRegistryManifestHash: 'registry-hash',
+        expectedRelationshipManifestHash: relationshipManifestHash,
+    }]);
+    assert.equal(loadGraph.mock.callCount(), 0);
+});

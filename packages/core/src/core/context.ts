@@ -1251,9 +1251,10 @@ export class Context {
             navigationRoot: navigation.navigationRoot,
         }));
         if (registry.status !== 'ok') return registry.sourceStatus ?? registry.status;
-        const relationships = await perfSpan('status.navigation_relationships', () => this.navigationStore.getRelationships({
+        const relationships = await perfSpan('status.navigation_relationships', () => this.navigationStore.verifyRelationships({
             normalizedRootPath: publication.publication.canonicalRoot,
             expectedSymbolRegistryManifestHash: registry.manifestHash,
+            expectedRelationshipManifestHash: publication.publication.navigation?.relationshipManifestHash,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
         }));

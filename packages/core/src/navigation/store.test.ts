@@ -413,3 +413,171 @@ test('getRelationshipManifest validates layout without reading shard bodies and 
     assert.equal(corruptManifest.status !== 'ok' ? corruptManifest.sourceStatus : undefined, 'corrupt');
     assert.equal(corruptFull.status !== 'ok' ? corruptFull.sourceStatus : undefined, 'corrupt');
 });
+
+test('verifyRelationships validates publication-bound shard checksums lazily without hydrating the graph', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-rel-verify-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const navigationRoot = path.join(root, 'publication-v', 'navigation');
+    const writeResult = await writeRelationshipSidecar({
+        normalizedRootPath: root,
+        navigationRoot,
+        symbolRegistryManifestHash,
+        relationshipVersion: 'fixture-version',
+        builtAt: new Date(0).toISOString(),
+        records: [{
+            sourceKey: 'a.ts::fn',
+            targetKey: 'b.ts::fn',
+            type: 'CALLS',
+            file: 'a.ts',
+            span: { startLine: 1, endLine: 1 },
+            confidence: 'high',
+        }],
+        files: [
+            { path: 'a.ts', hash: 'ha', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+            { path: 'b.ts', hash: 'hb', language: 'typescript', symbolCount: 0, definitionStatus: 'definition_free' },
+        ],
+    });
+    const baseInput = {
+        normalizedRootPath: root,
+        publicationId: 'publication-v',
+        navigationRoot,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        expectedRelationshipManifestHash: writeResult.manifestHash,
+    };
+
+    const store = new JsonNavigationStore();
+    let validationRuns = 0;
+    const countValidation = () => { validationRuns += 1; };
+    const first = await store.verifyRelationships(baseInput, countValidation);
+    assert.equal(first.status, 'ok');
+    assert.equal(store.hasResidentRelationships(baseInput), false);
+
+    // Repeated verifyRelationships performs zero disk reads.
+    const warmReadFile = t.mock.method(fs.promises, 'readFile');
+    const second = await store.verifyRelationships(baseInput, countValidation);
+    const warmReads = warmReadFile.mock.calls.length;
+    warmReadFile.mock.restore();
+    assert.equal(second.status, 'ok');
+    assert.equal(warmReads, 0);
+    assert.equal(validationRuns, 1);
+
+    // The cached verdict is bound to the expected manifest hash.
+    const badManifestHash = await store.verifyRelationships({
+        ...baseInput,
+        expectedRelationshipManifestHash: '0'.repeat(64),
+    });
+    assert.equal(badManifestHash.status, 'incompatible');
+    assert.equal(badManifestHash.sourceStatus, 'corrupt');
+
+    // Subsequent getRelationships lazily hydrates and returns identical records.
+    const hydrated = await store.getRelationships(baseInput);
+    assert.equal(hydrated.status, 'ok');
+    assert.equal(store.hasResidentRelationships(baseInput), true);
+    if (hydrated.status === 'ok') {
+        assert.equal(hydrated.records.length, 1);
+    }
+
+    // Rejects same-size shard byte flip.
+    const byFileDir = path.join(navigationRoot, 'relationships', 'by-file');
+    const shardNames = fs.readdirSync(byFileDir);
+    const targetShardPath = path.join(byFileDir, shardNames[0]!);
+    const originalShard = fs.readFileSync(targetShardPath);
+    const flippedShard = Buffer.from(originalShard);
+    flippedShard[0] = flippedShard[0]! ^ 0x01;
+    fs.writeFileSync(targetShardPath, flippedShard);
+    const flippedResult = await new JsonNavigationStore().verifyRelationships(baseInput);
+    assert.equal(flippedResult.status, 'incompatible');
+    assert.equal(flippedResult.sourceStatus, 'corrupt');
+
+    // Rejects size-mismatch shard.
+    fs.writeFileSync(targetShardPath, Buffer.concat([originalShard, Buffer.from([0x20])]));
+    const sizeMismatchResult = await new JsonNavigationStore().verifyRelationships(baseInput);
+    assert.equal(sizeMismatchResult.status, 'incompatible');
+    assert.equal(sizeMismatchResult.sourceStatus, 'corrupt');
+
+    // Rejects missing shard.
+    fs.unlinkSync(targetShardPath);
+    const missingShardResult = await new JsonNavigationStore().verifyRelationships(baseInput);
+    assert.equal(missingShardResult.status, 'incompatible');
+    fs.writeFileSync(targetShardPath, originalShard);
+
+    // Falls back to full parse when expectedRelationshipManifestHash is absent.
+    const fallbackNoHashStore = new JsonNavigationStore();
+    const fallbackNoHash = await fallbackNoHashStore.verifyRelationships({
+        normalizedRootPath: root,
+        publicationId: 'publication-v',
+        navigationRoot,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+    });
+    assert.equal(fallbackNoHash.status, 'ok');
+    assert.equal(fallbackNoHashStore.hasResidentRelationships(baseInput), true);
+
+    // Falls back to full parse when shard checksums are missing from manifest.json.
+    const manifestPath = path.join(navigationRoot, 'relationships', 'manifest.json');
+    const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        files: Array<Record<string, unknown>>;
+    };
+    for (const file of rawManifest.files) {
+        delete file.shardBytes;
+        delete file.shardSha256;
+    }
+    const legacyManifestText = JSON.stringify(rawManifest, null, 2);
+    fs.writeFileSync(manifestPath, legacyManifestText);
+    const crypto = await import('node:crypto');
+    const legacyManifestHash = crypto.createHash('sha256').update(legacyManifestText, 'utf8').digest('hex');
+    const legacyStore = new JsonNavigationStore();
+    const legacyResult = await legacyStore.verifyRelationships({
+        ...baseInput,
+        expectedRelationshipManifestHash: legacyManifestHash,
+    });
+    assert.equal(legacyResult.status, 'ok');
+    assert.equal(legacyStore.hasResidentRelationships(baseInput), true);
+});
+
+test('verifyRelationships verifies multi-batch (>64) shards and rejects bloated shards at stat without buffering them', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-rel-verify-batch-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const navigationRoot = path.join(root, 'publication-batch', 'navigation');
+    const files = Array.from({ length: 70 }, (_, index) => ({
+        path: `src/f${String(index).padStart(3, '0')}.ts`,
+        hash: `h${index}`,
+        language: 'typescript',
+        symbolCount: 0,
+        definitionStatus: 'definition_free' as const,
+    }));
+    const writeResult = await writeRelationshipSidecar({
+        normalizedRootPath: root,
+        navigationRoot,
+        symbolRegistryManifestHash,
+        relationshipVersion: 'fixture-version',
+        builtAt: new Date(0).toISOString(),
+        records: [],
+        files,
+    });
+    const baseInput = {
+        normalizedRootPath: root,
+        publicationId: 'publication-batch',
+        navigationRoot,
+        expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
+        expectedRelationshipManifestHash: writeResult.manifestHash,
+    };
+
+    const store = new JsonNavigationStore();
+    const ok = await store.verifyRelationships(baseInput);
+    assert.equal(ok.status, 'ok');
+    assert.equal(store.hasResidentRelationships(baseInput), false);
+
+    // Bloated shard on disk (in batch 1) must fail at stat size check before readFile buffers it.
+    const byFileDir = path.join(navigationRoot, 'relationships', 'by-file');
+    const targetShardPath = path.join(byFileDir, fileShardName('src/f000.ts', 'h0'));
+    const originalShard = fs.readFileSync(targetShardPath);
+    fs.writeFileSync(targetShardPath, Buffer.concat([originalShard, Buffer.alloc(4096, 0x20)]));
+
+    const readSpy = t.mock.method(fs.promises, 'readFile');
+    const bloated = await new JsonNavigationStore().verifyRelationships(baseInput);
+    const shardReads = readSpy.mock.calls.filter((call) => String(call.arguments[0]).includes(path.join('relationships', 'by-file')));
+    readSpy.mock.restore();
+    assert.equal(bloated.status, 'incompatible');
+    assert.equal(bloated.sourceStatus, 'corrupt');
+    assert.equal(shardReads.length, 0, 'bloated shard should fail stat size check before readFile');
+});

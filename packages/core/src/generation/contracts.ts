@@ -41,6 +41,7 @@ export interface Publication {
     readonly packageOwnership: boolean;
     readonly navigation: null | Readonly<{
         relativeRoot: 'navigation';
+        relationshipManifestHash?: string;
     }>;
 }
 

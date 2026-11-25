@@ -694,3 +694,162 @@ test('a file failure while delta embedding is in flight fails the sync only afte
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
+
+test('publication navigation validation uses shard checksums without hydrating graph and rejects tampered shards/manifests', async () => {
+    const crypto = await import('node:crypto');
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-nav-checksum-pub-'));
+    const root = path.join(tempRoot, 'repo');
+    writeFile(root, 'main.py', 'def helper():\n    return 1\n\ndef main():\n    return helper()\n');
+    const navigationStore = new JsonNavigationStore();
+    const fixture = createContext(path.join(tempRoot, 'vectors'), navigationStore);
+    try {
+        await fixture.context.indexCodebase(root);
+        const publication = fixture.context.getCurrentPublication(root);
+        assert.ok(publication);
+        assert.ok(publication.publication.navigation?.relationshipManifestHash);
+
+        const navAddress = fixture.context.getPublicationNavigationAddress(publication);
+        assert.ok(navAddress);
+        const registry = await navigationStore.getManifest({
+            normalizedRootPath: publication.publication.canonicalRoot,
+            publicationId: navAddress.publicationId,
+            navigationRoot: navAddress.navigationRoot,
+        });
+        assert.equal(registry.status, 'ok');
+        if (registry.status !== 'ok') return;
+
+        // Cold validation succeeds without hydrating the relationship graph.
+        assert.equal(await fixture.context.getPublicationNavigationStatus(publication), 'valid');
+        assert.equal(
+            navigationStore.hasResidentRelationships({
+                normalizedRootPath: publication.publication.canonicalRoot,
+                publicationId: navAddress.publicationId,
+                navigationRoot: navAddress.navigationRoot,
+                expectedSymbolRegistryManifestHash: registry.manifestHash,
+            }),
+            false,
+        );
+
+        // Legacy Publication with relationshipManifestHash stripped validates via fallback.
+        const legacyRef = {
+            ...publication,
+            publication: {
+                ...publication.publication,
+                navigation: { relativeRoot: 'navigation' as const },
+            },
+        };
+        const legacyStore = new JsonNavigationStore();
+        const legacyFixture = createContext(path.join(tempRoot, 'vectors'), legacyStore);
+        try {
+            assert.equal(await legacyFixture.context.getPublicationNavigationStatus(legacyRef), 'valid');
+            assert.equal(
+                legacyStore.hasResidentRelationships({
+                    normalizedRootPath: publication.publication.canonicalRoot,
+                    publicationId: navAddress.publicationId,
+                    navigationRoot: navAddress.navigationRoot,
+                    expectedSymbolRegistryManifestHash: registry.manifestHash,
+                }),
+                true,
+            );
+        } finally {
+            await legacyFixture.context.dispose();
+            await legacyFixture.database.close();
+        }
+
+        // Same-size shard byte flip -> 'corrupt'.
+        const byFileDir = path.join(navAddress.navigationRoot, 'relationships', 'by-file');
+        const shardFile = fs.readdirSync(byFileDir)[0]!;
+        const shardPath = path.join(byFileDir, shardFile);
+        const originalShard = fs.readFileSync(shardPath);
+        const flippedShard = Buffer.from(originalShard);
+        flippedShard[0] = flippedShard[0]! ^ 0x01;
+        fs.writeFileSync(shardPath, flippedShard);
+        const flippedStore = new JsonNavigationStore();
+        const flippedFixture = createContext(path.join(tempRoot, 'vectors'), flippedStore);
+        try {
+            assert.equal(await flippedFixture.context.getPublicationNavigationStatus(publication), 'corrupt');
+        } finally {
+            await flippedFixture.context.dispose();
+            await flippedFixture.database.close();
+        }
+
+        // Tampered manifest with recomputed shard checksum -> 'corrupt' (fails publication binding).
+        const manifestPath = path.join(navAddress.navigationRoot, 'relationships', 'manifest.json');
+        const originalManifest = fs.readFileSync(manifestPath, 'utf8');
+        const parsedManifest = JSON.parse(originalManifest) as {
+            files: Array<{ shardPath: string; shardBytes?: number; shardSha256?: string }>;
+        };
+        const targetEntry = parsedManifest.files.find((entry) => entry.shardPath.endsWith(shardFile))!;
+        targetEntry.shardBytes = flippedShard.length;
+        targetEntry.shardSha256 = crypto.createHash('sha256').update(flippedShard).digest('hex');
+        fs.writeFileSync(manifestPath, JSON.stringify(parsedManifest, null, 2));
+        const tamperedStore = new JsonNavigationStore();
+        const tamperedFixture = createContext(path.join(tempRoot, 'vectors'), tamperedStore);
+        try {
+            assert.equal(await tamperedFixture.context.getPublicationNavigationStatus(publication), 'corrupt');
+        } finally {
+            await tamperedFixture.context.dispose();
+            await tamperedFixture.database.close();
+        }
+
+        // Restore original shard + manifest before testing on-disk publication.json round-trip.
+        fs.writeFileSync(shardPath, originalShard);
+        fs.writeFileSync(manifestPath, originalManifest);
+        // Legacy on-disk publication.json without relationshipManifestHash round-trips and validates via fallback.
+        const descriptorPath = path.join(path.dirname(navAddress.navigationRoot), 'publication.json');
+        const originalDescriptor = fs.readFileSync(descriptorPath, 'utf8');
+        try {
+            const parsedDescriptor = JSON.parse(originalDescriptor) as {
+                navigation: { relativeRoot: 'navigation'; relationshipManifestHash?: string };
+            };
+            delete parsedDescriptor.navigation.relationshipManifestHash;
+            fs.writeFileSync(descriptorPath, `${JSON.stringify(parsedDescriptor, null, 2)}\n`);
+
+            const legacyDiskStore = new JsonNavigationStore();
+            const legacyDiskFixture = createContext(path.join(tempRoot, 'vectors'), legacyDiskStore);
+            try {
+                const reloaded = legacyDiskFixture.context.getCurrentPublication(root);
+                assert.ok(reloaded);
+                assert.equal(reloaded.publication.navigation?.relationshipManifestHash, undefined);
+                assert.equal(await legacyDiskFixture.context.getPublicationNavigationStatus(reloaded), 'valid');
+                assert.equal(
+                    legacyDiskStore.hasResidentRelationships({
+                        normalizedRootPath: publication.publication.canonicalRoot,
+                        publicationId: navAddress.publicationId,
+                        navigationRoot: navAddress.navigationRoot,
+                        expectedSymbolRegistryManifestHash: registry.manifestHash,
+                    }),
+                    true,
+                );
+            } finally {
+                await legacyDiskFixture.context.dispose();
+                await legacyDiskFixture.database.close();
+            }
+
+            // Malformed navigation.relationshipManifestHash on disk is rejected by parsePublication.
+            for (const badHash of ['A'.repeat(64), 'not-hex', 123]) {
+                const badDescriptor = JSON.parse(originalDescriptor) as {
+                    navigation: { relativeRoot: 'navigation'; relationshipManifestHash?: unknown };
+                };
+                badDescriptor.navigation.relationshipManifestHash = badHash;
+                fs.writeFileSync(descriptorPath, `${JSON.stringify(badDescriptor, null, 2)}\n`);
+                const badFixture = createContext(path.join(tempRoot, 'vectors'), new JsonNavigationStore());
+                try {
+                    await assert.rejects(
+                        badFixture.context.getCurrentPublicationForValidation(root),
+                        /Invalid Publication descriptor/,
+                    );
+                } finally {
+                    await badFixture.context.dispose();
+                    await badFixture.database.close();
+                }
+            }
+        } finally {
+            fs.writeFileSync(descriptorPath, originalDescriptor);
+        }
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});

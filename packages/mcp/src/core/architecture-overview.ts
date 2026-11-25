@@ -20,6 +20,9 @@ import {
 
 export type ArchitectureOverviewScope = "runtime" | "all";
 
+/** Maximum serialized architecture_overview response size (UTF-8 bytes of the MCP JSON payload). */
+export const ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES = 20 * 1024;
+
 export interface ArchitectureOverviewArea {
     area: string;
     fileCount: number;
@@ -177,6 +180,8 @@ export interface ArchitectureOverviewResult {
         constructCoverage: ResolutionConstructCoverage[];
     };
     packageArchitecture: ArchitectureOverviewPackageArchitecture;
+    responseTruncated?: boolean;
+    truncatedSections?: string[];
 }
 
 function normalizeFile(file: string): string {
@@ -817,7 +822,7 @@ export function buildArchitectureOverview(input: {
         cycleRule: "strongly_connected_owned_package_boundary_graph_excluding_unowned",
     };
 
-    return {
+    return boundArchitectureOverviewResult({
         basis: "publication_navigation",
         scope: input.scope,
         coverage: {
@@ -857,5 +862,145 @@ export function buildArchitectureOverview(input: {
             constructCoverage,
         },
         packageArchitecture,
+    });
+}
+
+function longestFittingCount(total: number, fitsCount: (count: number) => boolean): number {
+    let low = 0;
+    let high = total;
+    while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (fitsCount(mid)) low = mid;
+        else high = mid - 1;
+    }
+    return low;
+}
+
+/**
+ * Bound an `architecture_overview` result (or response envelope) to `maxBytes`
+ * UTF-8 bytes by deterministically trimming bounded sections and marking
+ * affected truncation flags without mutating the input object.
+ */
+export function boundArchitectureOverviewResult<T extends ArchitectureOverviewResult>(
+    payload: T,
+    maxBytes = ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES,
+): T {
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= maxBytes) {
+        return payload;
+    }
+
+    const truncatedSet = new Set<string>(payload.truncatedSections ?? []);
+    const working: T = {
+        ...payload,
+        relationshipEvidence: {
+            ...payload.relationshipEvidence,
+            constructCoverage: [...payload.relationshipEvidence.constructCoverage],
+        },
+        packageArchitecture: {
+            ...payload.packageArchitecture,
+            cargoWorkspaces: [...payload.packageArchitecture.cargoWorkspaces],
+            packages: [...payload.packageArchitecture.packages],
+            boundaries: [...payload.packageArchitecture.boundaries],
+            fanIn: [...payload.packageArchitecture.fanIn],
+            fanOut: [...payload.packageArchitecture.fanOut],
+            cycles: [...payload.packageArchitecture.cycles],
+        },
+        responseTruncated: true,
+        truncatedSections: [...truncatedSet],
     };
+
+    const fits = (): boolean => Buffer.byteLength(JSON.stringify(working), "utf8") <= maxBytes;
+    const markTruncated = (section: string): void => {
+        if (truncatedSet.has(section)) return;
+        truncatedSet.add(section);
+        working.truncatedSections = [...truncatedSet];
+    };
+
+    type TrimStage = {
+        section: string;
+        getLength: () => number;
+        truncateTo: (count: number) => void;
+        onTrimmed?: () => void;
+    };
+
+    const makeStage = <Item>(
+        section: string,
+        getArray: () => readonly Item[],
+        setArray: (next: Item[]) => void,
+        onTrimmed?: () => void,
+    ): TrimStage => {
+        const original = [...getArray()];
+        return {
+            section,
+            getLength: () => getArray().length,
+            truncateTo: (count) => setArray(original.slice(0, count)),
+            onTrimmed,
+        };
+    };
+
+    const stages: TrimStage[] = [
+        makeStage("entryCandidates", () => working.entryCandidates, (next) => {
+            working.entryCandidates = next;
+        }, () => {
+            working.entryCandidatesTruncated = true;
+        }),
+        makeStage("cycles", () => working.cycles, (next) => {
+            working.cycles = next;
+        }, () => {
+            working.cyclesTruncated = true;
+        }),
+        makeStage("packageArchitecture.cycles", () => working.packageArchitecture.cycles, (next) => {
+            working.packageArchitecture.cycles = next;
+        }, () => {
+            working.packageArchitecture.cyclesTruncated = true;
+        }),
+        makeStage("hotspots", () => working.hotspots, (next) => {
+            working.hotspots = next;
+        }),
+        makeStage("boundaries", () => working.boundaries, (next) => {
+            working.boundaries = next;
+        }),
+        makeStage("packageArchitecture.boundaries", () => working.packageArchitecture.boundaries, (next) => {
+            working.packageArchitecture.boundaries = next;
+        }),
+        makeStage("fanIn", () => working.fanIn, (next) => {
+            working.fanIn = next;
+        }),
+        makeStage("fanOut", () => working.fanOut, (next) => {
+            working.fanOut = next;
+        }),
+        makeStage("packageArchitecture.fanIn", () => working.packageArchitecture.fanIn, (next) => {
+            working.packageArchitecture.fanIn = next;
+        }),
+        makeStage("packageArchitecture.fanOut", () => working.packageArchitecture.fanOut, (next) => {
+            working.packageArchitecture.fanOut = next;
+        }),
+        makeStage("areas", () => working.areas, (next) => {
+            working.areas = next;
+        }),
+        makeStage("packageArchitecture.packages", () => working.packageArchitecture.packages, (next) => {
+            working.packageArchitecture.packages = next;
+        }),
+        makeStage("packageArchitecture.cargoWorkspaces", () => working.packageArchitecture.cargoWorkspaces, (next) => {
+            working.packageArchitecture.cargoWorkspaces = next;
+        }),
+        makeStage("relationshipEvidence.constructCoverage", () => working.relationshipEvidence.constructCoverage, (next) => {
+            working.relationshipEvidence.constructCoverage = next;
+        }),
+    ];
+
+    for (const stage of stages) {
+        if (fits()) break;
+        const initialLength = stage.getLength();
+        if (initialLength === 0) continue;
+        markTruncated(stage.section);
+        stage.onTrimmed?.();
+        const kept = longestFittingCount(initialLength, (candidate) => {
+            stage.truncateTo(candidate);
+            return fits();
+        });
+        stage.truncateTo(kept);
+    }
+
+    return working;
 }

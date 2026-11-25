@@ -383,6 +383,7 @@ export class ToolHandlers {
                 codebasePath: string,
                 reason: AutomaticReindexReason,
             ) => Promise<AutomaticReindexScheduleResult>;
+            reclaimIdleMemoryForMutation?: () => Promise<void>;
         },
     ) {
         this.context = context;
@@ -615,6 +616,9 @@ export class ToolHandlers {
             evaluateReindexPreflight: this.evaluateReindexPreflight.bind(this),
             assertIndexMutationCapabilities: this.assertIndexMutationCapabilities.bind(this),
             ownDetachedMutationCompletion: options?.ownDetachedMutationCompletion ?? (() => undefined),
+            ...(options?.reclaimIdleMemoryForMutation
+                ? { reclaimIdleMemoryForMutation: options.reclaimIdleMemoryForMutation }
+                : {}),
         };
         this.manageIndexingHandlers = new ManageIndexingHandlers(manageIndexingHandlersHost);
         const searchContext = this.context;

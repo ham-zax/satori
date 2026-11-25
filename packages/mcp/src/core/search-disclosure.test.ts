@@ -59,7 +59,7 @@ function buildEnvelope(
     };
 }
 
-test("default disclosure shows twenty groups and retains the rest for custom continuation pages", () => {
+test("default disclosure shows eight groups and retains the rest for custom continuation pages", () => {
     const capabilities = new CapabilityResolver({
         name: "test", version: "1", stateRoot: os.tmpdir(), executionProfile: "offline", networkPolicy: { kind: "local-only" },
         vectorStoreProvider: "LanceDB", encoderProvider: "Potion", encoderModel: "pinned-potion",
@@ -71,17 +71,17 @@ test("default disclosure shows twenty groups and retains the rest for custom con
         disclosureLimit: policy.disclosureResultLimit, maxResponseBytes: 48 * 1024,
         includeSummary: true, buildEnvelope,
     });
-    assert.equal(first.results.length, 20);
+    assert.equal(first.results.length, 8);
     assert.equal(resolveSearchGroupedResultCounts({
         requestedTotal: policy.retrievalResultLimit, availableGroupCount: orderedResults.length,
         returnedGroupCount: first.results.length,
-    }).remainingGroupCount, 40);
+    }).remainingGroupCount, 52);
     const next = projectGroupedDisclosure({
-        orderedResults: orderedResults.slice(first.results.length), callerLimit: 40,
+        orderedResults: orderedResults.slice(first.results.length), callerLimit: 52,
         disclosureLimit: 35, maxResponseBytes: 48 * 1024, includeSummary: true, buildEnvelope,
     });
     assert.equal(next.results.length, 35);
-    assert.deepEqual(next.results.map(entry => entry.target.file), orderedResults.slice(20, 55).map(entry => entry.target.file));
+    assert.deepEqual(next.results.map(entry => entry.target.file), orderedResults.slice(8, 43).map(entry => entry.target.file));
 });
 
 test("grouped disclosure preserves the unannotated baseline when no boundary applies", () => {

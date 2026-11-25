@@ -300,6 +300,16 @@ test('Potion releases an idle worker and restarts it on the next request', async
     assert.equal(third.length, 1);
     assert.equal(internals.state, 'ready');
     assert.notEqual(workerPid(), firstPid);
+
+    const secondPid = workerPid();
+    await embedding.releaseIdleWorker();
+    assert.equal(internals.state, 'idle');
+    assert.equal(workerPid(), undefined);
+
+    const fourth = await embedding.embedQuery('before idle');
+    assert.deepEqual(fourth, first);
+    assert.equal(internals.state, 'ready');
+    assert.notEqual(workerPid(), secondPid);
 });
 
 test('Potion provider batches on one bounded worker and preserves input order', async (t) => {

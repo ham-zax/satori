@@ -14,7 +14,7 @@ test('search policy separates an unbounded logical total from the frozen candida
     }), {
         retrievalResultLimit: 200,
         rerankerResultLimit: 200,
-        disclosureResultLimit: 20,
+        disclosureResultLimit: 8,
         candidateLimit: 80,
         maxCandidateLimit: 80,
         maxAttempts: 1,
@@ -100,11 +100,11 @@ test('resolveSearchPolicy separates retrieval, reranker, and disclosure budgets'
     );
 });
 
-test('resolveSearchPolicy discloses twenty by default and preserves a custom page size', () => {
+test('resolveSearchPolicy discloses eight by default and preserves a custom page size', () => {
     assert.equal(resolveSearchPolicy({
         resultLimit: 20,
         hasMustOperators: false,
-    }).disclosureResultLimit, 20);
+    }).disclosureResultLimit, 8);
     assert.equal(resolveSearchPolicy({
         resultLimit: 20,
         disclosureResultLimit: 20,

@@ -18,7 +18,7 @@ const architectureOverviewInputSchema = z.object({
     scope: z.enum(["runtime", "all"]).optional().meta({ default: "runtime" }).describe(
         "runtime excludes tests, documentation, generated/fixture/artifact paths, scripts/tooling, examples, benchmarks, and experiments. all includes every published non-file symbol.",
     ),
-    limit: z.number().int().min(1).max(50).optional().meta({ default: 15 }).describe(
+    limit: z.number().int().min(1).max(50).optional().meta({ default: 8 }).describe(
         "Maximum rows returned for each bounded section: areas, boundaries, fan-in, fan-out, hotspots, entry candidates, cycles, packages, package boundaries, package fan-in/fan-out, and package cycles.",
     ),
     subtree: repoRelativePathPrefixSchema(
@@ -109,7 +109,7 @@ export const architectureOverviewTool: McpTool = {
         return executionContext.context.toolHandlers.handleArchitectureOverview({
             path: authorizedRoot,
             scope: parsed.data.scope ?? "runtime",
-            limit: parsed.data.limit ?? 15,
+            limit: parsed.data.limit ?? 8,
             ...(parsed.data.subtree ? { subtree: parsed.data.subtree } : {}),
             ...(parsed.data.excludePaths ? { excludePaths: parsed.data.excludePaths } : {}),
         });

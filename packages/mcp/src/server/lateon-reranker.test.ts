@@ -1398,3 +1398,43 @@ test("LateOn rerank serves repeated query and document pairs from cache without 
         cold.find((row) => row.index === 0)?.relevanceScore,
     );
 });
+
+test("LateOn releaseIdleWorker terminates an idle worker, respawns on next rerank, and is a no-op while busy or queued", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-release-idle-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, { pidLogPath }),
+        idleShutdownMs: 60_000,
+    });
+    t.after(() => reranker.close());
+
+    await reranker.waitUntilReady();
+    await waitForWorkerAttempts(pidLogPath, 1);
+    const [firstPid] = readWorkerPids(pidLogPath);
+    assert.equal(reranker.getOperationalState(), "ready");
+
+    // In-flight and queued reranks must ignore releaseIdleWorker().
+    const inFlight = reranker.rerank("slow:80", ["alpha", "beta"]);
+    const queued = reranker.rerank("fast", ["alpha", "beta"]);
+    await waitForOperationalSnapshot(reranker, (snapshot) => snapshot.activeRequest && snapshot.queuedRequest);
+    await reranker.releaseIdleWorker();
+    assert.equal(reranker.getOperationalState(), "ready");
+    assert.equal(readWorkerPids(pidLogPath).length, 1);
+    await Promise.all([inFlight, queued]);
+
+    // Once idle, releaseIdleWorker() terminates the worker and moves state to idle.
+    await reranker.releaseIdleWorker();
+    assert.equal(reranker.getOperationalState(), "idle");
+    assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+    assert.throws(() => process.kill(firstPid!, 0), { code: "ESRCH" });
+
+    // Next rerank transparently respawns a fresh worker and succeeds.
+    const ranked = await reranker.rerank("respawn check", ["short", "much longer doc"]);
+    assert.equal(ranked.length, 2);
+    assert.equal(ranked[0]?.index, 1);
+    assert.equal(readWorkerPids(pidLogPath).length, 2);
+    assert.notEqual(readWorkerPids(pidLogPath)[1], firstPid);
+});

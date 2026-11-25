@@ -304,6 +304,7 @@ export class PotionEmbedding extends Embedding {
     private restart: Promise<void> | null = null;
     private readonly pending = new Map<string, PendingRequest>();
     private pendingItemsCount = 0;
+    private activeOperations = 0;
     private child: ChildProcessWithoutNullStreams | null = null;
     private state: WorkerState = 'starting';
     private stdoutBuffer = Buffer.alloc(0);
@@ -361,24 +362,27 @@ export class PotionEmbedding extends Embedding {
 
     private scheduleIdleShutdown(): void {
         this.clearIdleShutdown();
-        if (this.idleShutdownMs <= 0 || this.state !== 'ready' || this.pending.size > 0) return;
+        if (this.idleShutdownMs <= 0 || this.state !== 'ready' || this.activeOperations > 0 || this.pending.size > 0) return;
         this.idleShutdownTimer = setTimeout(() => {
             this.idleShutdownTimer = null;
-            this.releaseIdleWorker();
+            void this.releaseIdleWorker();
         }, this.idleShutdownMs);
         this.idleShutdownTimer.unref?.();
     }
 
-    private releaseIdleWorker(): void {
+    public async releaseIdleWorker(): Promise<void> {
         const child = this.child;
-        if (this.state !== 'ready' || this.pending.size > 0 || !child) return;
-        this.child = null;
-        this.state = 'idle';
-        this.stdoutBuffer = Buffer.alloc(0);
-        this.frameScan = { index: 0, depth: 0, inString: false, escaped: false };
-        this.idleRelease = this.stopChild(child, true).finally(() => {
-            this.idleRelease = null;
-        });
+        if (this.state === 'ready' && this.activeOperations === 0 && this.pending.size === 0 && child) {
+            this.clearIdleShutdown();
+            this.child = null;
+            this.state = 'idle';
+            this.stdoutBuffer = Buffer.alloc(0);
+            this.frameScan = { index: 0, depth: 0, inString: false, escaped: false };
+            this.idleRelease = this.stopChild(child, true).finally(() => {
+                this.idleRelease = null;
+            });
+        }
+        await this.idleRelease;
     }
 
     private async stopChild(child: ChildProcessWithoutNullStreams, requestShutdown: boolean): Promise<void> {
@@ -872,8 +876,16 @@ export class PotionEmbedding extends Embedding {
     }
 
     async embedQuery(text: string): Promise<EmbeddingVector> {
-        await this.ensureStarted();
-        return this.validateResponse(await this.request('query', text));
+        this.activeOperations += 1;
+        try {
+            await this.ensureStarted();
+            return this.validateResponse(await this.request('query', text));
+        } finally {
+            this.activeOperations -= 1;
+            if (this.activeOperations === 0 && this.pending.size === 0) {
+                this.scheduleIdleShutdown();
+            }
+        }
     }
 
     async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
@@ -924,13 +936,21 @@ export class PotionEmbedding extends Embedding {
         }
         if (currentTexts.length > 0) closeSubbatch();
 
-        await this.ensureStarted();
-        const results: EmbeddingVector[] = [];
-        for (const subbatch of subbatches) {
-            const response = await this.requestBatchFrame(subbatch.id, subbatch.frame, subbatch.texts.length);
-            results.push(...this.validateBatchResponse(response, subbatch.texts.length));
+        this.activeOperations += 1;
+        try {
+            await this.ensureStarted();
+            const results: EmbeddingVector[] = [];
+            for (const subbatch of subbatches) {
+                const response = await this.requestBatchFrame(subbatch.id, subbatch.frame, subbatch.texts.length);
+                results.push(...this.validateBatchResponse(response, subbatch.texts.length));
+            }
+            return results;
+        } finally {
+            this.activeOperations -= 1;
+            if (this.activeOperations === 0 && this.pending.size === 0) {
+                this.scheduleIdleShutdown();
+            }
         }
-        return results;
     }
 
     getDimension(): number {

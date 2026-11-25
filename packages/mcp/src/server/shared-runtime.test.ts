@@ -651,3 +651,78 @@ test("runtime activity includes local sync lifecycle operations", async (t) => {
     assert.equal(localSyncManager.getActiveLifecycleOperationCount(), 0);
     assert.deepEqual(host.getActivity(), { sessions: 0, operations: 0 });
 });
+
+test("session ToolHandlers and localHandlers wire reclaimIdleMemoryForMutation to ProviderRuntime", async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-reclaim-"));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    const runtimeConfig = config();
+    const host = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, 1024),
+        "cli",
+    );
+    t.after(async () => {
+        await host.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+
+    let reclaimCalls = 0;
+    const providerRuntime = host.getProviderRuntime();
+    const resources = host.createSessionResources(
+        host.createSearchContinuationCoordinator(),
+        createSessionWorkspacePolicy({
+            roots: [path.join(stateRoot, "workspace")],
+            homeDirectory: os.homedir(),
+            stateRoot,
+        }),
+    );
+
+    t.mock.method(providerRuntime, "requireToolContext", async () => ({
+        context: resources.toolContext.context,
+        syncManager: resources.toolContext.syncManager,
+        runtimeFingerprint: resources.toolContext.runtimeFingerprint,
+        capabilities: resources.toolContext.capabilities,
+        reranker: null,
+        runtimeOwnerGate: resources.toolContext.runtimeOwnerGate,
+        readFileMaxBytes: resources.toolContext.readFileMaxBytes,
+    }));
+
+    const sessionContext = await resources.providerRuntime.requireToolContext("embedding_vector");
+    assert.ok("toolHandlers" in sessionContext);
+
+    for (const handlers of [sessionContext.toolHandlers, resources.localHandlers]) {
+        const controller = new AbortController();
+        t.mock.method(providerRuntime, "reclaimIdleMemoryForMutation", async () => {
+            reclaimCalls += 1;
+            controller.abort(new Error("aborted_after_reclaim"));
+        });
+        const runner = (handlers as unknown as {
+            manageIndexingHandlers: {
+                createSupervisedCandidateRunner: (
+                    execution: { id: string; signal: AbortSignal },
+                    action: "create" | "reindex",
+                ) => (input: Record<string, unknown>) => Promise<unknown>;
+            };
+        }).manageIndexingHandlers.createSupervisedCandidateRunner(
+            { id: "op-session-reclaim", signal: controller.signal },
+            "create",
+        );
+
+        await assert.rejects(
+            runner({
+                codebasePath: path.join(stateRoot, "workspace"),
+                forceReindex: false,
+                indexPolicy: {},
+                deferPartialPublication: false,
+                onSourceScanCompleted: () => undefined,
+                onProgress: () => undefined,
+            }),
+            /aborted_after_reclaim/,
+        );
+    }
+
+    assert.equal(reclaimCalls, 2);
+});

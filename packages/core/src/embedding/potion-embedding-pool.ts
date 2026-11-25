@@ -156,6 +156,14 @@ export class PotionEmbeddingPool extends Embedding {
         };
     }
 
+    async releaseIdleWorker(): Promise<void> {
+        await Promise.all(
+            this.members
+                .filter((_, index) => this.inFlight[index] === 0)
+                .map(member => member.releaseIdleWorker()),
+        );
+    }
+
     override async close(): Promise<void> {
         this.closed = true;
         await this.growing;

@@ -27,7 +27,9 @@ import {
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
 import {
+    ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES,
     ArchitecturePackageOwnershipError,
+    boundArchitectureOverviewResult,
     buildArchitectureOverview,
     type ArchitectureOverviewResult,
     type ArchitectureOverviewScope,
@@ -934,7 +936,7 @@ export class NavigationHandlers {
         const scope: ArchitectureOverviewScope = args.scope === "all" ? "all" : "runtime";
         const limit = Number.isFinite(args.limit)
             ? Math.max(1, Math.min(50, Math.floor(Number(args.limit))))
-            : 15;
+            : 8;
         const subtree = typeof args.subtree === "string" ? args.subtree : undefined;
         const excludePaths = Array.isArray(args.excludePaths)
             ? args.excludePaths.filter((value): value is string => typeof value === "string")
@@ -2843,19 +2845,20 @@ export class NavigationHandlers {
         const warnings = input.freshnessDecision
             ? buildFreshnessWarningCodes(input.freshnessDecision)
             : [];
+        const payload = boundArchitectureOverviewResult({
+            status: "ok",
+            path: input.requestedRoot,
+            publicationId: input.publicationId,
+            ...input.overview,
+            ...(input.freshnessDecision?.sourceFreshness
+                ? { sourceFreshness: input.freshnessDecision.sourceFreshness }
+                : {}),
+            ...(warnings.length > 0 ? { warnings } : {}),
+        }, ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES);
         return {
             content: [{
                 type: "text",
-                text: this.host.stringifyToolJson({
-                    status: "ok",
-                    path: input.requestedRoot,
-                    publicationId: input.publicationId,
-                    ...input.overview,
-                    ...(input.freshnessDecision?.sourceFreshness
-                        ? { sourceFreshness: input.freshnessDecision.sourceFreshness }
-                        : {}),
-                    ...(warnings.length > 0 ? { warnings } : {}),
-                }),
+                text: this.host.stringifyToolJson(payload),
             }],
         };
     }

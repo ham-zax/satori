@@ -205,6 +205,7 @@ export class LateOnReranker implements Reranker {
     private readonly pending = new Map<number, PendingWorkerRequest>();
     private nextRequestId = 1;
     private active = false;
+    private activeRerankCalls = 0;
     private activeRequest: QueuedRerank | null = null;
     private activeTask: Promise<void> | null = null;
     private readonly queue: QueuedRerank[] = [];
@@ -393,10 +394,14 @@ export class LateOnReranker implements Reranker {
         this.idleShutdownTimer.unref();
     }
 
-    private async releaseIdleWorker(): Promise<void> {
+    public async releaseIdleWorker(): Promise<void> {
+        if (this.termination) {
+            await this.termination;
+        }
         if (
             this.closed
             || this.active
+            || this.activeRerankCalls > 0
             || this.queue.length > 0
             || this.pending.size > 0
             || this.workerState !== "ready"
@@ -405,6 +410,7 @@ export class LateOnReranker implements Reranker {
         ) {
             return;
         }
+        this.clearIdleShutdown();
         const worker = this.worker;
         this.worker = null;
         this.workerState = "idle";
@@ -448,51 +454,56 @@ export class LateOnReranker implements Reranker {
         if (signal?.aborted) {
             throw operationalError("lateon_cancelled", "LateOn rerank was cancelled.");
         }
-        if (this.workerState !== "ready") {
-            if (this.terminalBootstrapFailure) {
-                throw this.terminalBootstrapFailure;
+        this.activeRerankCalls += 1;
+        try {
+            if (this.workerState !== "ready") {
+                if (this.terminalBootstrapFailure) {
+                    throw this.terminalBootstrapFailure;
+                }
+                await this.waitUntilReadyOrCancelled(signal);
             }
-            await this.waitUntilReadyOrCancelled(signal);
-        }
-        if (this.active && this.queue.length >= LATEON_MAXIMUM_QUEUED_REQUESTS) {
-            throw operationalError(
-                "lateon_not_ready",
-                `LateOn rerank queue is full (${LATEON_MAXIMUM_QUEUED_REQUESTS} waiting requests).`,
-            );
-        }
-        this.clearIdleShutdown();
+            if (this.active && this.queue.length >= LATEON_MAXIMUM_QUEUED_REQUESTS) {
+                throw operationalError(
+                    "lateon_not_ready",
+                    `LateOn rerank queue is full (${LATEON_MAXIMUM_QUEUED_REQUESTS} waiting requests).`,
+                );
+            }
+            this.clearIdleShutdown();
 
-        const offeredAt = Date.now();
-        let submittedRequest!: QueuedRerank;
-        const result = new Promise<RerankResult[]>((resolve, reject) => {
-            const request: QueuedRerank = {
-                query,
-                documents: [...documents],
-                identities,
-                offeredAt,
-                resolve,
-                reject,
-                ...(signal ? { signal } : {}),
-                ...(options.onExecutionDiagnostics
-                    ? { onExecutionDiagnostics: options.onExecutionDiagnostics }
-                    : {}),
-            };
-            submittedRequest = request;
-            if (signal) {
-                request.abortListener = () => this.cancelRequest(request);
-                signal.addEventListener("abort", request.abortListener, { once: true });
-            }
-            if (!this.active) {
-                this.startExecution(request);
-                return;
-            }
-            this.queue.push(request);
-        });
-        return result.finally(() => {
-            if (signal && submittedRequest.abortListener) {
-                signal.removeEventListener("abort", submittedRequest.abortListener);
-            }
-        });
+            const offeredAt = Date.now();
+            let submittedRequest!: QueuedRerank;
+            const result = new Promise<RerankResult[]>((resolve, reject) => {
+                const request: QueuedRerank = {
+                    query,
+                    documents: [...documents],
+                    identities,
+                    offeredAt,
+                    resolve,
+                    reject,
+                    ...(signal ? { signal } : {}),
+                    ...(options.onExecutionDiagnostics
+                        ? { onExecutionDiagnostics: options.onExecutionDiagnostics }
+                        : {}),
+                };
+                submittedRequest = request;
+                if (signal) {
+                    request.abortListener = () => this.cancelRequest(request);
+                    signal.addEventListener("abort", request.abortListener, { once: true });
+                }
+                if (!this.active) {
+                    this.startExecution(request);
+                    return;
+                }
+                this.queue.push(request);
+            });
+            return await result.finally(() => {
+                if (signal && submittedRequest.abortListener) {
+                    signal.removeEventListener("abort", submittedRequest.abortListener);
+                }
+            });
+        } finally {
+            this.activeRerankCalls -= 1;
+        }
     }
 
     private createReadinessPromise(): Promise<void> {

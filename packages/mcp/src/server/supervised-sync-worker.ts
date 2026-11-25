@@ -208,6 +208,15 @@ export class SyncWorkerStandby {
             .map(([, completion]) => completion));
     }
 
+    /** Retires any unused standby worker without closing this standby manager. */
+    async releaseIdleStandby(): Promise<void> {
+        this.pendingRoot = undefined;
+        this.clearIdleTimer();
+        const current = this.standby;
+        if (current) this.discard(current, "sync_standby_idle_reclaim");
+        await Promise.all(this.retiring.values());
+    }
+
     /** Hands the standby for `codebasePath` to one execution, if it is live. */
     take(codebasePath: string): SyncWorkerProcess | undefined {
         const current = this.standby;

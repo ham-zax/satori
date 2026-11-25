@@ -480,7 +480,7 @@ test('search_codebase keeps a default continuation pool and accepts custom total
             const response = await searchCodebaseTool.execute({ path: '/repo', query: 'auth ownership', ...options }, ctx);
             assert.equal(response.isError, undefined);
         }
-        assert.deepEqual(calls.map(call => call.limit), [200, 200, 90, 20]);
+        assert.deepEqual(calls.map(call => call.limit), [200, 200, 90, 8]);
         assert.deepEqual(calls.map(call => call.disclosureLimit), [undefined, 35, 12, undefined]);
     }
 });

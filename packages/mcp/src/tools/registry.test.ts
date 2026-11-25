@@ -158,7 +158,7 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.equal(properties.limit.maximum, Number.MAX_SAFE_INTEGER);
     assert.match(String(properties.limit.description), /grouped mode: total frozen result-set bound across continuation pages/i);
     assert.equal(properties.disclosureLimit.maximum, 200);
-    assert.match(String(properties.disclosureLimit.description), /page size only, default 20/i);
+    assert.match(String(properties.disclosureLimit.description), /page size only, default 8/i);
     assert.match(String(properties.limit.description), /raw mode: maximum returned chunk count/i);
     assert.match(String(properties.disclosureLimit.description), /limit=100 and disclosureLimit=20 returns up to 20 initially and freezes up to 100 total/i);
     assert.deepEqual(properties.debugMode.enum, ['summary', 'ranking', 'freshness', 'full']);

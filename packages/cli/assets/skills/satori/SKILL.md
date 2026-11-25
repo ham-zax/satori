@@ -31,6 +31,12 @@ ownership, behavior location, or related implementation is not yet known.
 4. Use `continue_search` only with a returned continuation handle and its exact
    `nextOffset`; it pages the same frozen ranking and never searches again.
 5. Before editing, read the implementation and its call sites.
+6. Keep parallel `search_codebase` calls to 1–3 focused queries (using `alt_terms`
+   up to 4 grounded terms); local reranking serializes concurrent searches,
+   whereas `read_file`, `file_outline`, and `find_references` parallelize cheaply.
+7. When line numbers are already known (from `file_outline` or search), prefer
+   `read_file` with `start_line`/`end_line` (raw source is default) or pass
+   `format="text"` on `open_symbol` when compact text is preferred.
 
 ## Relationships and impact
 

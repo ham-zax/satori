@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+    PackageOwnershipPackage,
     PublicationLease,
     PublicationPackageOwnership,
     RelationshipRecord,
@@ -8,6 +9,7 @@ import type {
     SymbolRecord,
 } from "@satori-code/core";
 import { NavigationHandlers } from "./navigation-handlers.js";
+import { ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES } from "./architecture-overview.js";
 import { architectureOverviewTool } from "../tools/architecture_overview.js";
 import type { ToolContext } from "../tools/types.js";
 import { createSessionWorkspacePolicy } from "./session-workspace-policy.js";
@@ -343,4 +345,124 @@ test("architecture overview cache misses when the Publication or manifest witnes
     fixture.setManifestHash("manifest-1");
     await fixture.handler.handleArchitectureOverview(request);
     assert.equal(fixture.resolutionClaimLoads(), 3);
+});
+
+test("architecture overview bounds the wrapped MCP envelope to 20 KiB when freshness/path metadata pushes it over", async () => {
+    const symbols: SymbolRecord[] = [];
+    const relationships: RelationshipRecord[] = [];
+    const packages: PackageOwnershipPackage[] = [];
+    const ownershipFiles: Array<{ path: string; packageRoot: string }> = [];
+
+    for (let index = 0; index < 32; index += 1) {
+        const tag = String(index).padStart(2, "0");
+        const packageRoot = `packages/pkg-${tag}-${"segment-".repeat(4)}`;
+        const entry = {
+            symbolKey: `entry-${tag}-${"x".repeat(50)}`,
+            symbolInstanceId: `entry-${tag}-${"x".repeat(50)}`,
+            language: "typescript",
+            kind: "function",
+            name: `entry_${tag}`,
+            qualifiedName: `entry_${tag}`,
+            label: `function entry_${tag}_${"Long".repeat(6)}()`,
+            file: `${packageRoot}/src/entry.ts`,
+            span: { startLine: 1, endLine: 3 },
+        } as SymbolRecord;
+        const target = {
+            symbolKey: `target-${tag}-${"y".repeat(50)}`,
+            symbolInstanceId: `target-${tag}-${"y".repeat(50)}`,
+            language: "typescript",
+            kind: "function",
+            name: `target_${tag}`,
+            qualifiedName: `target_${tag}`,
+            label: `function target_${tag}_${"Long".repeat(6)}()`,
+            file: `${packageRoot}/src/target.ts`,
+            span: { startLine: 1, endLine: 3 },
+        } as SymbolRecord;
+        symbols.push(entry, target);
+        packages.push({
+            ecosystem: "node",
+            root: packageRoot,
+            manifestPath: `${packageRoot}/package.json`,
+            name: `@scope/pkg-${tag}`,
+            workspaceMember: true,
+        });
+        ownershipFiles.push(
+            { path: entry.file, packageRoot },
+            { path: target.file, packageRoot },
+        );
+        relationships.push({
+            type: "CALLS",
+            sourceInstanceId: entry.symbolInstanceId,
+            targetInstanceId: target.symbolInstanceId,
+            file: entry.file,
+            targetPath: target.file,
+            confidence: "high",
+        } as RelationshipRecord);
+    }
+
+    const longPath = `/repo/${"nested/".repeat(40)}workspace`;
+    const ownership: PublicationPackageOwnership = {
+        schemaVersion: "package_ownership_v2",
+        canonicalRoot: longPath,
+        workspace: null,
+        cargoWorkspaces: [],
+        packages,
+        files: ownershipFiles,
+        controlFiles: [],
+    };
+    const lease: PublicationLease = {
+        id: "publication-envelope-cap",
+        publication: {
+            id: "publication-envelope-cap",
+            canonicalRoot: longPath,
+        },
+        release: () => undefined,
+    } as unknown as PublicationLease;
+    const handler = new NavigationHandlers({
+        prepareNavigationRead: async () => ({
+            ...readyState(),
+            root: {
+                path: longPath,
+                info: { status: "indexed" },
+            },
+            freshnessDecision: {
+                mode: "stale",
+                reason: "pending_sync",
+                sourceFreshness: {
+                    mode: "stale",
+                    reason: "pending_sync",
+                    dirtyFiles: Array.from({ length: 40 }, (_, index) => `packages/dirty/file-${index}-${"x".repeat(40)}.ts`),
+                },
+            },
+        }) as unknown as PreparedNavigationState,
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        getPublicationPackageOwnership: () => ownership,
+        loadPreparedNavigationManifest: async () => ({
+            status: "ok",
+            manifestHash: "manifest-cap",
+            registry: { manifest: { files: ownershipFiles.map((file) => ({ path: file.path })) }, symbols },
+        }),
+        loadPreparedNavigationCompatibility: async () => ({
+            relationships: { status: "ok", manifestHash: "relationships-cap", records: relationships },
+        }),
+        loadPreparedNavigationResolutionClaims: async () => ({ status: "ok", claims: [] }),
+        stringifyToolJson: JSON.stringify,
+    } as unknown as NavigationHandlersHost);
+
+    const response = await handler.handleArchitectureOverview({
+        path: longPath,
+        scope: "all",
+        limit: 32,
+    });
+    const rawText = response.content[0]!.text;
+    assert.ok(
+        Buffer.byteLength(rawText, "utf8") <= ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES,
+        `wrapped MCP envelope exceeded 20 KiB (${Buffer.byteLength(rawText, "utf8")}B)`,
+    );
+    const parsed = JSON.parse(rawText);
+    assert.equal(parsed.status, "ok");
+    assert.equal(parsed.responseTruncated, true);
+    assert.ok(Array.isArray(parsed.truncatedSections) && parsed.truncatedSections.length > 0);
 });

@@ -6,6 +6,7 @@ const MUTATION_OPERATION_ID_ENV = "SATORI_MUTATION_OPERATION_ID";
 const MUTATION_PARENT_PID_ENV = "SATORI_MUTATION_PARENT_PID";
 const DEFAULT_CANCEL_GRACE_MS = 5_000;
 const DEFAULT_TERMINAL_SHUTDOWN_MS = 5_000;
+const DEFAULT_CLEAN_EXIT_DRAIN_MS = 500;
 const PROCESS_GROUP_POLL_MS = 25;
 const PARENT_WATCHDOG_MS = 1_000;
 // Index and sync write and fsync thousands of navigation shards through
@@ -115,6 +116,7 @@ export type SupervisedMutationWorkerOptions = Readonly<{
     noProgressTimeoutMs?: number;
     cancelGraceMs?: number;
     terminalShutdownTimeoutMs?: number;
+    cleanExitDrainMs?: number;
     onHeartbeat?: () => void;
     onProgress?: (progress: MutationWorkerProgress) => void;
     onNoProgress?: () => void;
@@ -275,6 +277,10 @@ export function spawnSupervisedMutationWorker(
     const terminalShutdownTimeoutMs = options.terminalShutdownTimeoutMs ?? DEFAULT_TERMINAL_SHUTDOWN_MS;
     if (!Number.isFinite(terminalShutdownTimeoutMs) || terminalShutdownTimeoutMs <= 0) {
         throw new Error("Mutation worker terminalShutdownTimeoutMs must be positive when provided.");
+    }
+    const cleanExitDrainMs = options.cleanExitDrainMs ?? DEFAULT_CLEAN_EXIT_DRAIN_MS;
+    if (!Number.isFinite(cleanExitDrainMs) || cleanExitDrainMs < 0) {
+        throw new Error("Mutation worker cleanExitDrainMs must be non-negative.");
     }
 
     const parentStartTime = linuxProcessStartTime(process.pid);
@@ -497,6 +503,18 @@ export function spawnSupervisedMutationWorker(
         }
         void (async () => {
             if (terminalCleanupPromise) await terminalCleanupPromise;
+            const cleanExit = terminalMessage?.type === "mutation_worker_completed"
+                && code === 0
+                && signal === null
+                && !cancelRequested
+                && !forced
+                && !terminalShutdownForced;
+            if (cleanExit && cleanExitDrainMs > 0) {
+                const drainDeadline = Date.now() + cleanExitDrainMs;
+                while (isProcessGroupLive(executor.processGroupId) && Date.now() < drainDeadline) {
+                    await delay(Math.min(PROCESS_GROUP_POLL_MS, Math.max(1, drainDeadline - Date.now())));
+                }
+            }
             if (isProcessGroupLive(executor.processGroupId)) {
                 containmentViolation = !cancelRequested && !terminalShutdownForced;
                 await forceAndProveProcessGroupQuiescence(executor.processGroupId);

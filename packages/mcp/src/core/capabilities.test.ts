@@ -31,7 +31,7 @@ test('capability resolver reports a cloud reranker and the frozen result default
 
     assert.equal(resolver.hasReranker(), true);
     assert.equal(resolver.getDefaultSearchLimit(), 200);
-    assert.equal(resolver.getDefaultSearchLimit("raw"), 20);
+    assert.equal(resolver.getDefaultSearchLimit("raw"), 8);
 });
 
 test('capability resolver reports no reranker without a Voyage key', () => {
@@ -49,7 +49,7 @@ test('local embeddings retain the full frozen result pool and use the resolved r
     assert.equal(resolver.getEmbeddingLocality(), 'local');
     assert.equal(resolver.hasReranker(), true);
     assert.equal(resolver.getDefaultSearchLimit(), 200);
-    assert.equal(resolver.getDefaultSearchLimit("raw"), 20);
+    assert.equal(resolver.getDefaultSearchLimit("raw"), 8);
 });
 
 test('offline policy disables cloud reranking even when credentials remain configured', () => {

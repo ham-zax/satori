@@ -180,6 +180,7 @@ class SessionProviderRuntime {
                 requestAutomaticReindex: (codebasePath, reason) => (
                     this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
                 ),
+                reclaimIdleMemoryForMutation: () => this.providerRuntime.reclaimIdleMemoryForMutation(),
             },
         );
         const sessionContext: ToolContext = {
@@ -486,6 +487,7 @@ export class SharedRuntimeHost {
                 requestAutomaticReindex: (codebasePath, reason) => (
                     this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
                 ),
+                reclaimIdleMemoryForMutation: () => this.providerRuntime.reclaimIdleMemoryForMutation(),
             },
         );
         const providerRuntime = new SessionProviderRuntime(

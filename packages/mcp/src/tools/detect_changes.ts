@@ -40,7 +40,7 @@ const inputSchema = z.object({
     path: absoluteFilesystemPathSchema("Absolute indexed repository root, or a directory inside it to limit the diff to that directory."),
     baseRef: z.string().trim().min(1).max(256).default("HEAD").describe("Git commit/ref compared with the tracked working tree, e.g. HEAD~5. Includes staged and unstaged tracked changes; excludes untracked files."),
     depth: z.number().int().min(1).max(3).default(3).describe("Maximum transitive caller depth."),
-    limit: z.number().int().min(1).max(200).default(100).describe("Maximum returned impacted symbols. At most 50 files and 50 seeds are inspected."),
+    limit: z.number().int().min(1).max(200).default(25).describe("Maximum returned impacted symbols. At most 50 files and 50 seeds are inspected."),
 }).strict();
 
 export const detectChangesTool: McpTool = {

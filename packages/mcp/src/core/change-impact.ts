@@ -14,7 +14,7 @@ import { areaForFile } from "./architecture-overview.js";
 import { execReadOnlyGitBuffer, execReadOnlyGitText } from "./read-only-git.js";
 
 /** Maximum serialized detect_changes response size (UTF-8 bytes of the MCP JSON payload). */
-export const DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
+export const DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES = 20 * 1024;
 
 export type ChangeImpactInput = {
     /** Scope of the diff: the root or a directory inside it. */

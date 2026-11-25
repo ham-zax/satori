@@ -218,3 +218,110 @@ process.on('message', message => {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('clean exit with a dying descendant inside cleanExitDrainMs resolves without containment violation', { skip: process.platform !== 'linux' }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-clean-drain-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const descendantPidPath = path.join(root, 'descendant.pid');
+    fs.writeFileSync(workerPath, `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', (message) => {
+    if (message.type !== 'mutation_worker_start') return;
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 60)'], { stdio: 'ignore' });
+    fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));
+    process.send({ type: 'mutation_worker_completed', operationId: message.operationId }, () => process.exit(0));
+});
+`);
+    try {
+        let completed = false;
+        const worker = spawnSupervisedMutationWorker({
+            operationId: 'clean-drain-fixture',
+            workerPath,
+            cleanExitDrainMs: 500,
+            onCompleted: () => { completed = true; },
+        });
+        await worker.ready;
+        worker.start();
+        await withDeadline(worker.completion, 5_000);
+        assert.equal(completed, true);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+        assert.throws(() => process.kill(descendantPid, 0), { code: 'ESRCH' });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('clean exit with a leaked descendant past cleanExitDrainMs fails closed with containment violation', { skip: process.platform !== 'linux' }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-clean-leak-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const descendantPidPath = path.join(root, 'descendant.pid');
+    fs.writeFileSync(workerPath, `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', (message) => {
+    if (message.type !== 'mutation_worker_start') return;
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+    fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));
+    process.send({ type: 'mutation_worker_completed', operationId: message.operationId }, () => process.exit(0));
+});
+`);
+    try {
+        let completed = false;
+        const worker = spawnSupervisedMutationWorker({
+            operationId: 'clean-leak-fixture',
+            workerPath,
+            cleanExitDrainMs: 40,
+            onCompleted: () => { completed = true; },
+        });
+        await worker.ready;
+        worker.start();
+        await assert.rejects(
+            withDeadline(worker.completion, 5_000),
+            /Mutation worker exited while descendants were still live \(exit code 0\)/,
+        );
+        assert.equal(completed, false);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+        assert.throws(() => process.kill(descendantPid, 0), { code: 'ESRCH' });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('non-zero exit with a short-lived descendant immediately flags containment violation without drain', { skip: process.platform !== 'linux' }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-nonzero-leak-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const descendantPidPath = path.join(root, 'descendant.pid');
+    fs.writeFileSync(workerPath, `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', (message) => {
+    if (message.type !== 'mutation_worker_start') return;
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 250)'], { stdio: 'ignore' });
+    fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));
+    process.exit(7);
+});
+`);
+    try {
+        const startedAt = Date.now();
+        const worker = spawnSupervisedMutationWorker({
+            operationId: 'nonzero-leak-fixture',
+            workerPath,
+            cleanExitDrainMs: 2_000,
+        });
+        await worker.ready;
+        worker.start();
+        await assert.rejects(
+            withDeadline(worker.completion, 5_000),
+            /Mutation worker exited while descendants were still live \(exit code 7\)/,
+        );
+        assert.ok(Date.now() - startedAt < 1_000);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+        assert.throws(() => process.kill(descendantPid, 0), { code: 'ESRCH' });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

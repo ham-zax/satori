@@ -256,3 +256,23 @@ setInterval(() => {}, 50);
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('releaseIdleStandby retires an unused standby without closing future prepare and take', async () => fixture(async (standby, pids, root) => {
+    standby.prepare('a');
+    await waitFor(() => pids().length === 1, 'first standby');
+    const [firstPid] = pids();
+    await waitFor(() => fs.existsSync(path.join(root, `ready-${firstPid}`)), 'first standby ready');
+
+    await standby.releaseIdleStandby();
+    assert.equal(absent(firstPid), true);
+    assert.equal(standby.take('a'), undefined);
+
+    standby.prepare('b');
+    await waitFor(() => pids().length === 2, 'second standby after reclaim');
+    const [, secondPid] = pids();
+    const taken = standby.take('b');
+    assert.ok(taken);
+    assert.equal(taken.worker.executor.pid, secondPid);
+    taken.worker.requestCancellation('test cleanup');
+    await taken.worker.completion.catch(() => undefined);
+}));

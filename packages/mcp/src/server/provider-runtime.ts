@@ -576,6 +576,7 @@ export class ProviderRuntime {
                     requestAutomaticReindex: (codebasePath, reason) => (
                         this.requestAutomaticReindex(codebasePath, reason)
                     ),
+                    reclaimIdleMemoryForMutation: () => this.reclaimIdleMemoryForMutation(),
                 },
             );
 
@@ -857,6 +858,25 @@ export class ProviderRuntime {
             (count, toolContext) => count + toolContext.syncManager.getActiveLifecycleOperationCount(),
             0,
         );
+    }
+
+    public async reclaimIdleMemoryForMutation(): Promise<void> {
+        const tasks: Array<Promise<void>> = [
+            this.syncWorkerStandby.releaseIdleStandby(),
+        ];
+        for (const reranker of this.activeRerankers) {
+            const candidate = reranker as Reranker & { releaseIdleWorker?: () => Promise<void> };
+            if (typeof candidate.releaseIdleWorker === "function") {
+                tasks.push(candidate.releaseIdleWorker());
+            }
+        }
+        for (const embedding of this.activeEmbeddings) {
+            const candidate = embedding as Embedding & { releaseIdleWorker?: () => Promise<void> };
+            if (typeof candidate.releaseIdleWorker === "function") {
+                tasks.push(candidate.releaseIdleWorker());
+            }
+        }
+        await Promise.allSettled(tasks);
     }
 
     public async shutdown(): Promise<void> {

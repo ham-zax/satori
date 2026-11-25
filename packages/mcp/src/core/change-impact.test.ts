@@ -10,7 +10,7 @@ import type {
     CallGraphResponseEnvelope,
     FileOutlineResponseEnvelope,
 } from "./search-types.js";
-import { detectChangeImpact } from "./change-impact.js";
+import { DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES, detectChangeImpact } from "./change-impact.js";
 
 function node(symbolId: string, file: string): CallGraphNodeResult {
     return {
@@ -683,7 +683,7 @@ test("detect_changes trims impacted output to fit the response byte budget", asy
             } as unknown as CallGraphResponseEnvelope),
         });
 
-        assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 48 * 1024);
+        assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES);
         assert.ok(result.warnings.includes("IMPACT_RESPONSE_BYTE_LIMIT"));
         assert.equal(result.truncated, true);
         assert.ok(result.omitted.impacted > 0);
@@ -791,7 +791,7 @@ test("detect_changes diffs a moved file against its source so only edited lines 
 test("detect_changes trims changedFiles before seeds so a huge diff still fits the byte budget", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-many-files-"));
     const fileCount = 1500;
-    const fileName = (index: number) => `packages/a-fairly-long-package-directory-name/src/module-${String(index).padStart(5, "0")}.ts`;
+    const fileName = (index: number) => `packages/p/f${String(index).padStart(4, "0")}.ts`;
     try {
         execFileSync("git", ["init", "-q"], { cwd: repo });
         execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo });
@@ -817,7 +817,7 @@ test("detect_changes trims changedFiles before seeds so a huge diff still fits t
             } as unknown as CallGraphResponseEnvelope),
         });
 
-        assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 48 * 1024);
+        assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES);
         assert.equal(result.seeds.length, 50);
         assert.equal(result.omitted.seeds, 0);
         assert.ok(result.omitted.changedFiles > 0);
@@ -1032,7 +1032,7 @@ test("detect_changes preserves test site provenance, deduplicates deterministica
     }
 });
 
-test("detect_changes trims directSeedTestReferences first under the 48 KiB budget without evicting seeds or CALLS edges", async () => {
+test("detect_changes trims directSeedTestReferences first under the 20 KiB budget without evicting seeds or CALLS edges", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-test-budget-"));
     try {
         execFileSync("git", ["init", "-q"], { cwd: repo });
@@ -1044,7 +1044,7 @@ test("detect_changes trims directSeedTestReferences first under the 48 KiB budge
         fs.writeFileSync(path.join(repo, "seed.ts"), "export function seed() {\n  return 2;\n}\n");
 
         const seed = node("seed", "seed.ts");
-        const callers = Array.from({ length: 40 }, (_, index) => node(
+        const callers = Array.from({ length: 10 }, (_, index) => node(
             `caller-${String(index).padStart(2, "0")}`,
             `packages/app/src/caller-${String(index).padStart(2, "0")}.ts`,
         ));
@@ -1109,7 +1109,7 @@ test("detect_changes trims directSeedTestReferences first under the 48 KiB budge
         assert.equal(control.testReferenceCoverage.exhaustive, false);
         assert.equal(control.directSeedTestReferences.length, 0);
 
-        assert.ok(Buffer.byteLength(JSON.stringify(withTests), "utf8") <= 48 * 1024);
+        assert.ok(Buffer.byteLength(JSON.stringify(withTests), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES);
         assert.deepEqual(withTests.seeds, control.seeds);
         assert.deepEqual(withTests.impacted, control.impacted);
         assert.equal(withTests.omitted.seeds, 0);
@@ -1126,11 +1126,11 @@ test("detect_changes trims directSeedTestReferences first under the 48 KiB budge
         assert.equal(withTests.testReferenceCoverage.returnedCount, withTests.directSeedTestReferences.length);
         assert.ok(withTests.warnings.includes("IMPACT_RESPONSE_BYTE_LIMIT"));
 
-        const padding = 48 * 1024 - Buffer.byteLength(JSON.stringify(control), "utf8") - 8;
+        const padding = DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES - Buffer.byteLength(JSON.stringify(control), "utf8") - 8;
         const saturatedControl = await runWithTests(false, padding);
         const saturatedTreatment = await runWithTests(true, padding);
         assert.equal(saturatedControl.impacted.length, callers.length);
-        assert.ok(Buffer.byteLength(JSON.stringify(saturatedTreatment), "utf8") <= 48 * 1024);
+        assert.ok(Buffer.byteLength(JSON.stringify(saturatedTreatment), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES);
         assert.deepEqual(saturatedTreatment.seeds, saturatedControl.seeds);
         assert.deepEqual(saturatedTreatment.impacted, saturatedControl.impacted);
         assert.deepEqual(saturatedTreatment.uncertainCallReferences, saturatedControl.uncertainCallReferences);

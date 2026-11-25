@@ -117,6 +117,7 @@ type ManageIndexingHandlersHost = {
     evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult;
     assertIndexMutationCapabilities(): void;
     ownDetachedMutationCompletion(completion: Promise<void>): void;
+    reclaimIdleMemoryForMutation?(): Promise<void>;
 };
 
 function collectErrorFragments(
@@ -278,6 +279,10 @@ export class ManageIndexingHandlers {
         action: "create" | "reindex",
     ): FullIndexCandidateRunner {
         return async (input) => {
+            await this.host.reclaimIdleMemoryForMutation?.();
+            if (execution.signal.aborted) {
+                throw execution.signal.reason ?? new Error("Full index cancelled before resource planning.");
+            }
             // The single plan must exist before fork to set native allocator
             // policy at process startup; the child consumes this same value.
             const resourcePlan = new IndexingResourcePlanner().createPlan();

@@ -9,6 +9,7 @@ import type {
     SymbolRegistryManifest,
 } from "@satori-code/core";
 import {
+    ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES,
     ArchitecturePackageOwnershipError,
     buildArchitectureOverview,
 } from "./architecture-overview.js";
@@ -551,4 +552,55 @@ test("package architecture rejects ownership that does not match the Publication
         }),
         ArchitecturePackageOwnershipError,
     );
+});
+
+test("architecture overview bounds large payloads to 20 KiB UTF-8 and marks truncated sections", () => {
+    const symbols: SymbolRecord[] = [];
+    const relationships: RelationshipRecord[] = [];
+    const packages: PackageOwnershipPackage[] = [];
+    const ownershipFiles: Array<{ path: string; packageRoot: string }> = [];
+
+    for (let index = 0; index < 50; index += 1) {
+        const tag = String(index).padStart(2, "0");
+        const packageRoot = `packages/long-monorepo-package-area-name-${tag}-${"segment-".repeat(6)}`;
+        const entry = sym(
+            `entry-${tag}-${"x".repeat(80)}`,
+            `${packageRoot}/src/entry-${tag}.ts`,
+            `entryFunction_${tag}_${"LongName".repeat(8)}`,
+        );
+        const target = sym(
+            `target-${tag}-${"y".repeat(80)}`,
+            `${packageRoot}/src/target-${tag}.ts`,
+            `targetFunction_${tag}_${"LongName".repeat(8)}`,
+        );
+        symbols.push(entry, target);
+        packages.push(pkg(packageRoot, `@scope/long-package-${tag}-${"name-".repeat(6)}`));
+        ownershipFiles.push(
+            { path: entry.file, packageRoot },
+            { path: target.file, packageRoot },
+        );
+        relationships.push(call(entry, target));
+        if (index > 0) {
+            const prevEntry = symbols[(index - 1) * 2]!;
+            relationships.push(call(entry, prevEntry));
+            relationships.push(call(prevEntry, entry));
+        }
+    }
+
+    const result = buildArchitectureOverview({
+        manifest: { files: ownershipFiles.map((file) => ({ path: file.path })) } as unknown as SymbolRegistryManifest,
+        packageOwnership: ownershipFixture({ packages, files: ownershipFiles }),
+        symbols,
+        relationships,
+        scope: "all",
+        limit: 50,
+    });
+
+    assert.ok(
+        Buffer.byteLength(JSON.stringify(result), "utf8") <= ARCHITECTURE_OVERVIEW_RESPONSE_MAX_UTF8_BYTES,
+        "overview payload must fit within 20 KiB UTF-8",
+    );
+    assert.equal(result.responseTruncated, true);
+    assert.ok(Array.isArray(result.truncatedSections) && result.truncatedSections.length > 0);
+    assert.equal(result.coverage.includedSymbolCount, symbols.length);
 });

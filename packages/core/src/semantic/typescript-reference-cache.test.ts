@@ -583,6 +583,13 @@ test('scoped boundary verification enforces symlink, missing-probe, and containm
         assert.equal(verifyTypeScriptFsObservation(outsideRealpath, TEST_BUDGET, boundary), false);
         const outsideMissing = observe(outer, { paths: ['outside/missing.ts'] });
         assert.equal(verifyTypeScriptFsObservation(outsideMissing, TEST_BUDGET, boundary), false);
+
+        // Missing subpath probes under an existing regular file (ENOTDIR) must not throw.
+        const inRootUnderFile = observe(root, { paths: ['lib/src/index.ts/package.json'] });
+        assert.equal(verifyTypeScriptFsObservation(inRootUnderFile, TEST_BUDGET), true);
+        assert.equal(verifyTypeScriptFsObservation(inRootUnderFile, TEST_BUDGET, boundary), true);
+        const outsideUnderFile = observe(outer, { paths: ['outside/secret.ts/package.json'] });
+        assert.equal(verifyTypeScriptFsObservation(outsideUnderFile, TEST_BUDGET, boundary), false);
     } finally {
         fs.rmSync(outer, { recursive: true, force: true });
     }

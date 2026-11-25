@@ -219,6 +219,8 @@ test('scoped path resolver matches uncached boundary across files, dirs, missing
     const scoped = boundary.createScopedPathResolver();
     const candidates = [
         path.join(root, 'src/a.ts'),
+        path.join(root, 'src/a.ts/index.ts'),
+        path.join(root, 'src/a.ts/package.json'),
         path.join(root, 'src'),
         path.join(root, 'src/missing.ts'),
         path.join(root, 'missing-dir/sub/file.ts'),
@@ -229,6 +231,7 @@ test('scoped path resolver matches uncached boundary across files, dirs, missing
         path.join(root, 'src/escape.ts'),
         path.join(root, 'src/dangling.ts'),
         path.join(outside, 'secret.ts'),
+        path.join(outside, 'secret.ts/index.ts'),
         path.join(outside, 'missing.ts'),
     ];
     for (const candidate of candidates) {
@@ -238,4 +241,14 @@ test('scoped path resolver matches uncached boundary across files, dirs, missing
         assert.equal(scoped.fileExists(candidate), boundary.fileExists(candidate), `fileExists ${candidate}`);
         assert.equal(scoped.realpath(candidate), boundary.realpath(candidate), `realpath ${candidate}`);
     }
+
+    // ENOTDIR subpath probes under existing regular files must not throw.
+    const inRootUnderFile = path.join(root, 'src/a.ts/index.ts');
+    const outsideUnderFile = path.join(outside, 'secret.ts/index.ts');
+    assert.equal(scoped.resolveMissingAllowedPath(inRootUnderFile), path.join(fs.realpathSync(root), 'src/a.ts/index.ts'));
+    assert.equal(scoped.resolveMissingAllowedPath(outsideUnderFile), null);
+    assert.equal(scoped.resolveAllowedReadFile(inRootUnderFile), null);
+    assert.equal(scoped.resolveAllowedReadFile(outsideUnderFile), null);
+    assert.equal(scoped.fileExists(inRootUnderFile), false);
+    assert.equal(scoped.directoryExists(inRootUnderFile), false);
 });

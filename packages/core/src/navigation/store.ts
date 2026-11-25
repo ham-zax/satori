@@ -721,15 +721,22 @@ export class JsonNavigationStore {
 
         const expectedRelationshipManifestHash = input.expectedRelationshipManifestHash;
         if (expectedRelationshipManifestHash === undefined) {
-            onValidation?.();
-            const full = await this.getRelationships(input);
-            if (full.status !== 'ok') return full;
-            return {
-                status: 'ok',
-                rootPath: full.rootPath,
-                manifestHash: full.manifestHash,
-                manifest: full.manifest,
-            };
+            return this.relationshipVerifications.get(
+                input.normalizedRootPath,
+                relationshipVerificationIdentity({ ...input, expectedRelationshipManifestHash: '' }),
+                async () => {
+                    onValidation?.();
+                    const full = await this.getRelationships(input);
+                    if (full.status !== 'ok') return full;
+                    return {
+                        status: 'ok',
+                        rootPath: full.rootPath,
+                        manifestHash: full.manifestHash,
+                        manifest: full.manifest,
+                    };
+                },
+                (state) => state.status === 'ok',
+            );
         }
 
         return this.relationshipVerifications.get(

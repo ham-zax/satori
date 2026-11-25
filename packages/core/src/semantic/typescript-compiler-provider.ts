@@ -1703,10 +1703,10 @@ function prewarmMemberReceiversForChunk(
 
     const uncachedBranches = new Map<number, ts.Type>();
     for (const type of effectiveByIndex.values()) {
-        if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0) continue;
+        if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0 || nullableType(type)) continue;
         const branches = type.isUnionType() ? (unionBranchesById.get(type.id) ?? []) : [type];
         for (const branch of branches) {
-            if ((branch.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0) continue;
+            if ((branch.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0 || nullableType(branch)) continue;
             if (!caches.assignableClassesByTypeId.has(branch.id)) {
                 uncachedBranches.set(branch.id, branch);
             }
@@ -1835,7 +1835,10 @@ function analyzeProgramEvidence(
         visit(sourceFile);
     }
 
-    if (api && workItems.length > 0) {
+    if (workItems.length > 0) {
+        if (!api) {
+            throw new Error('TypeScript 7.1 native batch API is unavailable on the active program; cannot analyze call occurrences.');
+        }
         const chunkSize = batched ? CALL_BATCH_CHUNK_SIZE : 1;
         for (let start = 0; start < workItems.length; start += chunkSize) {
             const chunk = workItems.slice(start, start + chunkSize);

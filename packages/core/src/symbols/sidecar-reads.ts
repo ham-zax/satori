@@ -711,7 +711,7 @@ export async function verifyRelationshipSidecarChecksums(
             const shardFilePath = path.join(rootPath, firstFile.shardPath);
             try {
                 const stat = await fs.promises.stat(shardFilePath);
-                if (stat.size !== expectedFirstBytes) {
+                if (!stat.isFile() || stat.size !== expectedFirstBytes) {
                     return {
                         status: 'corrupt',
                         rootPath,
@@ -762,7 +762,7 @@ export async function verifyRelationshipSidecarChecksums(
         }
         for (let index = 0; index < batch.length; index += 1) {
             const file = batch[index]!;
-            if (stats[index]!.size !== file.shardBytes) {
+            if (!stats[index]!.isFile() || stats[index]!.size !== file.shardBytes) {
                 return {
                     status: 'corrupt',
                     rootPath,

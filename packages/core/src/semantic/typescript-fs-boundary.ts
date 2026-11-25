@@ -3,6 +3,32 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { serverFS, type FileSystemCallbacks, type FileSystemEntries, type FileSystemStat } from './typescript-api';
 
+/**
+ * Stats a path without throwing on absent paths (`ENOENT`) or traversal through
+ * a regular file (`ENOTDIR`). Returns `undefined` when absent, `fs.Stats` when
+ * present, and `null` on unexpected OS errors (e.g. `EACCES`, `ELOOP`) so
+ * callers fail closed.
+ */
+function safeLstatSync(targetPath: string): fs.Stats | null | undefined {
+    try {
+        return fs.lstatSync(targetPath, { throwIfNoEntry: false });
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+        return null;
+    }
+}
+
+function safeStatSync(targetPath: string): fs.Stats | null | undefined {
+    try {
+        return fs.statSync(targetPath, { throwIfNoEntry: false });
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+        return null;
+    }
+}
+
 function canonicalizeExistingDirectory(
     dirPath: string,
     canonicalDirCache?: Map<string, string | null>,
@@ -26,8 +52,9 @@ function canonicalizeExistingOrNearest(
     canonicalDirCache?: Map<string, string | null>,
 ): string | null {
     const resolved = path.resolve(inputPath);
-    // Avoid throwing ENOENT on thousands of absent module-resolution probes.
-    const direct = fs.lstatSync(resolved, { throwIfNoEntry: false });
+    // Avoid throwing ENOENT/ENOTDIR on thousands of absent module-resolution probes.
+    const direct = safeLstatSync(resolved);
+    if (direct === null) return null;
     if (direct) {
         if (canonicalDirCache && !direct.isSymbolicLink() && direct.isDirectory()) {
             return canonicalizeExistingDirectory(resolved, canonicalDirCache);
@@ -41,9 +68,9 @@ function canonicalizeExistingOrNearest(
     const missing: string[] = [path.basename(resolved)];
     let current = path.dirname(resolved);
     for (;;) {
-        // If an existing component is a dangling symlink, reject fail-closed.
-        const lstat = fs.lstatSync(current, { throwIfNoEntry: false });
-        if (lstat?.isSymbolicLink()) {
+        // If an existing component is a dangling symlink or unreadable, reject fail-closed.
+        const lstat = safeLstatSync(current);
+        if (lstat === null || lstat?.isSymbolicLink()) {
             return null;
         }
         if (lstat) {
@@ -181,8 +208,8 @@ export class TypeScriptFsBoundary {
         const resolveMissingParent = (dirPath: string): string | null => {
             const cached = missingDirCache.get(dirPath);
             if (cached !== undefined) return cached;
-            const lstat = fs.lstatSync(dirPath, { throwIfNoEntry: false });
-            if (lstat?.isSymbolicLink()) {
+            const lstat = safeLstatSync(dirPath);
+            if (lstat === null || lstat?.isSymbolicLink()) {
                 missingDirCache.set(dirPath, null);
                 return null;
             }
@@ -237,7 +264,7 @@ export class TypeScriptFsBoundary {
             resolveMissingAllowedPath: (candidatePath) => {
                 if (!candidatePath || candidatePath.includes('\0')) return null;
                 const resolved = path.resolve(candidatePath);
-                if (fs.lstatSync(resolved, { throwIfNoEntry: false })) return null;
+                if (safeLstatSync(resolved) !== undefined) return null;
                 const parent = path.dirname(resolved);
                 if (parent === resolved) return null;
                 const parentReal = resolveMissingParent(parent);
@@ -249,7 +276,7 @@ export class TypeScriptFsBoundary {
                 if (!candidatePath || candidatePath.includes('\0')) return null;
                 if (process.platform === 'linux') {
                     const resolved = path.resolve(candidatePath);
-                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    const lstat = safeLstatSync(resolved);
                     if (!lstat) return null;
                     if (!lstat.isSymbolicLink()) {
                         if (!lstat.isFile()) return null;
@@ -259,14 +286,14 @@ export class TypeScriptFsBoundary {
                 }
                 const targetPath = resolveAllowed(candidatePath);
                 if (!targetPath) return null;
-                const stat = fs.statSync(targetPath, { throwIfNoEntry: false });
+                const stat = safeStatSync(targetPath);
                 return stat?.isFile() ? { targetPath, size: stat.size } : null;
             },
             isAllowedCanonicalPath: (canonicalPath) => this.isAllowedCanonicalPath(canonicalPath),
             directoryExists: (directoryName) => {
                 if (!directoryName || directoryName.includes('\0')) return false;
                 const resolved = path.resolve(directoryName);
-                const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                const lstat = safeLstatSync(resolved);
                 if (!lstat) return false;
                 if (!lstat.isSymbolicLink()) {
                     if (!lstat.isDirectory()) return false;
@@ -278,7 +305,7 @@ export class TypeScriptFsBoundary {
                 if (!fileName || fileName.includes('\0')) return false;
                 if (process.platform === 'linux') {
                     const resolved = path.resolve(fileName);
-                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    const lstat = safeLstatSync(resolved);
                     if (!lstat) return false;
                     if (!lstat.isSymbolicLink()) {
                         if (!lstat.isFile()) return false;
@@ -291,12 +318,13 @@ export class TypeScriptFsBoundary {
                 if (!targetPath || targetPath.includes('\0')) return targetPath;
                 if (process.platform === 'linux') {
                     const resolved = path.resolve(targetPath);
-                    const lstat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+                    const lstat = safeLstatSync(resolved);
+                    if (lstat === null) return targetPath;
                     if (lstat && !lstat.isSymbolicLink() && (lstat.isFile() || lstat.isDirectory())) {
                         const allowed = lstat.isDirectory()
                             ? resolveExistingDir(resolved)
                             : resolveAllowedNonSymlinkLeaf(resolved);
-                        if (allowed) return allowed;
+                        return allowed ?? targetPath;
                     }
                 }
                 return this.realpath(targetPath, canonicalDirCache);

@@ -213,41 +213,55 @@ export function verifyTypeScriptFsObservation(
     }
     if (digest.digest('hex') !== observation.readDigest) return false;
 
-    for (const [fileName, target] of observation.realpaths) {
-        const verified = verifiedRealpaths.get(fileName);
-        if (verified !== undefined) {
-            if (verified !== target) return false;
-            continue;
-        }
-        const resolved = realpathTarget(fileName);
-        if (!resolved || resolved !== target) return false;
-        if (scoped && !scoped.isAllowedCanonicalPath(resolved)) return false;
-    }
-    for (const [directoryName, names] of observation.listings) {
-        if (scoped && !scoped.resolveAllowedPath(directoryName)) return false;
-        const current = directoryNames(directoryName);
-        if (current.length !== names.length) return false;
-        for (let index = 0; index < names.length; index += 1) {
-            if (current[index] !== names[index]) return false;
-        }
-    }
-    for (const [fileName, kind] of observation.probes) {
-        const verifiedKind = verifiedKinds.get(fileName);
-        if (verifiedKind !== undefined) {
-            if (verifiedKind !== kind) return false;
-            continue;
-        }
-        if (kind === 'missing') {
-            if (scoped) {
-                if (!scoped.resolveMissingAllowedPath(fileName)) return false;
-            } else if (pathKind(fileName) !== 'missing') {
-                return false;
+    try {
+        for (const [fileName, target] of observation.realpaths) {
+            const verified = verifiedRealpaths.get(fileName);
+            if (verified !== undefined) {
+                if (verified === target) continue;
+                // Fall back to native realpath on mismatch (e.g., case-insensitive mounts on Linux).
+                const resolved = realpathTarget(verified);
+                if (!resolved || resolved !== target) return false;
+                if (scoped && !scoped.isAllowedCanonicalPath(resolved)) return false;
+                continue;
             }
-            continue;
+            if (scoped) {
+                const allowed = scoped.resolveAllowedPath(fileName);
+                if (!allowed) return false;
+                const resolved = realpathTarget(allowed);
+                if (!resolved || resolved !== target || !scoped.isAllowedCanonicalPath(resolved)) return false;
+                continue;
+            }
+            const resolved = realpathTarget(fileName);
+            if (!resolved || resolved !== target) return false;
         }
-        const allowed = scoped ? scoped.resolveAllowedPath(fileName) : fileName;
-        if (!allowed) return false;
-        if (pathKind(allowed) !== kind) return false;
+        for (const [directoryName, names] of observation.listings) {
+            if (scoped && !scoped.resolveAllowedPath(directoryName)) return false;
+            const current = directoryNames(directoryName);
+            if (current.length !== names.length) return false;
+            for (let index = 0; index < names.length; index += 1) {
+                if (current[index] !== names[index]) return false;
+            }
+        }
+        for (const [fileName, kind] of observation.probes) {
+            const verifiedKind = verifiedKinds.get(fileName);
+            if (verifiedKind !== undefined) {
+                if (verifiedKind !== kind) return false;
+                continue;
+            }
+            if (kind === 'missing') {
+                if (scoped) {
+                    if (!scoped.resolveMissingAllowedPath(fileName)) return false;
+                } else if (pathKind(fileName) !== 'missing') {
+                    return false;
+                }
+                continue;
+            }
+            const allowed = scoped ? scoped.resolveAllowedPath(fileName) : fileName;
+            if (!allowed) return false;
+            if (pathKind(allowed) !== kind) return false;
+        }
+    } catch {
+        return false;
     }
     return true;
 }

@@ -24,11 +24,11 @@ export interface CapabilityMatrix {
 
 export class CapabilityResolver {
     private readonly config: ContextMcpConfig;
-    private readonly matrix: CapabilityMatrix;
+    private readonly matrix: Readonly<CapabilityMatrix>;
 
     constructor(config: ContextMcpConfig) {
         this.config = config;
-        this.matrix = this.buildMatrix();
+        this.matrix = Object.freeze(this.buildMatrix());
     }
 
     private buildMatrix(): CapabilityMatrix {
@@ -64,6 +64,11 @@ export class CapabilityResolver {
 
     public getMatrix(): CapabilityMatrix {
         return { ...this.matrix };
+    }
+
+    /** Frozen per-instance identity witness for capability-derived caches (e.g. tools/list). */
+    public getMatrixWitness(): Readonly<CapabilityMatrix> {
+        return this.matrix;
     }
 
     public hasVectorStore(): boolean {

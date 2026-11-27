@@ -8,7 +8,7 @@ import {
     readLinuxProcessIdentity,
     removeOwnedFileLockIfUnchanged,
     type LinuxProcessIdentity,
-} from "@satori-code/core/integration";
+} from "@satori-code/core/file-lock";
 import {
     SHARED_RUNTIME_PROTOCOL_VERSION,
     type SharedRuntimeIdentity,

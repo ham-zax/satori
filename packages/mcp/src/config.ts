@@ -27,6 +27,9 @@ import {
     type LateOnActivationPolicyId,
     type LateOnRuntimeProfileId,
 } from "./server/lateon-reranker-protocol.js";
+import { assertRemovedRuntimeEnvUnset } from "./removed-runtime-env.js";
+
+export { assertRemovedRuntimeEnvUnset };
 
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Potion';
 export type VectorStoreProvider = 'Milvus' | 'LanceDB';
@@ -311,13 +314,6 @@ export async function resolveMcpRuntimeBootstrap(
             resolveConfiguredEmbeddingDimension(resolvedConfig),
         ),
     });
-}
-
-/** Single owner of the removed-runtime-env guard shared by the config and shared-runtime client entry points. */
-export function assertRemovedRuntimeEnvUnset(read: (name: string) => string | undefined): void {
-    if (read('SATORI_RERANK_APPLICATION_MODE') !== undefined) {
-        throw new Error('SATORI_RERANK_APPLICATION_MODE has been removed; unset it.');
-    }
 }
 
 export function createMcpConfig(): ContextMcpConfig {

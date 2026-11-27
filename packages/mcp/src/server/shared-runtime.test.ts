@@ -691,6 +691,38 @@ test("direct stdio and shared runtime resolve roots identically", () => {
     assert.deepEqual(resolveSessionWorkspaceRoots({}), [process.cwd()]);
 });
 
+test("shared-runtime-client warm-attach import graph stays isolated from server, config, and core barrel", () => {
+    const serverDir = path.dirname(new URL(import.meta.url).pathname);
+    const visited = new Set<string>();
+    const queue = [path.join(serverDir, "shared-runtime-client.ts")];
+    const externalSpecifiers = new Set<string>();
+
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        const source = fs.readFileSync(current, "utf8");
+        for (const match of source.matchAll(/^\s*import\s+(?:type\s+)?[\s\S]*?\s+from\s+["']([^"']+)["'];/gm)) {
+            const specifier = match[1]!;
+            if (specifier.startsWith(".")) {
+                const resolved = path.resolve(path.dirname(current), specifier.replace(/\.js$/, ".ts"));
+                queue.push(resolved);
+            } else {
+                externalSpecifiers.add(specifier);
+            }
+        }
+    }
+
+    const relativeVisited = [...visited].map((file) => path.relative(path.resolve(serverDir, ".."), file));
+    assert.equal(relativeVisited.includes("server/shared-runtime.ts"), false);
+    assert.equal(relativeVisited.includes("config.ts"), false);
+    assert.equal(relativeVisited.includes("core/session-workspace-policy.ts"), false);
+    assert.equal(externalSpecifiers.has("@modelcontextprotocol/server"), false);
+    assert.equal(externalSpecifiers.has("@satori-code/core"), false);
+    assert.equal(externalSpecifiers.has("@satori-code/core/integration"), false);
+    assert.equal(externalSpecifiers.has("@satori-code/core/file-lock"), true);
+});
+
 test("runtime activity includes local sync lifecycle operations", async (t) => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-sync-activity-"));
     const previousStateRoot = process.env.SATORI_STATE_ROOT;

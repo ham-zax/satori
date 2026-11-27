@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CapabilityResolver } from '../core/capabilities.js';
 import { createSessionWorkspacePolicy } from '../core/session-workspace-policy.js';
 import { ContextMcpConfig } from '../config.js';
-import { getMcpToolList, toolRegistry } from './registry.js';
+import { buildMcpToolList, getMcpToolList, toolRegistry } from './registry.js';
 import { ToolContext } from './types.js';
 
 type SchemaProperty = Record<string, unknown> & {
@@ -270,4 +270,56 @@ test('call_graph schema exposes symbolRef, direction, depth, and limit controls'
     assert.equal(properties.direction.default, 'both');
     assert.equal(properties.depth.default, 1);
     assert.equal(properties.limit.default, 20);
+});
+
+test('getMcpToolList matches uncached buildMcpToolList across profiles and reuses frozen witness entries', () => {
+    const connected = buildContext();
+    const offline = buildContext({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: path.join(os.tmpdir(), 'satori-registry-lance'),
+        encoderProvider: 'Potion',
+        encoderModel: 'potion',
+        encoderOutputDimension: 256,
+        rerankerProvider: 'lateon',
+        lateOnModelPath: path.join(os.tmpdir(), 'satori-registry-lateon'),
+    });
+
+    const connectedFirst = getMcpToolList(connected);
+    const connectedSecond = getMcpToolList(connected);
+    const offlineFirst = getMcpToolList(offline);
+
+    assert.deepEqual(connectedFirst, buildMcpToolList(connected));
+    assert.deepEqual(offlineFirst, buildMcpToolList(offline));
+    assert.notEqual(connectedFirst, connectedSecond, 'callers receive a fresh array wrapper');
+    assert.equal(connectedFirst[0], connectedSecond[0], 'repeat calls for the same CapabilityResolver reuse cached tool entries');
+    assert.equal(Object.isFrozen(connectedFirst[0]), true);
+    assert.equal(Object.isFrozen(connectedFirst[0].inputSchema), true);
+    assert.notEqual(connectedFirst[0], offlineFirst[0], 'distinct CapabilityResolver instances maintain separate cache entries');
+});
+
+test('getMcpToolList falls back to uncached build when capabilities witness is not a frozen CapabilityResolver', () => {
+    const customCaps = {
+        getMaxSearchResultTotal: () => 42,
+        getDefaultSearchLimit: (mode: 'grouped' | 'raw' = 'grouped') => (mode === 'raw' ? 5 : 17),
+        getMaxSearchPageSize: () => 19,
+        getMaxFrozenSearchResults: () => 23,
+    };
+    const stubCtx = { capabilities: customCaps } as unknown as ToolContext;
+    const first = getMcpToolList(stubCtx);
+    const second = getMcpToolList(stubCtx);
+
+    assert.deepEqual(first, buildMcpToolList(stubCtx));
+    assert.notEqual(first[0], second[0]);
+    const searchTool = first.find((tool) => tool.name === 'search_codebase')!;
+    const searchProps = searchTool.inputSchema.properties as Record<string, SchemaProperty>;
+    assert.equal(searchProps.limit.maximum, 42);
+    assert.equal(searchProps.limit.default, 17);
+    assert.equal(searchProps.disclosureLimit.maximum, 19);
+
+    const continueTool = first.find((tool) => tool.name === 'continue_search')!;
+    const continueProps = continueTool.inputSchema.properties as Record<string, SchemaProperty>;
+    assert.equal(continueProps.expectedOffset.maximum, 23);
+    assert.equal(continueProps.limit.maximum, 19);
 });

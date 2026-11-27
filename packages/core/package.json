@@ -38,6 +38,11 @@
       "require": "./dist/integration.js",
       "default": "./dist/integration.js"
     },
+    "./file-lock": {
+      "types": "./dist/utils/file-lock.d.ts",
+      "require": "./dist/utils/file-lock.js",
+      "default": "./dist/utils/file-lock.js"
+    },
     "./lancedb": {
       "types": "./dist/lancedb.d.ts",
       "require": "./dist/lancedb.js",

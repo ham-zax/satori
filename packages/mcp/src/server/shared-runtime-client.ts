@@ -19,12 +19,12 @@ import {
     removeOwnedLifecycleState,
     type SharedRuntimeHostMetadata,
 } from "./shared-runtime-lifecycle.js";
-import { assertRemovedRuntimeEnvUnset } from "../config.js";
+import { assertRemovedRuntimeEnvUnset } from "../removed-runtime-env.js";
 import {
     hasExplicitSessionWorkspaceRoots,
     resolveAllowBroadRoots,
     resolveSessionWorkspaceRoots,
-} from "./shared-runtime.js";
+} from "../core/session-workspace-roots.js";
 
 type AttachRequest = Readonly<{
     type: "satori-shared-runtime-attach";

@@ -1,6 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { probeCurrentPublicationForPath } from "@satori-code/core/integration";
+import {
+    WorkspaceAuthorizationError,
+    type WorkspaceAuthorizationCode,
+} from "./session-workspace-roots.js";
+
+export {
+    WorkspaceAuthorizationError,
+    type WorkspaceAuthorizationCode,
+};
 
 /**
  * Canonical workspace authorization for one MCP session.
@@ -10,22 +19,6 @@ import { probeCurrentPublicationForPath } from "@satori-code/core/integration";
  * for one read request while retaining its original startup and mutation roots.
  * Authorization uses canonical separator-boundary containment of real paths.
  */
-
-export type WorkspaceAuthorizationCode =
-    | "ROOT_NOT_AUTHORIZED"
-    | "BROAD_ROOT_NOT_ALLOWED"
-    | "INVALID_WORKSPACE_ROOT"
-    | "WORKSPACE_POLICY_NOT_BOUND";
-
-export class WorkspaceAuthorizationError extends Error {
-    readonly code: WorkspaceAuthorizationCode;
-
-    constructor(code: WorkspaceAuthorizationCode, message: string) {
-        super(message);
-        this.name = "WorkspaceAuthorizationError";
-        this.code = code;
-    }
-}
 
 export type AuthorizedWorkspacePath = Readonly<{
     workspaceRoot: string;

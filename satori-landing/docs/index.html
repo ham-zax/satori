@@ -665,7 +665,7 @@
 
       <section class="section docs-start" id="start">
         <div class="section-kicker">Five-minute path</div>
-        <h2>Install once. Index one repo. Ask one useful question.</h2>
+        <h2>Install Satori and ask about your repository</h2>
         <p class="lede">
           You do not need to learn the 11 MCP tools before Satori becomes useful. The normal
           experience is an agent using those tools for you while you stay focused on the repository question.
@@ -675,12 +675,11 @@
             <span>1 · INSTALL</span>
             <pre><code>npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor</code></pre>
-            <p>Auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf, and installs the shared skill (pass <code>--index</code> inside a Git repo to index it right away). Restart the MCP client after installation.</p>
+            <p>Detects Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, and Pi. Restart the client after installation.</p>
           </article>
           <article>
-            <span>2 · INDEX</span>
-            <code>Index /absolute/path/to/repo with Satori.</code>
-            <p>The first Publication is explicit. Satori does not silently ingest arbitrary workspaces.</p>
+            <span>2 · OPEN A GIT REPO</span>
+            <p>Satori indexes eligible Git workspaces automatically. Pass <code>--index</code> during installation to index the current Git repository immediately.</p>
           </article>
           <article class="docs-start-feature">
             <span>3 · ASK</span>
@@ -733,7 +732,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <code>npx -y @satori-code/cli@latest install</code>, then
             <code>npx -y @satori-code/cli@latest doctor</code>.
             No global install is required. The installer auto-detects supported
-            Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf;
+            Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, and Pi.
             Antigravity (<code>agy</code>) is opt-in, and
             <code>--client all</code> configures every supported client. Inside
             a Git repository, pass <code>--index</code> to index the repository
@@ -756,7 +755,9 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
               and installs the shared skill to <code>~/.agents/skills/satori/SKILL.md</code>
-              by default, which Codex loads natively.
+              by default, which Codex loads natively. If the Claude Code
+              install already placed the hook shim on disk, you can
+              <a href="https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#optional-codex-sessionstart-hook">reuse it in Codex</a>.
             </p>
           </div>
           <div class="panel">
@@ -806,6 +807,11 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             </p>
           </div>
           <div class="panel">
+            <h3>Pi</h3>
+            <pre><code>npx -y @satori-code/cli@latest install --client pi</code></pre>
+            <p>Writes the Satori MCP entry to <code>~/.pi/agent/mcp.json</code> by default.</p>
+          </div>
+          <div class="panel">
             <h3>Antigravity</h3>
             <pre><code>npx -y @satori-code/cli@latest install --client agy</code></pre>
             <p>
@@ -844,7 +850,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             Supported development options are:
           </p>
           <ul>
-            <li><code>--client auto|all|opencode|codex|claude|cursor|vscode|windsurf|agy</code> (default: <code>opencode</code>).</li>
+            <li><code>--client auto|all|opencode|codex|claude|cursor|vscode|windsurf|pi|agy</code> (default: <code>opencode</code>).</li>
             <li><code>--runtime offline|voyage</code>; omission preserves the managed selection, or starts offline when no launcher exists.</li>
             <li><code>--reranker lateon|voyage|none</code>, available only with the offline runtime.</li>
             <li><code>--vector-store lancedb|milvus</code>; offline requires LanceDB and Milvus requires Voyage.</li>
@@ -949,6 +955,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               <li>Cursor config: <code>~/.cursor/mcp.json</code>.</li>
               <li>VS Code config: <code>~/.config/Code/User/mcp.json</code> (JSONC <code>servers.satori</code>).</li>
               <li>Windsurf config: <code>~/.codeium/windsurf/mcp_config.json</code>.</li>
+              <li>Pi config: <code>~/.pi/agent/mcp.json</code>.</li>
               <li>Antigravity config: <code>~/.gemini/config/mcp_config.json</code>.</li>
               <li>Antigravity skill link: <code>~/.gemini/skills/satori</code>.</li>
             </ul>
@@ -1134,6 +1141,29 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
           <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/phase4-ranking-speed-and-flash-handoff-plan-2026-11-21.md" target="_blank" rel="noopener noreferrer">Inspect ranking measurements on GitHub</a>.
         </p>
 
+        <h3 id="reranker-benchmark">LateOn and Voyage on an offline index</h3>
+        <p>
+          Satori MCP 0.14.1 ran 30 behavior queries across TypeScript/TSX
+          (<code>tessera</code>) and Python/Rust (<code>claive</code>) on the same
+          offline Potion and LanceDB index. Each reranking option applied to all 30 queries.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Reranker</th><th>Hit@1</th><th>Hit@3</th><th>Hit@10</th><th>MRR@10</th><th>Warm p50</th><th>Voyage tokens used</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>None (Potion + BM25 only)</td><td>40.0% (12/30)</td><td>60.0% (18/30)</td><td>83.3% (25/30)</td><td>0.530</td><td>660 ms</td><td>0</td></tr>
+              <tr><td>LateOn (local CPU, default)</td><td>63.3% (19/30)</td><td>86.7% (26/30)</td><td>90.0% (27/30)</td><td>0.757</td><td>2.69 s</td><td>0</td></tr>
+              <tr><td>Voyage <code>rerank-3</code></td><td>83.3% (25/30)</td><td><strong>100.0% (30/30)</strong></td><td><strong>100.0% (30/30)</strong></td><td>0.917</td><td>1.48 s</td><td>1.13M</td></tr>
+              <tr><td><strong>Voyage <code>rerank-3-lite</code> (Satori's Voyage default)</strong></td><td><strong>93.3% (28/30)</strong></td><td><strong>100.0% (30/30)</strong></td><td><strong>100.0% (30/30)</strong></td><td><strong>0.967</strong></td><td><strong>1.23 s</strong></td><td>1.14M</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <a href="https://github.com/ham-zax/satori/blob/master/docs/improvements/reranker-local-repos-benchmark-2026-11-26.md" target="_blank" rel="noopener noreferrer">Full 45-query LateOn vs Voyage benchmark report</a>.
+        </p>
+
         <h3>1-Call Source Delivery on Exact Lookups (A/B Confirmation)</h3>
         <p>
           Across 27 interleaved runs (3 repetitions &times; 3 tasks on DeepSeek V4.1 Flash, 100% local offline), returning verified source code directly on clean exact symbol hits eliminated extra follow-up file reads (enabled by default).
@@ -1221,35 +1251,17 @@ satori reranker status</code></pre>
           Without a global install, use <code>npx -y @satori-code/cli@latest</code>
           in place of <code>satori</code>.
         </p>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Reranker</th><th>Right answer first</th><th>In top 5</th><th>In top 10</th><th>MRR</th><th>Rerank median</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>LateOn (local, default)</td><td>13/28</td><td>22/28</td><td>24/28</td><td>0.566</td><td>2.58 s</td></tr>
-              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>23/28</td><td>27/28</td><td>27/28</td><td>0.881</td><td>1.03 s</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>
-          28 plain-English questions over React, Polars, and FlatBuffers (pre-Phase-4 apples-to-apples
-          comparison), with Potion embeddings and the same index for every row. Three runs per row on
-          one WSL2 laptop. Times are the reranker alone and include the network for Voyage. See
-          <a href="#benchmarks">Measured Benchmarks</a> above for the Phase 4A 58-query 5-repo offline LateOn
-          update (30/58 first, 51/58 top 10, MRR 0.6203).
-        </p>
+        <p>Compare first-ranked answers and warm latency in the
+          <a href="#reranker-benchmark">30-query reranker benchmark</a>.
+          See <a href="https://github.com/ham-zax/satori/blob/master/docs/BENCHMARKS.md#reranking">earlier reranking benchmarks</a>
+          for results on other repositories.</p>
         <div class="callout">
           <p>
-            <strong>Privacy and free tokens:</strong> Voyage is selected only explicitly.
-            A <code>VOYAGEAI_API_KEY</code> alone does not enable it. With Voyage,
-            each search sends the query and candidate code excerpts to Voyage AI,
-            a MongoDB company. Each account gets 200 million free tokens per
-            model and needs no credit card to start. <code>satori doctor</code> and
-            <code>satori reranker status</code> print
-            <code>Online: search queries and code excerpts are sent to Voyage.</code>
-            If Voyage fails during a search, results come back in retrieval order
-            with <code>RERANKER_FAILED</code>.
+            <strong>Privacy and billing.</strong> Select Voyage reranking explicitly with
+            <code>satori reranker use voyage</code>. Reranking sends the query and
+            candidate code excerpts to Voyage AI. If the reranker fails, Satori
+            returns retrieval order with <code>RERANKER_FAILED</code>.
+            See <a href="https://docs.voyageai.com/docs/pricing#rerankers">Voyage pricing and free quotas</a>.
           </p>
         </div>
         <p>A hand-configured MCP client sets the reranker in its environment:</p>
@@ -1261,33 +1273,27 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
       <section class="section" id="first-index">
         <h2>Index the First Repo</h2>
         <p class="lede">
-          Satori serves repository intelligence from a completed Publication.
-          Start with one absolute repository path (relative paths are rejected),
-          create the first Publication, confirm readiness with status, then search
-          with runtime-first defaults.
+          Open the agent in your Git repository and give Satori an absolute
+          repository path. The runtime indexes eligible workspaces in the
+          background, subject to a 50,000-file cap.
         </p>
         <div class="workflow">
           <div class="step">
-            <strong>1 Connect</strong>
+            <strong>1 Check automatic indexing</strong>
             <p>
-              Run <code>manage_index action="status" path="/absolute/path/to/repo"</code>
-              to verify the MCP runtime starts and to inspect whether a current
-              Publication already exists.
+              Offline sessions can auto-index up to 20 MiB at startup and up to
+              150 MiB on the first eligible Satori tool call. Connected
+              runtimes defer indexing until tool use and auto-index up to 8 MiB.
             </p>
           </div>
           <div class="step">
-            <strong>2 Create</strong>
+            <strong>2 Check readiness</strong>
             <p>
-              Run
-              <code>manage_index action="create" path="/absolute/path/to/repo"</code>.
-              Use the repository root for the first index unless you have a
-              specific subdirectory workflow. Create returns after accepting
-              the operation; while the same runtime is active, poll
-              <code>manage_index action="status"</code> until its process-lifetime
-              operation phase reaches <code>completed</code>, <code>failed</code>,
-              or <code>blocked</code>. Phase, progress, and error are process-lifetime
-              state and are not reconstructed after restart; status then reports
-              the durable current Publication state.
+              Use <code>manage_index action="status"</code> to see index state.
+              If indexing is in progress, use native reads and retry your
+              search after the reported interval. For repositories beyond the
+              automatic limits, use <code>manage_index action="create"</code>
+              when you intend to index them explicitly.
             </p>
           </div>
           <div class="step">
@@ -1606,8 +1612,9 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
               <code>manage_index action="reindex"</code> creates a fresh
               Publication when the current generation is absent, corrupt, or
               incompatible with the running architecture/configuration, including
-              Publications written in a retired format. Satori never migrates or
-              repairs an old Publication; reindex is the only fix.
+              Publications written in a retired format. Managed offline
+              runtimes can start an eligible rebuild automatically. Use explicit
+              reindex when automatic recovery is unavailable.
             </p>
             <p>
               While a compatible background reindex runs, reads and searches

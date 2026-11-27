@@ -1,0 +1,523 @@
+{
+  "schemaVersion": 1,
+  "topK": 10,
+  "description": "45-query natural-language behavioral benchmark across 3 non-Satori repositories (trufflehog/Go, tessera/TypeScript, claive/Python+Rust).",
+  "repos": [
+    {
+      "name": "trufflehog",
+      "path": "/home/hamza/repo/trufflehog",
+      "language": "Go",
+      "queries": [
+        {
+          "id": "th1",
+          "tags": ["go", "cache", "conceptual"],
+          "query": "where does trufflehog cache credential verification results to avoid repeating remote API checks for the same secret",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/verificationcache/verification_cache\\.go$",
+              "symbolRegex": "^(FromData|VerificationCache|New|getResultCacheKey)$"
+            }
+          ]
+        },
+        {
+          "id": "th2",
+          "tags": ["go", "decoding", "pipeline"],
+          "query": "where does trufflehog apply multiple decoders recursively up to a maximum depth on each chunk",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/engine/engine\\.go$",
+              "symbolRegex": "^iterativeDecode$"
+            }
+          ]
+        },
+        {
+          "id": "th3",
+          "tags": ["go", "matching", "prefilter"],
+          "query": "where does trufflehog use Aho-Corasick keyword matching to find candidate detectors for a chunk",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/engine/ahocorasick/ahocorasickcore\\.go$",
+              "symbolRegex": "^(FindDetectorMatches|Core|NewAhoCorasickCore)$"
+            }
+          ]
+        },
+        {
+          "id": "th4",
+          "tags": ["go", "filtering", "entropy"],
+          "query": "where does trufflehog drop unverified findings or filter results by entropy thresholds",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/engine/engine\\.go$",
+              "symbolRegex": "^filterResults$"
+            }
+          ]
+        },
+        {
+          "id": "th5",
+          "tags": ["go", "line-numbers", "mapping"],
+          "query": "where does trufflehog map a detected secret back to its line number in a file fragment",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/engine/engine\\.go$",
+              "symbolRegex": "^(SetResultLineNumber|FragmentLineOffset|AssignDuplicateLineOffsets|FragmentFirstLineAndLink)$"
+            }
+          ]
+        },
+        {
+          "id": "th6",
+          "tags": ["go", "http", "retry"],
+          "query": "where does trufflehog retry HTTP requests on 429 rate limits and honor Retry-After headers",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/roundtripper/roundtripper\\.go$",
+              "symbolRegex": "^(shouldRetryRequest|RoundTrip|getRetryAfter)$"
+            }
+          ]
+        },
+        {
+          "id": "th7",
+          "tags": ["go", "chunking", "io"],
+          "query": "where does trufflehog read an input file or stream in fixed chunks with peek overlap",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/sources/chunker\\.go$",
+              "symbolRegex": "^(readInChunks|NewChunkReader|calculateOptimalChunkSize|createReaderFn)$"
+            }
+          ]
+        },
+        {
+          "id": "th8",
+          "tags": ["go", "concurrency", "sources"],
+          "query": "where does trufflehog schedule concurrent source enumeration and wait for source workers to finish",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/sources/source_manager\\.go$",
+              "symbolRegex": "^(EnumerateAndScan|Enumerate|Wait|SourceManager)$"
+            }
+          ]
+        },
+        {
+          "id": "th9",
+          "tags": ["go", "resume", "state"],
+          "query": "where does trufflehog decode and skip already scanned repositories when resuming an interrupted scan",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/sources/resume\\.go$",
+              "symbolRegex": "^(FilterReposToResume|DecodeResumeInfo|RemoveRepoFromResumeInfo)$"
+            }
+          ]
+        },
+        {
+          "id": "th10",
+          "tags": ["go", "decoder", "html"],
+          "query": "where does trufflehog extract visible text from HTML content while handling syntax highlighting",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/decoders/html\\.go$",
+              "symbolRegex": "^(FromChunk|extractHTML|walkNode|hasSyntaxHighlightClass)$"
+            }
+          ]
+        },
+        {
+          "id": "th11",
+          "tags": ["go", "decoder", "base64"],
+          "query": "where does trufflehog scan base64 character substrings from a chunk for decoding",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/decoders/base64\\.go$",
+              "symbolRegex": "^(FromChunk|getSubstringsOfCharacterSet|appendB64Substring)$"
+            }
+          ]
+        },
+        {
+          "id": "th12",
+          "tags": ["go", "validation", "custom-detectors"],
+          "query": "where does trufflehog validate HTTP endpoints, headers, and status code ranges for custom regex detectors",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/custom_detectors/validation\\.go$",
+              "symbolRegex": "^(ValidateVerifyEndpoint|ValidateVerifyHeaders|ValidateVerifyRanges|StatusCodeMatchesRanges)$"
+            }
+          ]
+        },
+        {
+          "id": "th13",
+          "tags": ["go", "regex", "custom-detectors"],
+          "query": "where does trufflehog build combinations of multiple named regex capture groups in custom detectors",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/custom_detectors/custom_detectors\\.go$",
+              "symbolRegex": "^(permutateMatches|productIndices|createResults)$"
+            }
+          ]
+        },
+        {
+          "id": "th14",
+          "tags": ["go", "memory", "pool"],
+          "query": "where does trufflehog manage reusable byte buffers to reduce allocations during scanning",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/buffers/pool/pool\\.go$",
+              "symbolRegex": "^(NewBufferPool|Get|Put|Pool)$"
+            }
+          ]
+        },
+        {
+          "id": "th15",
+          "tags": ["go", "sanitization", "utf8"],
+          "query": "where does trufflehog strip null bytes and replace invalid UTF-8 sequences in sanitized strings",
+          "acceptable": [
+            {
+              "pathRegex": "^pkg/sanitizer/utf8\\.go$",
+              "symbolRegex": "^UTF8$"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tessera",
+      "path": "/home/hamza/repo/tessera",
+      "language": "TypeScript/TSX",
+      "queries": [
+        {
+          "id": "ts1",
+          "tags": ["ts", "hlc", "crdt"],
+          "query": "where does tessera compare and advance hybrid logical clocks when observing remote timestamps",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/hlc\\.ts$",
+              "symbolRegex": "^(HlcClock|compareHlc|observe|tick|parseHlc|serializeHlc)$"
+            }
+          ]
+        },
+        {
+          "id": "ts2",
+          "tags": ["ts", "sync", "dedupe"],
+          "query": "where does tessera deduplicate and apply a batch of remote sync operations inside a database transaction",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/sync\\.ts$",
+              "symbolRegex": "^(applyRemoteOpsInTx|applyOpInTx)$"
+            }
+          ]
+        },
+        {
+          "id": "ts3",
+          "tags": ["ts", "sync", "merge"],
+          "query": "where does tessera resolve concurrent field-level updates and counter increments during sync merge",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/sync\\.ts$",
+              "symbolRegex": "^(mergeSetFields|mergeIncrement|effectiveIncrementValue)$"
+            }
+          ]
+        },
+        {
+          "id": "ts4",
+          "tags": ["ts", "undo", "conflicts"],
+          "query": "where does tessera check for revision conflicts before rolling back an AI mutation batch",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/agent-runtime/src/undo\\.ts$",
+              "symbolRegex": "^undoAiBatch$"
+            }
+          ]
+        },
+        {
+          "id": "ts5",
+          "tags": ["ts", "trust", "confirmation"],
+          "query": "where does tessera capture target revisions and issue single-use confirmation plans for Tier 2 actions",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/agent-runtime/src/trust\\.ts$",
+              "symbolRegex": "^(createTrustManager|proposeTier2Action|confirmTier2Plan)$"
+            }
+          ]
+        },
+        {
+          "id": "ts6",
+          "tags": ["ts", "agent", "compiler"],
+          "query": "where does tessera execute an AI agent turn with tool calling and compile turn results",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/agent-runtime/src/compiler\\.ts$",
+              "symbolRegex": "^(executeTurnOnce|compileTurnWithProvider)$"
+            }
+          ]
+        },
+        {
+          "id": "ts7",
+          "tags": ["ts", "patch", "ui"],
+          "query": "where does tessera validate and apply incremental UI view patch operations",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/agent-runtime/src/patch\\.ts$",
+              "symbolRegex": "^(applyViewPatchOps|createDraftPatchAssembler)$"
+            }
+          ]
+        },
+        {
+          "id": "ts8",
+          "tags": ["ts", "query", "sqlite"],
+          "query": "where does tessera evaluate collection query filters, sorting, and relation hydration against SQLite",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/query\\.ts$",
+              "symbolRegex": "^(executeQueryOnDriver|executeQueriesOnDriver)$"
+            }
+          ]
+        },
+        {
+          "id": "ts9",
+          "tags": ["ts", "migrations", "schema"],
+          "query": "where does tessera classify schema changes as destructive or additive during collection updates",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/schema-diff\\.ts$",
+              "symbolRegex": "^classifySchemaDiff$"
+            }
+          ]
+        },
+        {
+          "id": "ts10",
+          "tags": ["ts", "validation", "fields"],
+          "query": "where does tessera validate dynamic record field values against a collection schema",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/ssot/src/validation\\.ts$",
+              "symbolRegex": "^(validateFieldValues|validateFieldDefinitions)$"
+            }
+          ]
+        },
+        {
+          "id": "ts11",
+          "tags": ["ts", "credits", "ledger"],
+          "query": "where does tessera grant idempotent credits and place holds on user account balances",
+          "acceptable": [
+            {
+              "pathRegex": "^apps/api/src/credits/ledger\\.ts$",
+              "symbolRegex": "^(createCreditLedgerService|grantCredits|holdCredits)$"
+            }
+          ]
+        },
+        {
+          "id": "ts12",
+          "tags": ["ts", "billing", "stripe"],
+          "query": "where does tessera verify Stripe webhook signatures and fulfill credit pack purchases",
+          "acceptable": [
+            {
+              "pathRegex": "^apps/api/src/billing/stripe\\.ts$",
+              "symbolRegex": "^(createStripeBillingService|signStripeWebhookPayload|handleWebhook)$"
+            }
+          ]
+        },
+        {
+          "id": "ts13",
+          "tags": ["ts", "api", "rate-limit"],
+          "query": "where does tessera enforce per-user sync rate limits and push/pull operation caps on the cloud API",
+          "acceptable": [
+            {
+              "pathRegex": "^apps/api/src/sync/sync-service\\.ts$",
+              "symbolRegex": "^(createCloudSyncService|MAX_PUSHES_PER_MINUTE|MAX_OPS_PER_DAY)$"
+            }
+          ]
+        },
+        {
+          "id": "ts14",
+          "tags": ["ts", "api", "ai-compile"],
+          "query": "where does tessera estimate LLM token costs and parse non-JSON AI compilation responses",
+          "acceptable": [
+            {
+              "pathRegex": "^apps/api/src/compile-handler\\.ts$",
+              "symbolRegex": "^(estimateCostUsd|parseAiJsonText|validateTurnSemantics|createCompileHandler)$"
+            }
+          ]
+        },
+        {
+          "id": "ts15",
+          "tags": ["ts", "filters", "inheritance"],
+          "query": "where does tessera compute safe filter inheritance when creating new records inside a filtered collection view",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/app-runtime/src/view-filter-utils\\.ts$",
+              "symbolRegex": "^(computeSafeFilterInheritance|isRecordVisibleInCollectionQueries)$"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "claive",
+      "path": "/home/hamza/repo/claive",
+      "language": "Python + Rust",
+      "queries": [
+        {
+          "id": "cl1",
+          "tags": ["py", "memory", "limits"],
+          "query": "where does claive run a subprocess under a resident memory cap and time limit and kill its session tree if exceeded",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/memcap\\.py$",
+              "symbolRegex": "^(run_capped|kill_session|session_processes)$"
+            }
+          ]
+        },
+        {
+          "id": "cl2",
+          "tags": ["py", "processes", "cgroup"],
+          "query": "where does claive terminate a detached process tree using SIGTERM, cgroup.kill, and SIGKILL escalation",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/procgroup\\.py$",
+              "symbolRegex": "^(terminate_tree|tree_pids|signal_tree)$"
+            }
+          ]
+        },
+        {
+          "id": "cl3",
+          "tags": ["py", "budget", "handoff"],
+          "query": "where does claive track token budgets and pause a worker with a handoff prompt for context recovery",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/budget\\.py$",
+              "symbolRegex": "^(transition|_pause|resume|observe_entry)$"
+            }
+          ]
+        },
+        {
+          "id": "cl4",
+          "tags": ["py", "timeouts", "stall"],
+          "query": "where does claive decide whether to continue, stop, or warn a turn based on elapsed time and stall timeouts",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/runtime_limits\\.py$",
+              "symbolRegex": "^turn_action$"
+            }
+          ]
+        },
+        {
+          "id": "cl5",
+          "tags": ["py", "steering", "receipts"],
+          "query": "where does claive submit, withdraw, and stage steering receipts across worker turn continuations",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/steering\\.py$",
+              "symbolRegex": "^(submit|withdraw|stage_continuation|enter_continuation|continuation_records)$"
+            }
+          ]
+        },
+        {
+          "id": "cl6",
+          "tags": ["py", "wakes", "scheduling"],
+          "query": "where does claive create recurring or one-shot scheduled wake files with file locking and deliver due wakes",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/wakes\\.py$",
+              "symbolRegex": "^(create|deliver_due|deliver_all)$"
+            }
+          ]
+        },
+        {
+          "id": "cl7",
+          "tags": ["py", "acceptance", "paths"],
+          "query": "where does claive detect noisy verifier byproducts and check changed workspace paths against an allowlist",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/acceptance\\.py$",
+              "symbolRegex": "^(is_noise_path|filter_noise_paths|violations|snapshot|changed)$"
+            }
+          ]
+        },
+        {
+          "id": "cl8",
+          "tags": ["py", "redaction", "security"],
+          "query": "where does claive redact API keys, passwords, and secrets from text in Python",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/redaction\\.py$",
+              "symbolRegex": "^(redact|_mask_json_named_value|_mask_assigned_value)$"
+            }
+          ]
+        },
+        {
+          "id": "cl9",
+          "tags": ["rs", "redaction", "cross-lang"],
+          "query": "where does claive redact bearer tokens, private keys, and secret fields in the Rust TUI event formatter",
+          "acceptable": [
+            {
+              "pathRegex": "^tui/src/events\\.rs$",
+              "symbolRegex": "^(redact_secrets|redact_bearer_tokens|redact_private_keys|redact_json_named_values)$"
+            }
+          ]
+        },
+        {
+          "id": "cl10",
+          "tags": ["rs", "liveness", "proc"],
+          "query": "where does claive verify whether a worker or watcher process is still alive using proc stat start times and boot IDs in Rust",
+          "acceptable": [
+            {
+              "pathRegex": "^tui/src/proc\\.rs$",
+              "symbolRegex": "^(check_worker_liveness|verify_watcher_alive|pid_identity_with_boot|pid_identity)$"
+            }
+          ]
+        },
+        {
+          "id": "cl11",
+          "tags": ["rs", "tui", "triage"],
+          "query": "where does claive classify worker triage badges and compute sort keys for the TUI worker list",
+          "acceptable": [
+            {
+              "pathRegex": "^tui/src/app\\.rs$",
+              "symbolRegex": "^(classify_worker|worker_sort_key|worker_forum_sort_key)$"
+            }
+          ]
+        },
+        {
+          "id": "cl12",
+          "tags": ["py", "orchestration", "critics"],
+          "query": "where does claive fold orchestration events and select the next implementer or critic lane in multi-agent runs",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/orchestration\\.py$",
+              "symbolRegex": "^(fold|decide|pick_critic|select)$"
+            }
+          ]
+        },
+        {
+          "id": "cl13",
+          "tags": ["py", "orchestration", "cache"],
+          "query": "where does claive cache verifier results keyed by workspace state to skip redundant test runs",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/orchestration\\.py$",
+              "symbolRegex": "^(verify_with_cache|run_cache_key|restore_cache|store_cache)$"
+            }
+          ]
+        },
+        {
+          "id": "cl14",
+          "tags": ["py", "sessions", "cleanup"],
+          "query": "where does claive expire and clean up idle worker sessions while skipping protected active sessions",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/idle_sessions\\.py$",
+              "symbolRegex": "^(cleanup|expire|protected|resume)$"
+            }
+          ]
+        },
+        {
+          "id": "cl15",
+          "tags": ["py", "inbox", "sessions"],
+          "query": "where does claive resolve the parent harness and sanitize session identifiers for the completion inbox",
+          "acceptable": [
+            {
+              "pathRegex": "^bin/claivelib/inbox\\.py$",
+              "symbolRegex": "^(infer_parent_harness|resolve_parent_session|sanitize_session)$"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

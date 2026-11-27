@@ -50,6 +50,13 @@ export const SATORI_RUNTIME_ENV_VARS = [
     "MCP_ENABLE_WATCHER",
 ] as const;
 
+// Client-owned settings are preserved and inspected, but never installed as defaults.
+export const SATORI_CLIENT_TOOL_ENV_VARS = [
+    "SATORI_CODEMODE",
+    "SATORI_TOOL_PROFILE",
+    "SATORI_CODEMODE_MCP_CONFIG",
+] as const;
+
 export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "SATORI_RUNTIME_PROFILE",
     "VECTOR_STORE_PROVIDER",

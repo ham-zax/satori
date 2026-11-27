@@ -1,5 +1,6 @@
 import type { ListToolsResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { SCRIPT_TOOL_GUIDE } from "../codemode/tool-guide.js";
 import { CapabilityResolver, type CapabilityMatrix } from "../core/capabilities.js";
 import { architectureOverviewTool } from "./architecture_overview.js";
 import { manageIndexTool } from "./manage_index.js";
@@ -22,7 +23,8 @@ export type McpToolAdvertisement = Readonly<{
     inputSchema: ToolInputSchema;
 }>;
 
-const cachedToolListByMatrix = new WeakMap<Readonly<CapabilityMatrix>, readonly McpToolAdvertisement[]>();
+const fullToolListByMatrix = new WeakMap<Readonly<CapabilityMatrix>, readonly McpToolAdvertisement[]>();
+const compactToolListByMatrix = new WeakMap<Readonly<CapabilityMatrix>, readonly McpToolAdvertisement[]>();
 
 function deepFreeze<T>(value: T): T {
     if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
@@ -62,8 +64,12 @@ export const toolRegistry: Record<string, McpTool> = Object.fromEntries(
     toolList.map((tool) => [tool.name, tool])
 );
 
-export function isMcpToolEnabled(name: string, ctx: ToolContext): boolean {
+function isMcpToolEnabled(name: string, ctx: ToolContext): boolean {
     return name !== runScriptTool.name || ctx.codeMode?.enabled !== false;
+}
+
+export function isDirectMcpToolEnabled(name: string, ctx: ToolContext): boolean {
+    return isMcpToolEnabled(name, ctx) && !(ctx.codeMode?.compact && SCRIPT_TOOL_GUIDE.has(name));
 }
 
 export function resolveMcpTool(name: string, ctx: ToolContext): McpTool | undefined {
@@ -96,7 +102,7 @@ function buildAllMcpTools(ctx: ToolContext): McpToolAdvertisement[] {
 }
 
 export function buildMcpToolList(ctx: ToolContext): McpToolAdvertisement[] {
-    return buildAllMcpTools(ctx).filter((tool) => isMcpToolEnabled(tool.name, ctx));
+    return buildAllMcpTools(ctx).filter((tool) => isDirectMcpToolEnabled(tool.name, ctx));
 }
 
 export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: ToolInputSchema }> {
@@ -104,10 +110,12 @@ export function getMcpToolList(ctx: ToolContext): Array<{ name: string; descript
     if (!witness) {
         return buildMcpToolList(ctx);
     }
-    let cached = cachedToolListByMatrix.get(witness);
+    const cache = ctx.codeMode?.compact ? compactToolListByMatrix : fullToolListByMatrix;
+    let cached = cache.get(witness);
     if (!cached) {
+        // Only run_script's description varies by profile. Availability is applied after caching.
         cached = deepFreeze(buildAllMcpTools(ctx));
-        cachedToolListByMatrix.set(witness, cached);
+        cache.set(witness, cached);
     }
-    return cached.filter((tool) => isMcpToolEnabled(tool.name, ctx));
+    return cached.filter((tool) => isDirectMcpToolEnabled(tool.name, ctx));
 }

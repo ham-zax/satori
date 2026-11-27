@@ -381,6 +381,8 @@ export async function probeManagedRuntimeCandidate(
                 ...input.runtimeEnvironment,
                 HOME: input.homeDir,
                 SATORI_RUN_MODE: "postflight",
+                // Probe the base tool contract independently of agent profile settings.
+                SATORI_CODEMODE: "0",
                 SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceRoot]),
             },
             startupTimeoutMs: 10_000,

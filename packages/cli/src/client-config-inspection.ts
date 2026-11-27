@@ -11,7 +11,7 @@ import type {
 import { resolveClientTargets } from "./client-targets.js";
 import { isManagedCommandParts, resolveLauncherPath, resolveManagedClientCommand } from "./managed-runtime-paths.js";
 import { parseCodexConfig } from "./codex-config.js";
-import { SATORI_RUNTIME_ENV_VARS } from "./install-contracts.js";
+import { SATORI_CLIENT_TOOL_ENV_VARS, SATORI_RUNTIME_ENV_VARS } from "./install-contracts.js";
 import { parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
 import {
     objectValue,
@@ -51,10 +51,13 @@ export function filteredRuntimeEnvironment(
         return Object.freeze({});
     }
     const entries: Array<[string, string]> = [];
-    for (const name of SATORI_RUNTIME_ENV_VARS) {
+    for (const name of [...SATORI_RUNTIME_ENV_VARS, ...SATORI_CLIENT_TOOL_ENV_VARS]) {
         const resolved = resolveConfiguredEnvironmentValue(input[name], inheritedEnv);
         if (resolved !== undefined) {
             entries.push([name, resolved]);
+        } else if ((SATORI_CLIENT_TOOL_ENV_VARS as readonly string[]).includes(name) && name in input) {
+            // Preserve unresolved references so doctor does not infer an ambient default.
+            entries.push([name, typeof input[name] === "string" ? input[name] as string : "{env:SATORI_UNRESOLVED}"]);
         }
     }
     return Object.freeze(Object.fromEntries(entries));

@@ -248,6 +248,8 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
                 ...options.env,
                 HOME: options.homeDir,
                 SATORI_RUN_MODE: "postflight",
+                // Check the base tool contract even when the user opts into compact mode.
+                SATORI_CODEMODE: "0",
                 SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceRoot]),
                 // Candidate/postflight verification must execute the candidate
                 // itself rather than attach to an already-running shared host.
@@ -286,7 +288,7 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
             name: "tool_list",
             status: toolsMatch ? "ok" : "error",
             message: toolsMatch
-                ? "Launcher exposes the fixed nine-tool Satori surface in canonical order."
+                ? "Launcher exposes the base Satori tools in canonical order."
                 : `Expected tools ${JSON.stringify(EXPECTED_TOOL_NAMES)}, received ${JSON.stringify(listedNames)}.`,
         });
 

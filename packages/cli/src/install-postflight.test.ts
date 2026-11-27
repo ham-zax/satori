@@ -75,6 +75,8 @@ test("install postflight verifies launcher, clients, tools, owner, config, and t
                 VOYAGEAI_API_KEY: "test-key",
                 MILVUS_ADDRESS: "localhost:19530",
                 SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]),
+                SATORI_CODEMODE: "1",
+                SATORI_TOOL_PROFILE: "compact",
             },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
@@ -85,6 +87,7 @@ test("install postflight verifies launcher, clients, tools, owner, config, and t
                 assert.equal(cwd, path.dirname(args[0]));
                 assert.equal(env.SATORI_SESSION_ROOTS_JSON, JSON.stringify([cwd]));
                 assert.equal(env.SATORI_RUN_MODE, "postflight");
+                assert.equal(env.SATORI_CODEMODE, "0");
                 assert.equal(env.SATORI_SHARED_RUNTIME_DISABLE, "1");
                 return createSession(homeDir);
             },

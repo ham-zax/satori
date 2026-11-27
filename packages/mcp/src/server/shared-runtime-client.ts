@@ -1,3 +1,4 @@
+import { readCodeModeSettings } from "../codemode/settings.js";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -37,6 +38,7 @@ type AttachRequest = Readonly<{
     allowBroadRoots: boolean;
     allowImplicitBroadContainerRoot?: boolean;
     autoIndexOnStart?: boolean;
+    compactToolProfile?: boolean;
 }>;
 
 type AttachResponse = Readonly<{
@@ -110,6 +112,7 @@ async function attach(
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
     autoIndexOnStart: boolean,
+    compactToolProfile: boolean,
     expectedHost?: SharedRuntimeHostMetadata,
 ): Promise<net.Socket> {
     const socket = await connectSocket(socketPath, timeoutMs);
@@ -131,6 +134,7 @@ async function attach(
         allowBroadRoots,
         allowImplicitBroadContainerRoot,
         autoIndexOnStart,
+        compactToolProfile,
     });
     socket.write(`${JSON.stringify(request)}\n`);
 
@@ -237,6 +241,7 @@ async function attachFromMetadata(
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
     autoIndexOnStart: boolean,
+    compactToolProfile: boolean,
 ): Promise<net.Socket | null> {
     const metadata = readHostMetadata(metadataPath);
     if (!metadata) return null;
@@ -250,7 +255,7 @@ async function attachFromMetadata(
     })) {
         return null;
     }
-    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, allowImplicitBroadContainerRoot, autoIndexOnStart, metadata);
+    return attach(metadata.socketPath, identity, timeoutMs, workspaceRoots, allowBroadRoots, allowImplicitBroadContainerRoot, autoIndexOnStart, compactToolProfile, metadata);
 }
 
 function isTransientAttachError(error: unknown): boolean {
@@ -270,6 +275,7 @@ async function waitForHostTransition(
     allowBroadRoots: boolean,
     allowImplicitBroadContainerRoot: boolean,
     autoIndexOnStart: boolean,
+    compactToolProfile: boolean,
 ): Promise<net.Socket | null> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
@@ -286,6 +292,7 @@ async function waitForHostTransition(
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
                     autoIndexOnStart,
+                    compactToolProfile,
                 );
                 unexpected.destroy();
                 throw new Error(
@@ -319,6 +326,7 @@ async function waitForHostTransition(
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
                     autoIndexOnStart,
+                    compactToolProfile,
                     metadata,
                 );
             } catch (error) {
@@ -366,6 +374,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
     const allowBroadRoots = resolveAllowBroadRoots(options.env);
     const allowImplicitBroadContainerRoot = !hasExplicitSessionWorkspaceRoots(options.env);
     const autoIndexOnStart = resolveAutoIndexOnSessionStart(options.env);
+    const compactToolProfile = readCodeModeSettings((name) => options.env[name]).compact;
     const remainingTime = (): number => Math.max(1, deadline - Date.now());
 
     for (;;) {
@@ -379,6 +388,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 allowBroadRoots,
                 allowImplicitBroadContainerRoot,
                 autoIndexOnStart,
+                compactToolProfile,
             );
         } catch (error) {
             if (!isTransientAttachError(error)) throw error;
@@ -391,6 +401,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                 allowBroadRoots,
                 allowImplicitBroadContainerRoot,
                 autoIndexOnStart,
+                compactToolProfile,
             );
         }
         if (existing) return existing;
@@ -410,6 +421,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                     allowBroadRoots,
                     allowImplicitBroadContainerRoot,
                     autoIndexOnStart,
+                    compactToolProfile,
                 );
             } catch (error) {
                 if (!isTransientAttachError(error)) throw error;
@@ -446,6 +458,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         allowBroadRoots,
                         allowImplicitBroadContainerRoot,
                         autoIndexOnStart,
+                        compactToolProfile,
                     );
                 } catch (error) {
                     const code = (error as NodeJS.ErrnoException).code;
@@ -486,6 +499,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         allowBroadRoots,
                         allowImplicitBroadContainerRoot,
                         autoIndexOnStart,
+                        compactToolProfile,
                     );
                     if (connected) return connected;
                 } catch (error) {

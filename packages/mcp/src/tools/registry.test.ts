@@ -324,10 +324,20 @@ test('getMcpToolList falls back to uncached build when capabilities witness is n
     assert.equal(continueProps.limit.maximum, 19);
 });
 
-test("CodeMode availability is applied after the capability advertisement cache", () => {
+test("tool advertisements are cached by capability and profile while CodeMode disablement is applied after", () => {
     const enabled = buildContext();
-    const disabled = { ...enabled, codeMode: { enabled: false, configPath: undefined } };
+    const disabled = { ...enabled, codeMode: { enabled: false, compact: false, configPath: undefined } };
+    const compact = { ...enabled, codeMode: { enabled: true, compact: true, configPath: undefined } };
     assert.equal(getMcpToolList(disabled).some((tool) => tool.name === "run_script"), false);
-    assert.equal(getMcpToolList(enabled).some((tool) => tool.name === "run_script"), true);
+    const compactList = getMcpToolList(compact);
+    assert.equal(compactList.length, 7);
+    const fullList = getMcpToolList(enabled);
+    assert.equal(fullList.length, 12);
+    for (const [index, tool] of getMcpToolList(compact).entries()) {
+        assert.equal(tool, compactList[index]);
+        if (tool.name !== "run_script") assert.deepEqual(tool, fullList.find(({ name }) => name === tool.name));
+    }
+    assert.match(compactList.find(({ name }) => name === "run_script")!.description, /tools\.trace_path\(/);
+    assert.doesNotMatch(fullList.find(({ name }) => name === "run_script")!.description, /tools\.trace_path\(/);
     assert.equal(getMcpToolList(disabled).some((tool) => tool.name === "run_script"), false);
 });

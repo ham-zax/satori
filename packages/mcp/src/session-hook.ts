@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { probeCurrentPublicationForPath, type PublicationPathProbe } from "@satori-code/core/integration";
+import { CODEMODE_AGENT_GUIDANCE } from "./codemode/tool-guide.js";
 
 /**
  * Claude Code SessionStart hook body, loaded by the installer-managed
@@ -134,7 +135,10 @@ export function buildSessionStartHookOutput(
     } catch {
         return null;
     }
-    return contextFor(probeCurrentPublicationForPath(cwd, { stateRoot: options.stateRoot }), cwd);
+    const output = contextFor(probeCurrentPublicationForPath(cwd, { stateRoot: options.stateRoot }), cwd);
+    // The hook process and the MCP server can have different environments.
+    if (output) output.hookSpecificOutput.additionalContext += ` ${CODEMODE_AGENT_GUIDANCE}`;
+    return output;
 }
 
 async function readBoundedStdin(stdin: NodeJS.ReadableStream & { isTTY?: boolean }): Promise<string> {

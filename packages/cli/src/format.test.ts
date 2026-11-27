@@ -28,6 +28,12 @@ test("formatToolsListText truncates long lines to the requested width and tolera
     assert.match(formatToolsListText(null), /^\nUse --format json/);
 });
 
+test("compact tool list points to the script routing signatures", () => {
+    const text = formatToolsListText({ tools: [{ name: "run_script" }, { name: "search_codebase" }] });
+    assert.match(text, /Compact profile: call specialists through run_script/);
+    assert.doesNotMatch(formatToolsListText({ tools: [{ name: "run_script" }, { name: "list_codebases" }] }), /Compact profile/);
+});
+
 function textResult(text: string) {
     return { isError: false, content: [{ type: "text", text }] };
 }

@@ -95,10 +95,10 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
             "satori tool call <toolName> --args-json '<json>'",
             "satori tool call <toolName> --args-file <path>",
         ],
-        summary: "Call an MCP tool from the terminal. Text output prints the tool's readable summary.",
+        summary: "Call an MCP tool from the terminal. If run_script is listed, use it to chain calls. Text output prints the tool's readable summary.",
         examples: [
-            "satori tool call list_codebases --args-json '{}'",
-            "satori tool call manage_index --args-json '{\"action\":\"status\",\"path\":\"/abs/repo\"}' --format json",
+            "satori tool call manage_index --args-json '{\"action\":\"status\",\"path\":\"/abs/repo\"}'",
+            "satori tool call run_script --args-json '{\"code\":\"return await tools.list_codebases({});\"}'",
         ],
     },
 };

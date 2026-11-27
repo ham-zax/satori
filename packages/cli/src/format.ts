@@ -52,6 +52,9 @@ export function formatToolsListText(result: unknown, width: number = DEFAULT_TEX
     return [
         ...lines,
         "",
+        ...(entries.some((tool) => tool.name === "run_script") && !entries.some((tool) => tool.name === "list_codebases")
+            ? ["Compact profile: call specialists through run_script; use --format json for its signatures.", ""]
+            : []),
         "Use --format json for full tool descriptions and input schemas.",
         "",
     ].join("\n");

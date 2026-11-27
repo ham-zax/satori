@@ -651,6 +651,7 @@ Environment Variables:
   Read File Configuration:
   READ_FILE_MAX_LINES     Max lines returned by read_file when no explicit range is provided (default: 1000)
   SATORI_CODEMODE          Set to 0 to disable run_script (default: enabled)
+  SATORI_TOOL_PROFILE      Set to compact to advertise seven tools when CodeMode is enabled
   SATORI_CODEMODE_MCP_CONFIG Absolute path to an optional downstream MCP server allowlist
   READ_FILE_MAX_BYTES     Max whole-file bytes read_file may read before range selection (default: 8388608, min 65536, max 67108864)
 

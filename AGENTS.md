@@ -12,6 +12,7 @@ Your global instructions (`~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENT
 * **Results before new work.** Report the finished run and deliver what is already owed before starting anything new.
 * **Start from the workflow skill** your global instructions name, and use its fast path for small changes.
 * **Use Satori first for code navigation.** When you need to locate unfamiliar behavior or its owner, start with Satori MCP `search_codebase` and follow `recommendedNextAction`. Use Satori’s graph tools for callers, architecture, and change impact. Use native reads and `rg` for exact lookups or when Satori or its index is unavailable.
+* **Chain related calls with CodeMode.** When `run_script` is available, use it to combine related reads or graph calls and return just the evidence you need. In the compact profile, use the specialist call signatures in its description, such as `await tools.list_codebases({})`. Keep index mutations in direct `manage_index` calls.
 * **I dictate by voice.** Read for intent, state your reading of an unclear phrase in one line, and continue with what is clear.
 
 ## Scope

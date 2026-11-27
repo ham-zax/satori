@@ -76,6 +76,30 @@ export interface DoctorRuntimeConfiguration {
     rerankerModel?: string | null;
     rerankerProfile: string | null;
     vectorStore: "Milvus" | "LanceDB" | null;
+    toolSettings?: DoctorToolSettings;
+}
+
+export interface DoctorToolSettings {
+    codeMode: "enabled" | "disabled" | "unknown";
+    profile: "full" | "compact" | "full (unrecognized setting)" | "unknown";
+    downstream: "configured (not validated)" | "not configured" | "disabled" | "unknown";
+}
+
+// Mirrors the server's environment selection; it does not validate or open downstream config.
+function toolSettings(env: NodeJS.ProcessEnv): DoctorToolSettings {
+    const unresolved = (value: string | undefined) => value !== undefined
+        && /^(?:\{env:[A-Z][A-Z0-9_]*\}|\$\{[A-Z][A-Z0-9_]*(?::-)?\})$/.test(value);
+    const mode = env.SATORI_CODEMODE;
+    const profile = env.SATORI_TOOL_PROFILE;
+    const downstream = env.SATORI_CODEMODE_MCP_CONFIG;
+    if (unresolved(mode)) return { codeMode: "unknown", profile: "unknown", downstream: "unknown" };
+    if (mode?.trim() === "0") return { codeMode: "disabled", profile: "full", downstream: "disabled" };
+    return {
+        codeMode: "enabled",
+        profile: unresolved(profile) ? "unknown" : profile?.trim() === "compact" ? "compact"
+            : !profile?.trim() ? "full" : "full (unrecognized setting)",
+        downstream: unresolved(downstream) ? "unknown" : downstream ? "configured (not validated)" : "not configured",
+    };
 }
 
 export interface DoctorResult {
@@ -90,6 +114,7 @@ export interface DoctorResult {
     managedRuntime: ManagedRuntimeSnapshot | null;
     /** Sanitized effective runtime selection for every supported client. */
     runtimeConfigurations?: DoctorRuntimeConfiguration[];
+    ambientToolSettings?: DoctorToolSettings;
     /** Aggregated CLI activity stored only on this machine; contains no repository or request identity. */
     localDiagnostics: LocalDiagnosticsSummary;
 }
@@ -342,6 +367,7 @@ function buildRuntimeConfigurationRows(
             client,
             status: proof.status === "ok" ? "configured" : "needs_repair",
             source,
+            ...(proof.status === "ok" ? { toolSettings: toolSettings(context.environment) } : {}),
             profile: allowlistedValue(selection.executionProfile, DISPLAYED_RUNTIME_PROFILES),
             embeddingProvider: allowlistedValue(selection.embeddingProvider, DISPLAYED_EMBEDDING_PROVIDERS),
             embeddingModel: sanitizedModelIdentity(selection.embeddingModel),
@@ -853,6 +879,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         nextSteps: [...new Set(nextSteps)],
         managedRuntime,
         runtimeConfigurations,
+        ambientToolSettings: toolSettings(env),
         localDiagnostics: readLocalDiagnosticsSummary(
             options.diagnosticsPath || path.join(homeDir, ".satori", "diagnostics", "events.jsonl"),
         ),

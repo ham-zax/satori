@@ -40,6 +40,12 @@ ownership, behavior location, or related implementation is not yet known.
 
 ## Relationships and impact
 
+If `run_script` is available, chain related calls in its `code` body and return
+only the evidence you need. With the compact profile, use `tools.<name>(args)`
+for specialists absent from the direct tool list. The `run_script` description
+gives their call signatures. For example, send `return await tools.list_codebases({});`
+to discover indexed repositories. Keep index mutations in direct `manage_index` calls.
+
 - `architecture_overview`: repository areas, cross-area boundaries, hotspots.
 - `file_outline`: indexed symbols of one published file, with `call_graph`
   jump handles when available.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SCRIPT_TOOL_GUIDE } from "../codemode/tool-guide.js";
 import { formatZodError, type McpTool } from "./types.js";
 
 export const SCRIPT_SOURCE_MAX_BYTES = 64 * 1024;
@@ -11,10 +12,14 @@ const inputSchema = z.strictObject({
         .describe("JavaScript in an async function body. Use return or text() for selected output."),
 });
 
+const specialistCalls = Array.from(SCRIPT_TOOL_GUIDE, ([name, usage]) => `tools.${name}${usage}.`).join(" ");
+const description = "Chain tool calls in bounded JavaScript. Use return or text() for output. ALL_TOOLS lists available tools. Use manage_index only with action='status' here. Call configured MCP tools as tools['server__tool'].";
+
 export const runScriptTool: McpTool = {
     name: "run_script",
-    description: () =>
-        "Run bounded JavaScript. ALL_TOOLS lists Satori read and discovery tools plus configured MCP tools. Use normal tool args and action='status' for manage_index. Call configured tools as tools['server__tool']. Use return or text() for output.",
+    description: (ctx) => ctx.codeMode?.compact
+        ? `${description} Example code is 'return await tools.list_codebases({});'. ${specialistCalls} Supply absolute paths.`
+        : description,
     inputSchemaZod: () => inputSchema,
     async execute(args, ctx) {
         const parsed = inputSchema.safeParse(args);

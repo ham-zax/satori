@@ -44,6 +44,7 @@ type AttachRequest = Readonly<{
     allowBroadRoots: boolean;
     allowImplicitBroadContainerRoot?: boolean;
     autoIndexOnStart?: boolean;
+    compactToolProfile?: boolean;
 }>;
 
 function isAbsolutePathArray(value: unknown): value is readonly string[] {
@@ -99,6 +100,7 @@ function parseAttachRequest(line: string): AttachRequest | typeof UNSUPPORTED_PR
             allowBroadRoots: value.allowBroadRoots === true,
             allowImplicitBroadContainerRoot: value.allowImplicitBroadContainerRoot === true,
             autoIndexOnStart: value.autoIndexOnStart !== false,
+            compactToolProfile: value.compactToolProfile === true,
         } as AttachRequest);
     } catch {
         return null;
@@ -363,6 +365,7 @@ export class SharedRuntimeSocketHost {
                 trailing,
                 workspacePolicy,
                 request.autoIndexOnStart !== false,
+                request.compactToolProfile === true,
             ).catch(() => {
                 socket.destroy();
                 this.scheduleIdleShutdown();
@@ -379,13 +382,14 @@ export class SharedRuntimeSocketHost {
         trailing: Buffer,
         workspacePolicy: SessionWorkspacePolicy,
         autoIndexOnStart: boolean,
+        compactToolProfile: boolean,
     ): Promise<void> {
         this.pendingHandshakes.delete(socket);
         if (this.closing) {
             socket.destroy();
             return;
         }
-        const session = this.runtimeHost.createSession(workspacePolicy, { autoIndexOnStart });
+        const session = this.runtimeHost.createSession(workspacePolicy, { autoIndexOnStart, compactToolProfile });
         let released = false;
         const release = (): void => {
             if (released) return;

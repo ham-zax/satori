@@ -1,6 +1,7 @@
 import type { CodemodeSandbox, CodemodeTool } from "@earendil-works/pi-codemode";
 import type { ToolContext, ToolResponse } from "../tools/types.js";
 import { configureDownstream } from "./downstream.js";
+import { SCRIPT_TOOL_GUIDE } from "./tool-guide.js";
 
 const LOCAL_TOOLS = [
     "architecture_overview",
@@ -97,6 +98,7 @@ export async function runScript(options: {
     function tool(name: string, invoke: (args: unknown, signal: AbortSignal) => Promise<unknown>): CodemodeTool {
         return {
             name,
+            description: SCRIPT_TOOL_GUIDE.get(name),
             inputSchema: { type: "object", additionalProperties: true },
             execute(args, context) {
                 const callSignal = AbortSignal.any([signal, context.signal]);

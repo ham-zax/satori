@@ -147,7 +147,7 @@ Without the global command, replace `satori` with `npx -y @satori-code/cli@lates
 | `satori tools list` | Inspect the active runtime’s tool names and schemas. |
 | `satori tool call <tool> --args-json '<json>'` | Call an MCP tool directly. Use `--args-file` to supply arguments from a file. |
 
-`satori upgrade` preserves client settings and index locations. Restart the client to pick up the activated release. Use `satori <command> --help` to see supported arguments and flags.
+`satori upgrade` preserves client settings and index locations. The installed Claude hook loads the upgraded runtime on its next run. Refresh the static managed skill by rerunning `satori install --client <configured-client> --no-index` with your current `--runtime`, `--vector-store`, `--reranker` and, if selected, `--reranker-model`. Check `satori doctor --verbose` for the current settings and use `--dry-run` to review the reinstall. A bare install defaults to offline and may change runtime choices. Restart the client after upgrading or reinstalling. Use `satori <command> --help` to see supported arguments and flags.
 
 By default `gc` can evict idle worktree indexes and enforce an index storage budget. To restrict cleanup to retired or orphaned data, use:
 
@@ -181,6 +181,23 @@ In grouped search, `limit` bounds the frozen result set and `disclosureLimit` bo
 ### CodeMode
 
 Send `run_script` a `code` string containing a JavaScript function body. Use `return` for a value and `text()` to emit text. Scripts can call all ten Satori read and discovery tools and `tools.manage_index({ action: "status", path })` under the originating session's workspace policy. Use a direct `manage_index` call for index mutations. Nested calls return structured content, decoded Satori JSON, or plain text. Tool errors reject the promise and can be caught inside the script. Set `SATORI_CODEMODE=0` in the Satori server environment to disable CodeMode.
+
+To opt into the compact profile, set `SATORI_TOOL_PROFILE=compact` in the Satori MCP server environment and reconnect. It exposes seven direct tools (`search_codebase`, `read_file`, `file_outline`, `continue_search`, `call_graph`, `manage_index`, and `run_script`). Invoke `architecture_overview`, `detect_changes`, `find_references`, `list_codebases`, and `trace_path` inside `run_script` using the signatures in its description. For example, send `{"code":"return await tools.list_codebases({});"}`. Unset `SATORI_TOOL_PROFILE` for all twelve direct tools. With `SATORI_CODEMODE=0`, all eleven base tools are available directly regardless of the profile setting.
+
+For a persistent client setting, add an `env` object to the existing `satori` server entry in Claude Code's `~/.claude.json` or VS Code's `~/.config/Code/User/mcp.json`, keeping its existing command and arguments:
+
+```json
+"env": { "SATORI_TOOL_PROFILE": "compact" }
+```
+
+Codex uses `[mcp_servers.satori.env]` with `SATORI_TOOL_PROFILE = "compact"`; OpenCode uses `environment` on `mcp.satori`. Reconnect the client. For the terminal CLI, set the environment on the command itself:
+
+```bash
+SATORI_TOOL_PROFILE=compact satori tools list --format text
+SATORI_TOOL_PROFILE=compact satori tool call run_script --args-json '{"code":"return await tools.list_codebases({});"}'
+```
+
+The terminal inherits its own environment, independently of client-specific settings. `satori doctor` estimates client settings using the doctor's inherited environment and reports the terminal selection separately; it does not validate downstream configuration or launch a server. `install --profile` controls index coverage only; `~/.satori/.env` does not load the tool profile. Remove a client or terminal `SATORI_CODEMODE=0` setting to use `run_script`.
 
 To give scripts access to additional tools, point `SATORI_CODEMODE_MCP_CONFIG` at an absolute path to an operator-controlled JSON file:
 

@@ -372,10 +372,16 @@ test("CodeMode settings select the shared host before the session can attach", (
     const env = offlineEnv(root);
     const enabled = buildSharedRuntimeIdentity(runtimeEntry, env);
     const disabled = buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_CODEMODE: "0" });
+    const compact = buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_TOOL_PROFILE: "compact" });
+    const disabledCompact = buildSharedRuntimeIdentity(runtimeEntry, {
+        ...env, SATORI_CODEMODE: "0", SATORI_TOOL_PROFILE: "compact",
+    });
     const configured = buildSharedRuntimeIdentity(runtimeEntry, {
         ...env, SATORI_CODEMODE_MCP_CONFIG: path.join(root, "servers.json"),
     });
     assert.equal(enabled.codeModeEnabled, "true");
     assert.equal(disabled.codeModeEnabled, "false");
     assert.equal(new Set([enabled.hash, disabled.hash, configured.hash]).size, 3);
+    assert.equal(compact.hash, enabled.hash);
+    assert.equal(disabledCompact.hash, disabled.hash);
 });

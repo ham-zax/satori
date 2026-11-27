@@ -102,6 +102,14 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
         widths.map((width) => "-".repeat(width)).join("-+-"),
         ...rows.map(renderRow),
     ];
+    const toolRows = result.runtimeConfigurations.filter((configuration) => configuration.toolSettings);
+    if (result.ambientToolSettings || toolRows.length) {
+        const describe = (settings: NonNullable<DoctorResult["ambientToolSettings"]>) =>
+            `CodeMode ${settings.codeMode}; tools ${settings.profile}; downstream ${settings.downstream}`;
+        lines.push("", "Tool settings (client estimates use this doctor's inherited environment):");
+        if (result.ambientToolSettings) lines.push(`  Terminal: ${describe(result.ambientToolSettings)}`);
+        for (const row of toolRows) lines.push(`  ${runtimeClientName(row.client)}: ${describe(row.toolSettings!)}`);
+    }
     if (result.runtimeConfigurations.some((configuration) => configuration.rerankerProvider === "voyage")) {
         lines.push("", "Online: search queries and code excerpts are sent to Voyage.");
     }

@@ -386,7 +386,7 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
     const runtimeEntry = path.resolve("dist/index.js");
     const runtimeEnv = env(root);
     const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
-    const runtimeConfig = config(root);
+    const runtimeConfig = { ...config(root), codeMode: { enabled: true, compact: true, configPath: undefined } };
     const runtimeHost = new SharedRuntimeHost(
         runtimeConfig,
         buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
@@ -465,6 +465,7 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
     const second = await createBridge(runtimeEntry, {
         ...runtimeEnv,
         XDG_RUNTIME_DIR: alternateRuntimeDirectory,
+        SATORI_TOOL_PROFILE: "compact",
     });
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 2, operations: 0 });
 
@@ -473,22 +474,63 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
         second.request("tools/list"),
     ]);
     assert.equal(firstTools.result?.tools?.length, Object.keys(toolRegistry).length);
-    assert.equal(secondTools.result?.tools?.length, Object.keys(toolRegistry).length);
+    assert.equal(secondTools.result?.tools?.length, 7);
+    const direct = await second.request("tools/call", { name: "list_codebases", arguments: {} });
+    assert.equal(direct.result?.isError, true);
+    assert.match(direct.result?.content?.[0]?.text ?? "", /within run_script/);
+    const nested = await second.request("tools/call", {
+        name: "run_script", arguments: { code: "return await tools.list_codebases({});" },
+    });
+    assert.equal(nested.result?.isError, undefined, JSON.stringify(nested));
+    assert.match(nested.result?.content?.[0]?.text ?? "", /No codebases are currently tracked/);
+    const fullDirect = await first.request("tools/call", { name: "list_codebases", arguments: {} });
+    assert.equal(fullDirect.result?.isError, undefined, JSON.stringify(fullDirect));
 
     await first.close();
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 1, operations: 0 });
-    assert.equal((await second.request("tools/list")).result?.tools?.length, Object.keys(toolRegistry).length);
+    assert.equal((await second.request("tools/list")).result?.tools?.length, 7);
     await second.close();
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 0, operations: 0 });
+
+    // Older launchers omit the preference; malformed values must not inherit
+    // this host's compact startup setting either.
+    for (const preference of [undefined, "compact", null]) {
+        const socket = await connectHandshakeSocket(paths.socketPath);
+        try {
+            const handshake = readHandshakeLine(socket);
+            socket.write(`${JSON.stringify({
+                type: "satori-shared-runtime-attach",
+                protocolVersion: SHARED_RUNTIME_PROTOCOL_VERSION,
+                sharedRuntimeIdentityHash: identity.hash,
+                installedRuntimeRoot: identity.installedRuntimeRoot,
+                mcpVersion: identity.mcpVersion,
+                challengeNonce: "c".repeat(48),
+                workspaceRoots: [path.join(root, "workspace")],
+                compactToolProfile: preference,
+            })}\n`);
+            assert.equal(JSON.parse(await handshake).accepted, true);
+            const initialized = readHandshakeLine(socket);
+            socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+                protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "wire-test", version: "1" },
+            } })}\n`);
+            assert.equal((JSON.parse(await initialized) as JsonRpcResponse).error, undefined);
+            const listed = readHandshakeLine(socket);
+            socket.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+            socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+            assert.equal((JSON.parse(await listed) as JsonRpcResponse).result?.tools?.length, 12);
+        } finally {
+            socket.destroy();
+        }
+    }
 });
 
 test("the disabled shared-runtime identity serves stdio without run_script", async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-codemode-"));
     fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
     const runtimeEntry = path.resolve("dist/index.js");
-    const runtimeEnv = { ...env(root), SATORI_CODEMODE: "0" };
+    const runtimeEnv = { ...env(root), SATORI_CODEMODE: "0", SATORI_TOOL_PROFILE: "compact" };
     const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
-    const runtimeConfig = { ...config(root), codeMode: { enabled: false, configPath: undefined } };
+    const runtimeConfig = { ...config(root), codeMode: { enabled: false, compact: false, configPath: undefined } };
     const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION), "host");
     const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
     const socketHost = new SharedRuntimeSocketHost(host, identity, paths, 5_000);

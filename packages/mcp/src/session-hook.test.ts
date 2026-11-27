@@ -49,6 +49,8 @@ test("indexed subdirectory points the agent at the indexed root", (t) => {
     const output = buildSessionStartHookOutput({ cwd: path.join(repo, "src") }, { stateRoot });
     assert.equal(output?.hookSpecificOutput.hookEventName, "SessionStart");
     assert.match(output!.hookSpecificOutput.additionalContext, new RegExp(`search_codebase with path="${repo}"`));
+    assert.match(output!.hookSpecificOutput.additionalContext, /If run_script is available, use it to chain related tool calls/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /description gives the tools\.<name>\(args\) signatures for compact mode/);
     assert.equal(output!.systemMessage, undefined);
 });
 
@@ -75,6 +77,7 @@ test("unindexed git repository reports background auto-indexing without asking t
     assert.match(output!.hookSpecificOutput.additionalContext, /auto-indexes <=20 MiB offline Git workspaces on startup/);
     assert.match(output!.hookSpecificOutput.additionalContext, /do not ask the user whether to index or migrate/);
     assert.match(output!.hookSpecificOutput.additionalContext, /paid\/connected API repos/);
+    assert.match(output!.hookSpecificOutput.additionalContext, /If run_script is available/);
     assert.equal(output!.systemMessage, undefined);
 });
 

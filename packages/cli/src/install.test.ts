@@ -7,7 +7,7 @@ import path from "node:path";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { connectCliMcpSession } from "./client.js";
+import { connectCliMcpSession, type CliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
 import {
     formatSessionHookCommand,
@@ -2206,6 +2206,24 @@ test("managed offline launchers attach independent sessions to one shared runtim
         return;
     }
 
+    async function assertFullCatalog(session: CliMcpSession): Promise<void> {
+        const { tools } = await session.listTools();
+        assert.deepEqual(tools.map((tool) => tool.name), [
+            "manage_index",
+            "search_codebase",
+            "architecture_overview",
+            "continue_search",
+            "call_graph",
+            "trace_path",
+            "find_references",
+            "detect_changes",
+            "file_outline",
+            "read_file",
+            "list_codebases",
+            "run_script",
+        ]);
+    }
+
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-shared-host-"));
     const workspaceDir = path.join(homeDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -2267,8 +2285,8 @@ test("managed offline launchers attach independent sessions to one shared runtim
             }),
         ]);
 
-        assert.equal((await first!.listTools()).tools.length, 11);
-        assert.equal((await second!.listTools()).tools.length, 11);
+        await assertFullCatalog(first!);
+        await assertFullCatalog(second!);
         assert.notEqual(first!.launcherPid, second!.launcherPid);
 
         const metadataRoot = path.join(stateRoot, "runtime-host");
@@ -2283,7 +2301,7 @@ test("managed offline launchers attach independent sessions to one shared runtim
 
         await first!.close();
         first = undefined;
-        assert.equal((await second!.listTools()).tools.length, 11);
+        await assertFullCatalog(second!);
         await second!.close();
         second = undefined;
 
@@ -2314,8 +2332,8 @@ test("managed offline launchers attach independent sessions to one shared runtim
                 replacementSecond = session;
             }),
         ]);
-        assert.equal((await replacement!.listTools()).tools.length, 11);
-        assert.equal((await replacementSecond!.listTools()).tools.length, 11);
+        await assertFullCatalog(replacement!);
+        await assertFullCatalog(replacementSecond!);
         const replacementMetadata = JSON.parse(fs.readFileSync(
             path.join(metadataRoot, identities[0]!, "host.json"),
             "utf8",
@@ -3997,6 +4015,36 @@ test("install preserves direct OpenCode pass-through environment values on reins
         assert.equal(installed.mcp.satori.environment.MILVUS_TOKEN, "direct-token");
         assert.equal(installed.mcp.satori.environment.EMBEDDING_OUTPUT_DIMENSION, undefined);
     });
+});
+
+test("managed client reinstall preserves explicit CodeMode settings without adding defaults", async () => {
+    for (const [client, parts, container] of [
+        ["claude", [".claude.json"], "mcpServers"],
+        ["agy", [".gemini", "config", "mcp_config.json"], "mcpServers"],
+        ["vscode", [".config", "Code", "User", "mcp.json"], "servers"],
+        ["cursor", [".cursor", "mcp.json"], "mcpServers"],
+    ] as const) {
+        await withTempHome(async (homeDir) => {
+            const configPath = path.join(homeDir, ...parts);
+            fs.mkdirSync(path.dirname(configPath), { recursive: true });
+            const env = { SATORI_CODEMODE: "0", SATORI_TOOL_PROFILE: "compact", SATORI_CODEMODE_MCP_CONFIG: "/private/config.json", VOYAGEAI_API_KEY: "secret" };
+            fs.writeFileSync(configPath, JSON.stringify({ [container]: { satori: { command: process.execPath, args: [launcherPath(homeDir)], env } } }));
+            await executeInstallCommand({ kind: "install", client, runtime: "voyage", dryRun: false }, installOptions(homeDir));
+            assert.deepEqual(JSON.parse(readFile(configPath))[container].satori.env, env, client);
+            const proof = inspectManagedClientConfigurations(homeDir, {}).find((item) => item.client === client);
+            assert.equal(proof?.runtimeEnvironment?.SATORI_CODEMODE, "0");
+            assert.equal(proof?.runtimeEnvironment?.SATORI_TOOL_PROFILE, "compact");
+            assert.equal(proof?.runtimeEnvironment?.SATORI_CODEMODE_MCP_CONFIG, "/private/config.json");
+            const withoutSettings = JSON.parse(readFile(configPath));
+            delete withoutSettings[container].satori.env;
+            fs.writeFileSync(configPath, JSON.stringify(withoutSettings));
+            await executeInstallCommand({ kind: "install", client, runtime: "voyage", dryRun: false }, installOptions(homeDir));
+            const installedEnv = JSON.parse(readFile(configPath))[container].satori.env ?? {};
+            for (const key of ["SATORI_CODEMODE", "SATORI_TOOL_PROFILE", "SATORI_CODEMODE_MCP_CONFIG"]) {
+                assert.equal(installedEnv[key], undefined, `${client}: ${key}`);
+            }
+        });
+    }
 });
 
 test("install refuses to overwrite unmanaged OpenCode Satori entries", async () => {

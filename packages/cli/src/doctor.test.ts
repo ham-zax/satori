@@ -1450,6 +1450,31 @@ test("doctor reports the effective environment from a repository-backed managed 
     }
 });
 
+test("doctor distinguishes terminal and client tool settings without exposing downstream paths", async () => {
+    const result = await runDoctor(baseDoctorOptions({
+        env: { SATORI_TOOL_PROFILE: "compact", SATORI_CODEMODE_MCP_CONFIG: "/private/downstream.json" },
+        inspectManagedClients: (): ManagedClientConfigProof[] => [{
+            client: "claude", configPath: "/tmp/claude.json", status: "ok", message: "ok",
+            usesManagedLauncher: false,
+            runtimeEnvironment: { SATORI_CODEMODE: "0" },
+        }, {
+            client: "vscode", configPath: "/tmp/vscode.json", status: "ok", message: "ok",
+            usesManagedLauncher: false,
+            runtimeEnvironment: { SATORI_TOOL_PROFILE: "{env:MISSING}" },
+        }],
+    }));
+    assert.deepEqual(result.ambientToolSettings, { codeMode: "enabled", profile: "compact", downstream: "configured (not validated)" });
+    assert.deepEqual(result.runtimeConfigurations?.find((row) => row.client === "claude")?.toolSettings,
+        { codeMode: "disabled", profile: "full", downstream: "disabled" });
+    assert.equal(result.runtimeConfigurations?.find((row) => row.client === "vscode")?.toolSettings?.profile, "unknown");
+    const output = formatDoctorText(result, { verbose: false });
+    assert.match(output, /Terminal: CodeMode enabled; tools compact/);
+    assert.match(output, /Claude Code: CodeMode disabled; tools full/);
+    assert.doesNotMatch(JSON.stringify(result) + output, /private\/downstream/);
+    const invalid = await runDoctor(baseDoctorOptions({ env: { SATORI_TOOL_PROFILE: "invalid" } }));
+    assert.equal(invalid.ambientToolSettings?.profile, "full (unrecognized setting)");
+});
+
 test("doctor rejects a launcher that is not the expected Node form", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-form-"));
     const runtimeRoot = path.join(tempDir, ".satori", "mcp-runtime", "@satori-code-mcp@4.11.17");

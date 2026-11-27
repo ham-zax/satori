@@ -9,6 +9,7 @@ import { toolRegistry } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 
 type InProcessSession = {
+    instructions?: string;
     request: (method: string, params?: Record<string, unknown>) => Promise<JsonRpcResponse>;
     close: () => Promise<void>;
 };
@@ -18,7 +19,8 @@ type JsonRpcResponse = {
     error?: unknown;
     result?: {
         content?: Array<{ type?: string; text?: string }>;
-        tools?: Array<{ name: string }>;
+        tools?: Array<{ name: string; description?: string }>;
+        instructions?: string;
         isError?: boolean;
     };
 };
@@ -70,6 +72,7 @@ const PROVIDER_ENV_KEYS = [
     "MILVUS_TOKEN",
     "SATORI_CODEMODE",
     "SATORI_CODEMODE_MCP_CONFIG",
+    "SATORI_TOOL_PROFILE",
 ];
 
 function clearProviderEnv(): Record<string, string | undefined> {
@@ -160,6 +163,7 @@ async function createSession(runMode: "mcp" | "cli" = "cli"): Promise<InProcessS
     }) + "\n");
 
     return {
+        instructions: initialize.result?.instructions,
         request,
         close: async () => {
             await server.shutdown();
@@ -327,10 +331,40 @@ test("direct stdio executes JavaScript by default and honors the originating rea
     }, "mcp");
 });
 
-test("direct stdio disables both advertisement and dispatch of run_script", async () => {
-    await withProviderEnvSession({ SATORI_CODEMODE: "0" }, async ({ session }) => {
+test("direct stdio advertises seven compact tools and routes specialists through run_script", async () => {
+    const specialistNames = ["architecture_overview", "detect_changes", "find_references", "list_codebases", "trace_path"];
+    await withProviderEnvSession({ SATORI_TOOL_PROFILE: "compact" }, async ({ session }) => {
+        const listed = await session.request("tools/list");
+        assert.deepEqual(toolNames(listed), [
+            "call_graph", "continue_search", "file_outline", "manage_index", "read_file", "run_script", "search_codebase",
+        ]);
+        assert.match(session.instructions ?? "", /run_script.*chain related tool calls/);
+        const description = listed.result?.tools?.find((tool) => tool.name === "run_script")?.description ?? "";
+        for (const name of specialistNames) {
+            assert.ok(description.includes(`tools.${name}(`));
+            const direct = await session.request("tools/call", { name, arguments: {} });
+            assert.equal(direct.result?.isError, true);
+            assert.match(direct.result?.content?.[0]?.text ?? "", /within run_script/);
+        }
+
+        const nested = await session.request("tools/call", {
+            name: "run_script",
+            arguments: {
+                code: `const names = ALL_TOOLS.filter(tool => tool.description && ${JSON.stringify(specialistNames)}.includes(tool.name)).map(tool => tool.name); return { names, codebases: await tools.list_codebases({}) };`,
+            },
+        });
+        assert.equal(nested.result?.isError, undefined, JSON.stringify(nested));
+        const result = parseToolPayload(nested);
+        assert.deepEqual(result.names, specialistNames);
+        assert.match(String(result.codebases), /No codebases are currently tracked/);
+    }, "mcp");
+});
+
+test("direct stdio disables both advertisement and dispatch of run_script even with the compact profile set", async () => {
+    await withProviderEnvSession({ SATORI_CODEMODE: "0", SATORI_TOOL_PROFILE: "compact" }, async ({ session }) => {
         assert.deepEqual(toolNames(await session.request("tools/list")),
             EXPECTED_TOOLS.filter((name) => name !== "run_script").sort());
+        assert.doesNotMatch(session.instructions ?? "", /run_script/);
         const call = await session.request("tools/call", {
             name: "run_script",
             arguments: { code: "return 42;" },

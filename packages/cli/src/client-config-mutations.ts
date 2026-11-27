@@ -20,6 +20,7 @@ import type {
 import {
     LAUNCHER_OWNED_RUNTIME_ENV_VARS,
     SATORI_RUNTIME_ENV_VARS,
+    SATORI_CLIENT_TOOL_ENV_VARS,
 } from "./install-contracts.js";
 
 export interface CompanionMutation {
@@ -237,7 +238,7 @@ export function buildPreservedManagedEnv(existing: unknown): Record<string, stri
     if (!existingEnv) {
         return out;
     }
-    for (const name of SATORI_RUNTIME_ENV_VARS) {
+    for (const name of [...SATORI_RUNTIME_ENV_VARS, ...SATORI_CLIENT_TOOL_ENV_VARS]) {
         const raw = existingEnv[name];
         if (typeof raw !== "string") {
             continue;

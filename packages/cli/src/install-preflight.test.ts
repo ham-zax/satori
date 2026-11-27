@@ -144,6 +144,7 @@ if (process.cwd() !== expectedRoot || process.env.SATORI_SESSION_ROOTS_JSON !== 
   process.stderr.write("candidate workspace was not isolated from installer cwd\\n");
   process.exit(1);
 }
+if (process.env.SATORI_CODEMODE !== "0") throw new Error("base tool contract must be probed with CodeMode disabled");
 const tools = ${JSON.stringify([
             "manage_index",
             "search_codebase",
@@ -184,7 +185,7 @@ input.on("line", (line) => {
         await probeManagedRuntimeCandidate({
             runtimeCommand: { command: process.execPath, args: [runtimeEntry] },
             runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
-            inheritedEnvironment: { SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]) },
+            inheritedEnvironment: { SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]), SATORI_CODEMODE: "1", SATORI_TOOL_PROFILE: "compact" },
             homeDir,
             expectedVersion: "9.8.7-test",
         });

@@ -43,7 +43,8 @@ import {
     resolveSessionWorkspaceRoots,
 } from "../core/session-workspace-roots.js";
 import { SyncManager } from "../core/sync.js";
-import { getMcpToolList, isMcpToolEnabled, resolveMcpTool, toolRegistry } from "../tools/registry.js";
+import { getMcpToolList, isDirectMcpToolEnabled, resolveMcpTool, toolRegistry } from "../tools/registry.js";
+import { CODEMODE_AGENT_GUIDANCE } from "../codemode/tool-guide.js";
 import type {
     McpTool,
     MissingProviderConfigIssue,
@@ -400,7 +401,7 @@ export class SharedRuntimeHost {
 
     createSession(
         workspacePolicy: SessionWorkspacePolicy,
-        options?: { autoIndexOnStart?: boolean },
+        options?: { autoIndexOnStart?: boolean; compactToolProfile?: boolean },
     ): McpSession {
         if (this.shutdownStarted) {
             throw new Error("Shared Satori runtime host is shutting down.");
@@ -453,6 +454,7 @@ export class SharedRuntimeHost {
     createSessionResources(
         continuationCoordinator: SearchContinuationCoordinator,
         workspacePolicy: SessionWorkspacePolicy,
+        compactToolProfile?: boolean,
     ): SessionResources {
         const localHandlers = new ToolHandlers(
             this.localContext,
@@ -500,7 +502,12 @@ export class SharedRuntimeHost {
                 toolHandlers: localHandlers,
                 readFileMaxLines: this.readFileMaxLines,
                 readFileMaxBytes: this.readFileMaxBytes,
-                codeMode: this.config.codeMode,
+                codeMode: {
+                    enabled: this.config.codeMode?.enabled !== false,
+                    compact: this.config.codeMode?.enabled !== false
+                        && (compactToolProfile ?? this.config.codeMode?.compact ?? false),
+                    configPath: this.config.codeMode?.configPath,
+                },
                 runtimeOwnerGate: this.runtimeOwnerRegistry,
                 providerRuntime,
                 workspacePolicy,
@@ -609,7 +616,7 @@ export class McpSession {
     constructor(
         private readonly host: SharedRuntimeHost,
         private readonly workspacePolicy: SessionWorkspacePolicy,
-        options?: { autoIndexOnStart?: boolean },
+        options?: { autoIndexOnStart?: boolean; compactToolProfile?: boolean },
     ) {
         this.autoIndexOnStart = options?.autoIndexOnStart !== false;
         this.continuationCoordinator = host.createSearchContinuationCoordinator();
@@ -622,12 +629,17 @@ export class McpSession {
                 capabilities: {
                     tools: {},
                 },
-                instructions: [SATORI_MCP_INSTRUCTIONS, "Use architecture_overview for repository-wide areas, cross-area boundaries, and hotspots."].join(" "),
+                instructions: [
+                    SATORI_MCP_INSTRUCTIONS,
+                    host.config.codeMode?.enabled === false ? "" : CODEMODE_AGENT_GUIDANCE,
+                    "Use architecture_overview for repository-wide areas, cross-area boundaries, and hotspots.",
+                ].filter(Boolean).join(" "),
             },
         );
         this.resources = host.createSessionResources(
             this.continuationCoordinator,
             workspacePolicy,
+            options?.compactToolProfile,
         );
         this.setupTools();
         this.server.oninitialized = () => {
@@ -650,10 +662,13 @@ export class McpSession {
     }
 
     private unknownTool(name: string): ToolResponse {
-        const supported = Object.keys(toolRegistry)
-            .filter((tool) => isMcpToolEnabled(tool, this.resources.toolContext));
+        const { toolContext } = this.resources;
+        const scriptOnly = resolveMcpTool(name, toolContext) && !isDirectMcpToolEnabled(name, toolContext);
+        const message = scriptOnly
+            ? `Use tools.${name} within run_script in the compact tool profile.`
+            : `Unknown tool: ${name}. Supported tools: ${Object.keys(toolRegistry).filter((tool) => isDirectMcpToolEnabled(tool, toolContext)).join(", ")}`;
         return {
-            content: [{ type: "text", text: `Unknown tool: ${name}. Supported tools: ${supported.join(", ")}` }],
+            content: [{ type: "text", text: message }],
             isError: true,
         };
     }
@@ -688,7 +703,8 @@ export class McpSession {
 
         this.server.setRequestHandler('tools/call', async (request, ctx): Promise<CallToolResult> => {
             const { name, arguments: args } = request.params;
-            const tool = resolveMcpTool(name, this.resources.toolContext);
+            const { toolContext } = this.resources;
+            const tool = isDirectMcpToolEnabled(name, toolContext) ? resolveMcpTool(name, toolContext) : undefined;
             if (!tool) return this.unknownTool(name);
             if (this.activeToolCalls >= SHARED_RUNTIME_MAX_PENDING_REQUESTS) {
                 return {

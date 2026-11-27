@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client, InMemoryTransport, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import {
     buildRuntimeIndexFingerprint,
@@ -692,7 +693,7 @@ test("direct stdio and shared runtime resolve roots identically", () => {
 });
 
 test("shared-runtime-client warm-attach import graph stays isolated from server, config, and core barrel", () => {
-    const serverDir = path.dirname(new URL(import.meta.url).pathname);
+    const serverDir = path.dirname(fileURLToPath(import.meta.url));
     const visited = new Set<string>();
     const queue = [path.join(serverDir, "shared-runtime-client.ts")];
     const externalSpecifiers = new Set<string>();
@@ -713,7 +714,8 @@ test("shared-runtime-client warm-attach import graph stays isolated from server,
         }
     }
 
-    const relativeVisited = [...visited].map((file) => path.relative(path.resolve(serverDir, ".."), file));
+    const srcRoot = path.resolve(serverDir, "..");
+    const relativeVisited = [...visited].map((file) => path.relative(srcRoot, file).replace(/\\/g, "/"));
     assert.equal(relativeVisited.includes("server/shared-runtime.ts"), false);
     assert.equal(relativeVisited.includes("config.ts"), false);
     assert.equal(relativeVisited.includes("core/session-workspace-policy.ts"), false);

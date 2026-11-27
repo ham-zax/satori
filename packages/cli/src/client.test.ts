@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { connectCliMcpSession } from "./client.js";
+import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { CliMcpSession, connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
 
 const FAKE_STDIO_SERVER = `
@@ -40,7 +42,7 @@ rl.on("line", (line) => {
 });
 `;
 
-test("connectCliMcpSession tolerates stdout banner, pipes stderr, records pid, and maps SDK timeout to E_CALL_TIMEOUT", async (t) => {
+test("connectCliMcpSession tolerates a stdout banner, pipes stderr, records the pid, and times out a stalled tool", async (t) => {
     const stderrChunks: string[] = [];
     const launcherPids: number[] = [];
     const session = await connectCliMcpSession({
@@ -73,4 +75,21 @@ test("connectCliMcpSession tolerates stdout banner, pipes stderr, records pid, a
             return true;
         },
     );
+});
+
+test("CliMcpSession maps an SDK request timeout to E_CALL_TIMEOUT", async (t) => {
+    const client = new Client({ name: "sdk-timeout-test", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command: process.execPath });
+    const session = new CliMcpSession(client, transport, 5_000, () => undefined);
+
+    t.mock.method(client, "callTool", async () => {
+        throw new SdkError(SdkErrorCode.RequestTimeout, "Request timed out");
+    });
+
+    await assert.rejects(session.callTool("stall", {}), {
+        name: "CliError",
+        token: "E_CALL_TIMEOUT",
+        exitCode: 3,
+        message: "Timed out after 5000ms while calling tools/call for 'stall'.",
+    });
 });

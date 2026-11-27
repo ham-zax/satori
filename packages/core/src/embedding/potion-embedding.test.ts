@@ -27,6 +27,9 @@ type TestPotionEmbeddingConstructor = new (config: {
 }) => PotionEmbedding;
 
 const TestPotionEmbedding = PotionEmbedding as unknown as TestPotionEmbeddingConstructor;
+const NODE_SHEBANG = !/\s/.test(process.execPath) && process.execPath.length < 120
+    ? `#!${process.execPath}`
+    : '#!/usr/bin/env node';
 
 test('Potion startup accepts readiness already in the pipe after an event-loop stall', async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-potion-startup-'));
@@ -35,7 +38,7 @@ test('Potion startup accepts readiness already in the pipe after an event-loop s
     const frame = JSON.stringify({
         ready: true, modelLoadedOnce: true, retainedTokenLimit: 4096, networkBlocked: true,
     }) + '\n';
-    fs.writeFileSync(helperPath, `#!/usr/bin/env node
+    fs.writeFileSync(helperPath, `${NODE_SHEBANG}
 const fs = require('node:fs');
 process.stdout.write(${JSON.stringify(frame)}, () => fs.writeFileSync(${JSON.stringify(marker)}, String(Date.now())));
 process.stdin.resume();
@@ -81,8 +84,7 @@ test('Potion startup still rejects a worker that never reports readiness', async
     );
 });
 
-const FAKE_WORKER = String.raw`#!/usr/bin/env node
-const readline = require('node:readline');
+const FAKE_WORKER = `${NODE_SHEBANG}\n` + String.raw`const readline = require('node:readline');
 
 process.stdout.write(JSON.stringify({
   ready: true,
@@ -206,17 +208,17 @@ async function createFakeEmbedding(
     const embedding = new TestPotionEmbedding({
         helperPath,
         modelPath,
-        requestTimeoutMs: overrides.requestTimeoutMs ?? 500,
-        startupTimeoutMs: 1_000,
+        requestTimeoutMs: overrides.requestTimeoutMs ?? 5_000,
+        startupTimeoutMs: 5_000,
         maxBatchItems: overrides.maxBatchItems ?? 4,
         maxPendingItems: overrides.maxPendingItems,
         idleShutdownMs: overrides.idleShutdownMs,
     });
-    await (embedding as unknown as { start(): Promise<void> }).start();
     t.after(async () => {
         await embedding.close();
         fs.rmSync(root, { recursive: true, force: true });
     });
+    await (embedding as unknown as { start(): Promise<void> }).start();
     return embedding;
 }
 
@@ -288,7 +290,10 @@ test('Potion releases an idle worker and restarts it on the next request', async
     const firstPid = workerPid();
     assert.ok(firstPid);
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    const idleDeadline = Date.now() + 2_000;
+    while ((internals.state !== 'idle' || workerPid() !== undefined) && Date.now() < idleDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.equal(internals.state, 'idle');
     assert.equal(workerPid(), undefined);
 

@@ -133,6 +133,49 @@ test('interactive mode renders live dashboard with active files, progress, and r
   }
 });
 
+test('interactive mode renders initial discovery frame, file progress bar, current test name, and failure recap', async () => {
+  const originalIsTty = process.stdout.isTTY;
+  try {
+    process.stdout.isTTY = true;
+    const output = await collectReporterOutput([
+      { type: 'test:enqueue', data: { file: '/repo/packages/mcp/src/a.test.ts', name: '/repo/packages/mcp/src/a.test.ts' } },
+      { type: 'test:enqueue', data: { file: '/repo/packages/mcp/src/b.test.ts', name: '/repo/packages/mcp/src/b.test.ts' } },
+      { type: 'test:start', data: { file: '/repo/packages/mcp/src/a.test.ts', name: 'handles slow query' } },
+      {
+        type: 'test:fail',
+        data: {
+          file: '/repo/packages/mcp/src/a.test.ts',
+          name: 'handles slow query',
+          error: new Error('line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10'),
+        },
+      },
+      {
+        type: 'test:summary',
+        data: {
+          file: '/repo/packages/mcp/src/a.test.ts',
+          counts: { passed: 0, failed: 1, skipped: 0 },
+          duration_ms: 120,
+        },
+      },
+      {
+        type: 'test:summary',
+        data: {
+          counts: { passed: 0, failed: 1, skipped: 0 },
+        },
+      },
+    ], { CI: '', NO_COLOR: '1' });
+
+    assert.match(output, /Discovering and loading test files…/);
+    assert.match(output, /› handles slow query/);
+    assert.match(output, /1\/2 files/);
+    assert.match(output, /50%/);
+    assert.match(output, /line10/);
+    assert.match(output, /✖ Satori tests failed[\s\S]*✖ handles slow query \(mcp\/src\/a\.test\.ts\)/);
+  } finally {
+    process.stdout.isTTY = originalIsTty;
+  }
+});
+
 test('a test file over the time budget fails the run and is named', async () => {
   const originalBudget = process.env.SATORI_TEST_FILE_BUDGET_MS;
   const originalExitCode = process.exitCode;

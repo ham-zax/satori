@@ -7,9 +7,12 @@ import {
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-const MAX_ACTIVE = 3;
+const MAX_ACTIVE = 4;
 const MAX_RECENT = 3;
-const REFRESH_MS = 80;
+const MAX_FAILURE_LINES = 20;
+const MAX_RECAP_FAILURES = 10;
+const PROGRESS_BAR_WIDTH = 20;
+const REFRESH_MS = 100;
 
 // One test file is the unit of parallelism, so the slowest file bounds the wall
 // time of a suite. A file over budget fails the run; split it instead of raising
@@ -44,7 +47,7 @@ const dim = (value) => color('90', value);
 const bold = (value) => color('1', value);
 
 function spinnerFrame() {
-  return SPINNER[Math.floor(Date.now() / 80) % SPINNER.length];
+  return SPINNER[Math.floor(Date.now() / REFRESH_MS) % SPINNER.length];
 }
 
 function createState() {
@@ -52,6 +55,7 @@ function createState() {
     label: packageLabel(),
     startedAt: Date.now(),
 
+    knownFiles: new Set(),
     active: new Map(),
     recent: [],
 
@@ -69,6 +73,7 @@ function createState() {
 
 function ensureActiveFile(state, file) {
   if (!file) return null;
+  state.knownFiles.add(file);
 
   let entry = state.active.get(file);
 
@@ -78,6 +83,7 @@ function ensureActiveFile(state, file) {
       startedAt: Date.now(),
       completedTests: 0,
       failedTests: 0,
+      currentTest: '',
     };
 
     state.active.set(file, entry);
@@ -92,14 +98,27 @@ function topActiveFiles(state) {
     .slice(0, MAX_ACTIVE);
 }
 
+function renderProgressBar(completed, total) {
+  if (total <= 0) return '';
+  const ratio = Math.max(0, Math.min(1, completed / total));
+  const filled = Math.round(ratio * PROGRESS_BAR_WIDTH);
+  const empty = PROGRESS_BAR_WIDTH - filled;
+  const pct = Math.round(ratio * 100);
+  return `${cyan('█'.repeat(filled))}${dim('░'.repeat(empty))} ${bold(`${pct}%`)}`;
+}
+
 function renderActiveLine(entry) {
   const elapsed = formatDuration(Date.now() - entry.startedAt);
   const count = entry.completedTests;
+  const current = entry.currentTest && entry.currentTest !== entry.file
+    ? `  ${dim(`› ${entry.currentTest}`)}`
+    : '';
 
   return (
     `  ${cyan(spinnerFrame())} `
     + `${bold(shortPath(entry.file))}`
     + `  ${dim(`${count} test${count === 1 ? '' : 's'} · ${elapsed}`)}`
+    + current
   );
 }
 
@@ -121,19 +140,27 @@ function buildDashboard(state) {
   const elapsed = formatDuration(Date.now() - state.startedAt);
   const active = topActiveFiles(state);
   const hiddenActive = Math.max(0, state.active.size - active.length);
+  const totalFiles = Math.max(state.knownFiles.size, state.completedFiles + state.active.size);
 
   const lines = [
     `${cyan('◆')} ${bold(`${state.label} tests`)} ${dim(elapsed)}`,
   ];
 
+  lines.push('', `  ${dim('RUNNING')}`);
   if (active.length > 0) {
-    lines.push('', `  ${dim('RUNNING')}`);
     for (const entry of active) {
       lines.push(renderActiveLine(entry));
     }
     if (hiddenActive > 0) {
       lines.push(`    ${dim(`+${hiddenActive} more running`)}`);
     }
+  } else {
+    const idleLabel = state.completedFiles === 0
+      ? 'Discovering and loading test files…'
+      : totalFiles > state.completedFiles
+        ? 'Loading next test file…'
+        : 'Finalizing test run…';
+    lines.push(`  ${cyan(spinnerFrame())} ${dim(idleLabel)}`);
   }
 
   lines.push('', `  ${dim('PROGRESS')}`);
@@ -146,8 +173,12 @@ function buildDashboard(state) {
     ? ` · ${yellow(`${state.skipped} skipped`)}`
     : '';
 
+  const fileProgress = totalFiles > 0
+    ? `${renderProgressBar(state.completedFiles, totalFiles)}  ${state.completedFiles}/${totalFiles} files`
+    : `${state.completedFiles} files completed`;
+
   lines.push(
-    `  ${state.completedFiles} files completed`
+    `  ${fileProgress}`
     + ` · ${green(`${state.passed} passed`)}`
     + failed
     + skipped
@@ -165,25 +196,33 @@ function buildDashboard(state) {
   return lines;
 }
 
+function formatErrorLines(error) {
+  const raw = error?.stack
+    ? String(error.stack)
+    : error?.message
+      ? String(error.message)
+      : '';
+  if (!raw) return [];
+  const allLines = raw.split('\n');
+  if (allLines.length <= MAX_FAILURE_LINES) {
+    return allLines.map((line) => `  ${line}`);
+  }
+  const head = allLines.slice(0, MAX_FAILURE_LINES);
+  const remaining = allLines.length - head.length;
+  return [
+    ...head.map((line) => `  ${line}`),
+    `  ${dim(`… (${remaining} more lines)`)}`,
+  ];
+}
+
 function failureBlock(failure) {
   const lines = [
     '',
     `${red('✖ FAIL')} ${bold(failure.name)}`,
     `  ${dim(shortPath(failure.file, 3))}`,
+    ...formatErrorLines(failure.error),
+    '',
   ];
-
-  if (failure.error?.stack) {
-    lines.push(
-      ...String(failure.error.stack)
-        .split('\n')
-        .slice(0, 8)
-        .map((line) => `  ${line}`),
-    );
-  } else if (failure.error?.message) {
-    lines.push(`  ${failure.error.message}`);
-  }
-
-  lines.push('');
 
   return lines.join('\n');
 }
@@ -203,14 +242,28 @@ function finalSummary(state) {
     ].join('\n');
   }
 
-  return [
+  const lines = [
     '',
     `${red('✖')} ${bold(`${state.label} tests failed`)}`,
     '',
     `  ${red(`${state.failed} failed`)} · ${state.passed} passed`,
     `  ${state.completedFiles} files · ${elapsed}`,
-    '',
-  ].join('\n');
+  ];
+
+  if (state.failures.length > 0) {
+    lines.push('');
+    const shown = state.failures.slice(0, MAX_RECAP_FAILURES);
+    for (const failure of shown) {
+      lines.push(`  ${red('✖')} ${bold(failure.name)} ${dim(`(${shortPath(failure.file, 3)})`)}`);
+    }
+    const hidden = state.failures.length - shown.length;
+    if (hidden > 0) {
+      lines.push(`  ${dim(`… and ${hidden} more failure${hidden === 1 ? '' : 's'}`)}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('\n');
 }
 
 function overBudgetBlock(state) {
@@ -279,11 +332,23 @@ export default async function* satoriTestReporter(source) {
 
   const channel = new AsyncChannel();
   let timer = null;
+  let lastRenderedAt = 0;
+
+  const renderIfDue = (force = false) => {
+    if (!interactive) return '';
+    const now = Date.now();
+    if (!force && now - lastRenderedAt < REFRESH_MS) return '';
+    lastRenderedAt = now;
+    return frame.render(buildDashboard(state));
+  };
 
   if (interactive) {
+    const initial = renderIfDue(true);
+    if (initial) yield initial;
     timer = setInterval(() => {
       channel.push({ type: 'tick' });
     }, REFRESH_MS);
+    timer.unref?.();
   }
 
   (async () => {
@@ -298,9 +363,8 @@ export default async function* satoriTestReporter(source) {
 
   for await (const message of channel) {
     if (message.type === 'tick') {
-      if (state.active.size > 0) {
-        yield frame.render(buildDashboard(state));
-      }
+      const rendered = renderIfDue(true);
+      if (rendered) yield rendered;
       continue;
     }
 
@@ -315,18 +379,26 @@ export default async function* satoriTestReporter(source) {
     const event = message.value;
     const data = event.data ?? {};
 
-    if (event.type === 'test:start') {
+    if (event.type === 'test:enqueue') {
       if (data.file) {
-        ensureActiveFile(state, data.file);
-        if (interactive) {
-          yield frame.render(buildDashboard(state));
+        state.knownFiles.add(data.file);
+      }
+    } else if (event.type === 'test:start') {
+      if (data.file) {
+        const entry = ensureActiveFile(state, data.file);
+        if (typeof data.name === 'string' && data.name.length > 0 && data.name !== data.file) {
+          entry.currentTest = data.name;
         }
+        const rendered = renderIfDue(false);
+        if (rendered) yield rendered;
       }
     } else if (event.type === 'test:pass') {
       state.passed += 1;
       if (data.file) {
         const entry = ensureActiveFile(state, data.file);
         entry.completedTests += 1;
+        const rendered = renderIfDue(false);
+        if (rendered) yield rendered;
       }
     } else if (event.type === 'test:fail') {
       state.failed += 1;
@@ -347,11 +419,14 @@ export default async function* satoriTestReporter(source) {
         yield frame.clear();
         yield `${failureBlock(failure)}\n`;
         frame.reset();
+        const rendered = renderIfDue(true);
+        if (rendered) yield rendered;
       } else {
         yield `${failureBlock(failure)}\n`;
       }
     } else if (event.type === 'test:summary') {
       if (data.file) {
+        state.knownFiles.add(data.file);
         const entry = state.active.get(data.file);
         state.active.delete(data.file);
         state.completedFiles += 1;
@@ -374,8 +449,9 @@ export default async function* satoriTestReporter(source) {
 
         if (!interactive) {
           yield plainFileSummary(data);
-        } else if (state.active.size > 0) {
-          yield frame.render(buildDashboard(state));
+        } else {
+          const rendered = renderIfDue(true);
+          if (rendered) yield rendered;
         }
       } else {
         if (timer !== null) {

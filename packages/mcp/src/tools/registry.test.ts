@@ -43,16 +43,16 @@ function buildContext(overrides: Partial<ContextMcpConfig> = {}): ToolContext {
     } as ToolContext;
 }
 
-test('tool registry exposes the eleven public tools', () => {
+test('tool registry exposes the twelve public tools', () => {
     const names = Object.keys(toolRegistry);
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'trace_path', 'find_references', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'trace_path', 'find_references', 'detect_changes', 'file_outline', 'read_file', 'list_codebases', 'run_script']);
 });
 
-test('generated ListTools payload returns the eleven tools', () => {
+test('generated ListTools payload returns the twelve tools', () => {
     const list = getMcpToolList(buildContext());
     const names = list.map((tool) => tool.name);
 
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'trace_path', 'find_references', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'trace_path', 'find_references', 'detect_changes', 'file_outline', 'read_file', 'list_codebases', 'run_script']);
 });
 
 test('find_references description exposes observational and completeness semantics', () => {
@@ -322,4 +322,12 @@ test('getMcpToolList falls back to uncached build when capabilities witness is n
     const continueProps = continueTool.inputSchema.properties as Record<string, SchemaProperty>;
     assert.equal(continueProps.expectedOffset.maximum, 23);
     assert.equal(continueProps.limit.maximum, 19);
+});
+
+test("CodeMode availability is applied after the capability advertisement cache", () => {
+    const enabled = buildContext();
+    const disabled = { ...enabled, codeMode: { enabled: false, configPath: undefined } };
+    assert.equal(getMcpToolList(disabled).some((tool) => tool.name === "run_script"), false);
+    assert.equal(getMcpToolList(enabled).some((tool) => tool.name === "run_script"), true);
+    assert.equal(getMcpToolList(disabled).some((tool) => tool.name === "run_script"), false);
 });

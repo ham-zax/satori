@@ -1,3 +1,4 @@
+import { readCodeModeSettings } from "../codemode/settings.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -44,6 +45,9 @@ export type SharedRuntimeIdentity = Readonly<{
     autoIndexWorkspace: string;
     readFileMaxLines: string;
     readFileMaxBytes: string;
+    codeModeEnabled: string;
+    codeModeConfigPath: string;
+    codeModePath: string;
     customExtensions: string;
     customIgnorePatterns: string;
     allTextMaxBytes: string;
@@ -171,6 +175,7 @@ export function buildSharedRuntimeIdentity(
         env.SATORI_STATE_ROOT
             ?? path.join(env.HOME ?? os.homedir(), ".satori"),
     );
+    const codeMode = readCodeModeSettings((name) => env[name]);
     const payload = {
         protocolVersion: SHARED_RUNTIME_PROTOCOL_VERSION,
         mcpVersion: installed.version,
@@ -213,6 +218,9 @@ export function buildSharedRuntimeIdentity(
         watcherEnabled: env.MCP_ENABLE_WATCHER ?? "",
         readFileMaxLines: env.READ_FILE_MAX_LINES ?? "",
         readFileMaxBytes: env.READ_FILE_MAX_BYTES ?? "",
+        codeModeEnabled: String(codeMode.enabled),
+        codeModeConfigPath: codeMode.configPath ?? "",
+        codeModePath: codeMode.configPath ? env.PATH ?? "" : "",
         customExtensions: env.CUSTOM_EXTENSIONS ?? "",
         customIgnorePatterns: env.CUSTOM_IGNORE_PATTERNS ?? "",
         allTextMaxBytes: env.SATORI_ALL_TEXT_MAX_BYTES ?? "",

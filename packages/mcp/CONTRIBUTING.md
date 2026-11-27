@@ -4,7 +4,7 @@ This guide covers contribution rules specific to the MCP server package.
 
 ## Tool Surface
 
-The public surface is exactly these 11 tools:
+The public surface is these 12 tools by default:
 
 - `list_codebases`
 - `manage_index` (`action`: `create | reindex | sync | status | cancel | clear`)
@@ -17,6 +17,7 @@ The public surface is exactly these 11 tools:
 - `find_references`
 - `detect_changes`
 - `read_file`
+- `run_script` (disable with `SATORI_CODEMODE=0`)
 
 ## Quick Commands
 

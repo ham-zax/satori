@@ -1,3 +1,4 @@
+import { readCodeModeSettings, type CodeModeSettings } from "./codemode/settings.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,6 +126,7 @@ export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string
 }
 
 export interface ContextMcpConfig {
+    codeMode?: CodeModeSettings;
     name: string;
     version: string;
     // Canonical absolute state root for the MCP runtime. Resolved from
@@ -529,6 +531,7 @@ export function createMcpConfig(): ContextMcpConfig {
         // read_file behavior
         readFileMaxLines,
         readFileMaxBytes,
+        codeMode: readCodeModeSettings((name) => process.env[name]),
         // filesystem observation and background workspace indexing behavior
         watchSyncEnabled,
         autoIndexWorkspace: (() => {
@@ -647,6 +650,8 @@ Environment Variables:
 
   Read File Configuration:
   READ_FILE_MAX_LINES     Max lines returned by read_file when no explicit range is provided (default: 1000)
+  SATORI_CODEMODE          Set to 0 to disable run_script (default: enabled)
+  SATORI_CODEMODE_MCP_CONFIG Absolute path to an optional downstream MCP server allowlist
   READ_FILE_MAX_BYTES     Max whole-file bytes read_file may read before range selection (default: 8388608, min 65536, max 67108864)
 
   Filesystem Observation:

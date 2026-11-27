@@ -12,6 +12,7 @@ import { fileOutlineTool } from "./file_outline.js";
 import { findReferencesTool } from "./find_references.js";
 import { readFileTool } from "./read_file.js";
 import { listCodebasesTool } from "./list_codebases.js";
+import { runScriptTool } from "./run_script.js";
 import { McpTool, ToolContext } from "./types.js";
 
 type ToolInputSchema = ListToolsResult["tools"][number]["inputSchema"];
@@ -54,11 +55,22 @@ export const toolList: McpTool[] = [
     fileOutlineTool,
     readFileTool,
     listCodebasesTool,
+    runScriptTool,
 ];
 
 export const toolRegistry: Record<string, McpTool> = Object.fromEntries(
     toolList.map((tool) => [tool.name, tool])
 );
+
+export function isMcpToolEnabled(name: string, ctx: ToolContext): boolean {
+    return name !== runScriptTool.name || ctx.codeMode?.enabled !== false;
+}
+
+export function resolveMcpTool(name: string, ctx: ToolContext): McpTool | undefined {
+    return Object.hasOwn(toolRegistry, name) && isMcpToolEnabled(name, ctx)
+        ? toolRegistry[name]
+        : undefined;
+}
 
 function toJsonSchema(schema: z.ZodType): ToolInputSchema {
     const jsonSchema = z.toJSONSchema(schema, {
@@ -75,12 +87,16 @@ function toJsonSchema(schema: z.ZodType): ToolInputSchema {
     return jsonSchema as ToolInputSchema;
 }
 
-export function buildMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: ToolInputSchema }> {
+function buildAllMcpTools(ctx: ToolContext): McpToolAdvertisement[] {
     return toolList.map((tool) => ({
         name: tool.name,
         description: tool.description(ctx),
         inputSchema: toJsonSchema(tool.inputSchemaZod(ctx)),
     }));
+}
+
+export function buildMcpToolList(ctx: ToolContext): McpToolAdvertisement[] {
+    return buildAllMcpTools(ctx).filter((tool) => isMcpToolEnabled(tool.name, ctx));
 }
 
 export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: ToolInputSchema }> {
@@ -90,8 +106,8 @@ export function getMcpToolList(ctx: ToolContext): Array<{ name: string; descript
     }
     let cached = cachedToolListByMatrix.get(witness);
     if (!cached) {
-        cached = deepFreeze(buildMcpToolList(ctx));
+        cached = deepFreeze(buildAllMcpTools(ctx));
         cachedToolListByMatrix.set(witness, cached);
     }
-    return [...cached];
+    return cached.filter((tool) => isMcpToolEnabled(tool.name, ctx));
 }

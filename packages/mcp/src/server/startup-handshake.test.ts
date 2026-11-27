@@ -19,6 +19,7 @@ type JsonRpcResponse = {
     result?: {
         content?: Array<{ type?: string; text?: string }>;
         tools?: Array<{ name: string }>;
+        isError?: boolean;
     };
 };
 
@@ -52,6 +53,7 @@ const EXPECTED_TOOLS = [
     "file_outline",
     "read_file",
     "list_codebases",
+    "run_script",
 ];
 
 const PROVIDER_ENV_KEYS = [
@@ -66,6 +68,8 @@ const PROVIDER_ENV_KEYS = [
     "VECTOR_STORE_PROVIDER",
     "MILVUS_ADDRESS",
     "MILVUS_TOKEN",
+    "SATORI_CODEMODE",
+    "SATORI_CODEMODE_MCP_CONFIG",
 ];
 
 function clearProviderEnv(): Record<string, string | undefined> {
@@ -125,7 +129,7 @@ async function createSession(runMode: "mcp" | "cli" = "cli"): Promise<InProcessS
         const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error(`Timed out waiting for response id=${id}`));
-            }, 1000);
+            }, params.name === "run_script" ? 5_000 : 1_000);
             pending.set(id, (response) => {
                 clearTimeout(timeout);
                 resolve(response);
@@ -292,13 +296,48 @@ function toolNames(response: JsonRpcResponse): string[] {
     return (response.result?.tools || []).map((tool) => tool.name).sort();
 }
 
-test("empty provider env still handshakes and lists exactly the eleven MCP tools", async () => {
+test("empty provider env still handshakes and lists exactly the twelve MCP tools", async () => {
     await withEmptyEnvSession(async (session) => {
         const response = await session.request("tools/list");
         assert.equal(response.error, undefined);
         const names = toolNames(response);
         assert.deepEqual(names, [...EXPECTED_TOOLS].sort());
     });
+});
+
+test("direct stdio executes JavaScript by default and honors the originating read scope", async () => {
+    await withProviderEnvSession({}, async ({ session }) => {
+        const pure = await session.request("tools/call", {
+            name: "run_script",
+            arguments: { code: "const values = []; for (let i = 1; i <= 3; i++) values.push(i * i); return { values, process: typeof process, fetch: typeof fetch };" },
+        });
+        assert.equal(pure.result?.isError, undefined, JSON.stringify(pure));
+        assert.equal(pure.result?.content?.[0]?.text,
+            '{"values":[1,4,9],"process":"undefined","fetch":"undefined"}');
+
+        const args = { path: "/etc/passwd" };
+        const direct = await session.request("tools/call", { name: "read_file", arguments: args });
+        assert.equal(direct.result?.isError, true, JSON.stringify(direct));
+        const nested = await session.request("tools/call", {
+            name: "run_script",
+            arguments: { code: `try { return await tools.read_file(${JSON.stringify(args)}); } catch (error) { return error.message; }` },
+        });
+        assert.equal(nested.result?.isError, undefined);
+        assert.equal(nested.result?.content?.[0]?.text, direct.result?.content?.[0]?.text);
+    }, "mcp");
+});
+
+test("direct stdio disables both advertisement and dispatch of run_script", async () => {
+    await withProviderEnvSession({ SATORI_CODEMODE: "0" }, async ({ session }) => {
+        assert.deepEqual(toolNames(await session.request("tools/list")),
+            EXPECTED_TOOLS.filter((name) => name !== "run_script").sort());
+        const call = await session.request("tools/call", {
+            name: "run_script",
+            arguments: { code: "return 42;" },
+        });
+        assert.equal(call.result?.isError, true);
+        assert.match(call.result?.content?.[0]?.text ?? "", /^Unknown tool: run_script/);
+    }, "mcp");
 });
 
 test("configured provider env does not instantiate embedding or Milvus during startup or tools/list", async () => {
@@ -336,6 +375,15 @@ test("manage_index status works with empty provider env for an unindexed path", 
         assert.equal(payload.status, "not_indexed");
         assert.equal(payload.reason, "not_indexed");
         assert.equal(payload.code, undefined);
+
+        const nested = await session.request("tools/call", {
+            name: "run_script",
+            arguments: { code: `return await tools.manage_index({ action: "status", path: ${JSON.stringify(repoDir)} });` },
+        });
+        assert.equal(nested.result?.isError, undefined, JSON.stringify(nested));
+        const nestedPayload = parseToolPayload(nested);
+        assert.equal(nestedPayload.status, payload.status);
+        assert.equal(nestedPayload.reason, payload.reason);
     });
 });
 
@@ -427,5 +475,50 @@ test("search_codebase returns MISSING_PROVIDER_CONFIG with empty provider env", 
         assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
         assert.deepEqual(payload.results, []);
         assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY"]);
+    });
+});
+
+test("one MCP script call uses only allowed downstream tools and reuses its stdio client", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-script-stdio-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const fixture = path.join(directory, "fixture.cjs");
+    const log = path.join(directory, "requests");
+    fs.writeFileSync(fixture, `
+        const fs = require("node:fs");
+        const input = require("node:readline").createInterface({ input: process.stdin });
+        const log = process.argv[2];
+        let calls = 0;
+        input.on("line", (line) => {
+            const { id, method, params } = JSON.parse(line);
+            if (id === undefined) return;
+            fs.appendFileSync(log, method + "\\n");
+            const result = method === "initialize"
+                ? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } }
+                : { content: [], structuredContent: { value: params.arguments.value * 2, calls: ++calls, secret: Boolean(process.env.VOYAGEAI_API_KEY) } };
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+        });
+        input.on("close", () => fs.appendFileSync(log, "closed\\n"));
+    `);
+    const configPath = path.join(directory, "servers.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+        mcpServers: { fixture: { command: process.execPath, args: [fixture, log], allowedTools: ["double.value"] } },
+    }));
+    await withProviderEnvSession({
+        SATORI_CODEMODE_MCP_CONFIG: configPath,
+        VOYAGEAI_API_KEY: "fixture-secret",
+    }, async ({ session }) => {
+        const response = await session.request("tools/call", {
+            name: "run_script",
+            arguments: { code: `
+                const first = await tools["fixture__double.value"]({value: 3});
+                const second = await tools["fixture__double.value"]({value: first.value});
+                let denied = false;
+                try { await tools.fixture__undeclared({}); } catch { denied = true; }
+                return { ...second, denied };
+            ` },
+        });
+        assert.equal(response.result?.isError, undefined, JSON.stringify(response));
+        assert.deepEqual(parseToolPayload(response), { value: 12, calls: 2, secret: false, denied: true });
+        assert.equal(fs.readFileSync(log, "utf8"), "initialize\ntools/call\ntools/call\nclosed\n");
     });
 });

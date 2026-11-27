@@ -115,6 +115,9 @@ importers:
 
   packages/mcp:
     dependencies:
+      '@earendil-works/pi-codemode':
+        specifier: 1.5.2
+        version: 1.5.2
       '@huggingface/transformers':
         specifier: 4.3.1
         version: 4.3.1(@types/node@26.6.5)
@@ -239,6 +242,10 @@ packages:
 
   '@dabh/diagnostics@2.0.3':
     resolution: {integrity: sha512-hrlQOIi7hAfzsMqlGSFyVucrx38O+j6wiGOf//H2ecvIEqYN4ADBSS2iLMh5UFyDunCNniUIPk/q3riFv45xRA==}
+
+  '@earendil-works/pi-codemode@1.5.2':
+    resolution: {integrity: sha512-HoZQ40a9RgdZ1VgmrX6x8887cNXedaRJT1l+Ie5YRIMK4gY7v0EpsiNqf6dmixrKylZlTgUSyR+vE8xhjfkr+w==}
+    engines: {node: '>=22.19.0'}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -1936,6 +1943,9 @@ packages:
     resolution: {integrity: sha512-5Px6J7rfHBAGUhNQ3es4YzcOdBBw0SDcVtThJml4RdnKw4tKs2epA0kPZ+K8X+WiHktT93RHVcQ/3ym5aTCgtg==}
     engines: {node: '>=0.6'}
 
+  quickjs-wasi@3.6.2:
+    resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
+
   range-parser@1.2.1:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
     engines: {node: '>= 0.6'}
@@ -2421,6 +2431,10 @@ snapshots:
       colorspace: 1.1.4
       enabled: 2.0.0
       kuler: 2.0.0
+
+  '@earendil-works/pi-codemode@1.5.2':
+    dependencies:
+      quickjs-wasi: 3.6.2
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -3966,6 +3980,8 @@ snapshots:
       es-define-property: 1.0.1
       side-channel: 1.1.1
     optional: true
+
+  quickjs-wasi@3.6.2: {}
 
   range-parser@1.2.1:
     optional: true

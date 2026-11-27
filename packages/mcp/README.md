@@ -40,6 +40,7 @@ Eligible Git workspaces automatically index within the runtime’s byte and file
 | `file_outline` | List indexed symbols and spans in one file. Edited files retain published coordinates with stale-source warnings, and a symbol whose current declaration was proven against the current bytes also reports its current span. Exact Python functions and methods can request on-demand structural analysis; relationship_coverage exposes per-file observed ResolutionClaim construct calibration. |
 | `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
 | `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |
+| `run_script` | Run JavaScript and return selected results. Combine Satori repository reads with explicitly allowlisted downstream MCP tools in the same script, or run plain computation. |
 
 <!-- TOOLS_END -->
 

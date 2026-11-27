@@ -33,6 +33,8 @@ type JsonRpcResponse = {
     error?: unknown;
     result?: {
         tools?: Array<{ name: string }>;
+        content?: Array<{ type: string; text: string }>;
+        isError?: boolean;
     };
 };
 
@@ -478,6 +480,38 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
     assert.equal((await second.request("tools/list")).result?.tools?.length, Object.keys(toolRegistry).length);
     await second.close();
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 0, operations: 0 });
+});
+
+test("the disabled shared-runtime identity serves stdio without run_script", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-codemode-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = { ...env(root), SATORI_CODEMODE: "0" };
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = { ...config(root), codeMode: { enabled: false, configPath: undefined } };
+    const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION), "host");
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(host, identity, paths, 5_000);
+    await socketHost.start();
+    t.after(async () => {
+        await socketHost.shutdown();
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const bridge = await createBridge(runtimeEntry, runtimeEnv);
+    try {
+        const list = await bridge.request("tools/list");
+        assert.equal(list.result?.tools?.length, Object.keys(toolRegistry).length - 1);
+        assert.equal(list.result?.tools?.some((tool) => tool.name === "run_script"), false);
+        const call = await bridge.request("tools/call", {
+            name: "run_script",
+            arguments: { code: "return 42;" },
+        });
+        assert.equal(call.result?.isError, true);
+        assert.match(call.result?.content?.[0]?.text ?? "", /^Unknown tool: run_script/);
+    } finally {
+        await bridge.close();
+    }
 });
 
 test("a stale SATORI_RERANK_APPLICATION_MODE blocks shared-runtime attach", async (t) => {

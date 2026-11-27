@@ -171,11 +171,33 @@ Review the preview before applying it. Active runtime owners can prevent Publica
 | `detect_changes` | Map a Git diff to changed symbols and bounded caller evidence. |
 | `continue_search` | Reveal another page of a frozen search ranking. |
 | `list_codebases` | List known repositories and index readiness. |
+| `run_script` | Run bounded JavaScript and return selected results from computation or nested tool calls. |
 | `manage_index` | Inspect and manage index generations and supervised operations. |
 
 Give tools absolute paths. Follow `recommendedNextAction` from a search response and preserve the supplied `codebaseRoot` when opening exact symbols. For a direct exact-symbol `read_file` request, use `open_symbol` with `contractVersion: 2` and the published `symbolId`. Search results may point to a matched span inside a larger symbol.
 
 In grouped search, `limit` bounds the frozen result set and `disclosureLimit` bounds the first page. Continue with the returned handle and exact next offset. A completed continuation covers that frozen set. It can still omit results beyond the limit.
+
+### CodeMode
+
+Send `run_script` a `code` string containing a JavaScript function body. Use `return` for a value and `text()` to emit text. Scripts can call all ten Satori read and discovery tools and `tools.manage_index({ action: "status", path })` under the originating session's workspace policy. Use a direct `manage_index` call for index mutations. Nested calls return structured content, decoded Satori JSON, or plain text. Tool errors reject the promise and can be caught inside the script. Set `SATORI_CODEMODE=0` in the Satori server environment to disable CodeMode.
+
+To give scripts access to additional tools, point `SATORI_CODEMODE_MCP_CONFIG` at an absolute path to an operator-controlled JSON file:
+
+```json
+{
+  "mcpServers": {
+    "catalog": {
+      "command": "/opt/catalog/bin/mcp-server",
+      "args": ["--stdio"],
+      "allowedTools": ["lookup"]
+    }
+  }
+}
+```
+
+A script can call `await tools["catalog__lookup"]({ id: "example" })`. `ALL_TOOLS` lists available names. Satori starts an allowed server over stdio on its first use in a script, using the configuration file's directory as the working directory and the MCP SDK's minimal child environment. Satori closes its downstream connections when the script ends. Each script has a 30-second execution deadline, 32 nested calls with up to four active at once, and up to 16 KiB of returned text.
+
 
 ## Language support
 

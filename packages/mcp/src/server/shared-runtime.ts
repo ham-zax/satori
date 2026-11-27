@@ -43,11 +43,13 @@ import {
     resolveSessionWorkspaceRoots,
 } from "../core/session-workspace-roots.js";
 import { SyncManager } from "../core/sync.js";
-import { getMcpToolList, toolRegistry } from "../tools/registry.js";
+import { getMcpToolList, isMcpToolEnabled, resolveMcpTool, toolRegistry } from "../tools/registry.js";
 import type {
+    McpTool,
     MissingProviderConfigIssue,
     ProviderBackedOperation,
     ToolContext,
+    ToolResponse,
 } from "../tools/types.js";
 import { createLocalOnlyContext, ProviderRuntime } from "./provider-runtime.js";
 import { SHARED_RUNTIME_MAX_PENDING_REQUESTS } from "./shared-runtime-identity.js";
@@ -498,6 +500,7 @@ export class SharedRuntimeHost {
                 toolHandlers: localHandlers,
                 readFileMaxLines: this.readFileMaxLines,
                 readFileMaxBytes: this.readFileMaxBytes,
+                codeMode: this.config.codeMode,
                 runtimeOwnerGate: this.runtimeOwnerRegistry,
                 providerRuntime,
                 workspacePolicy,
@@ -646,6 +649,38 @@ export class McpSession {
         };
     }
 
+    private unknownTool(name: string): ToolResponse {
+        const supported = Object.keys(toolRegistry)
+            .filter((tool) => isMcpToolEnabled(tool, this.resources.toolContext));
+        return {
+            content: [{ type: "text", text: `Unknown tool: ${name}. Supported tools: ${supported.join(", ")}` }],
+            isError: true,
+        };
+    }
+
+    private invokeTool(tool: McpTool, args: unknown, signal: AbortSignal): Promise<ToolResponse> {
+        // Mixed-action tools retain the launcher policy and opt in after validating their read operation.
+        const publishedReadPolicy = PUBLISHED_READ_TOOLS.has(tool.name)
+            ? this.workspacePolicy.createPublishedReadPolicy?.() : undefined;
+        const requestToolContext: ToolContext = {
+            ...this.resources.toolContext,
+            workspacePolicy: publishedReadPolicy ?? this.workspacePolicy,
+            requestSignal: signal,
+            ...(tool.name === "run_script" ? {
+                callSessionTool: (name: string, nestedArgs: unknown, nestedSignal: AbortSignal) => {
+                    const nested = resolveMcpTool(name, this.resources.toolContext);
+                    return nested
+                        ? this.invokeTool(nested, nestedArgs, nestedSignal)
+                        : Promise.resolve(this.unknownTool(name));
+                },
+            } : {}),
+        };
+        return withSourceMeasurementOperation(
+            { operation: tool.name },
+            () => tool.execute(args || {}, requestToolContext),
+        );
+    }
+
     private setupTools(): void {
         this.server.setRequestHandler('tools/list', async () => ({
             tools: getMcpToolList(this.resources.toolContext),
@@ -653,16 +688,8 @@ export class McpSession {
 
         this.server.setRequestHandler('tools/call', async (request, ctx): Promise<CallToolResult> => {
             const { name, arguments: args } = request.params;
-            const tool = toolRegistry[name];
-            if (!tool) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Unknown tool: ${name}. Supported tools: ${Object.keys(toolRegistry).join(", ")}`,
-                    }],
-                    isError: true,
-                };
-            }
+            const tool = resolveMcpTool(name, this.resources.toolContext);
+            if (!tool) return this.unknownTool(name);
             if (this.activeToolCalls >= SHARED_RUNTIME_MAX_PENDING_REQUESTS) {
                 return {
                     content: [{
@@ -676,19 +703,7 @@ export class McpSession {
             this.activeToolCalls += 1;
             this.host.beginOperation();
             try {
-                // Mixed-action tools retain the launcher policy and opt in
-                // after validating their read operation.
-                const publishedReadPolicy = PUBLISHED_READ_TOOLS.has(name)
-                    ? this.workspacePolicy.createPublishedReadPolicy?.() : undefined;
-                const requestToolContext: ToolContext = {
-                    ...this.resources.toolContext,
-                    workspacePolicy: publishedReadPolicy ?? this.workspacePolicy,
-                    requestSignal: ctx.mcpReq.signal,
-                };
-                return await withSourceMeasurementOperation(
-                    { operation: name },
-                    () => tool.execute(args || {}, requestToolContext),
-                ) as CallToolResult;
+                return await this.invokeTool(tool, args, ctx.mcpReq.signal) as CallToolResult;
             } finally {
                 this.activeToolCalls -= 1;
                 this.host.endOperation();

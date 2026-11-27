@@ -1,3 +1,4 @@
+import type { CodeModeSettings } from "../codemode/settings.js";
 import path from "node:path";
 import { z } from "zod";
 import { Context, type Reranker } from "@satori-code/core";
@@ -48,6 +49,9 @@ export interface ToolContext {
     runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
     /** Exact MCP request cancellation scope; mutation handlers must opt in explicitly. */
     requestSignal?: AbortSignal;
+    codeMode?: CodeModeSettings;
+    /** Session-bound dispatcher supplied to run_script. Its caller owns operation drain. */
+    callSessionTool?: (name: string, args: unknown, signal: AbortSignal) => Promise<ToolResponse>;
     providerRuntime?: {
         requireToolContext(
             operation: ProviderBackedOperation,

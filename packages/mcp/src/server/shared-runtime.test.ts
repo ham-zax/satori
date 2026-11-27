@@ -976,3 +976,63 @@ test("aborting a session waiting on shared provider bootstrap settles immediatel
     assert.equal("code" in peerContext, false);
     assert.equal(bootstrapCount, 1);
 });
+
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+}
+
+test("aborting CodeMode stops queued calls and keeps the session operation until nested work drains", { timeout: 10_000 }, async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-codemode-drain-"));
+    const runtimeConfig = { ...config(), stateRoot };
+    const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, 1024), "host");
+    const { client, session } = await connectClient(host, "codemode-drain", stateRoot);
+    const abort = new AbortController();
+    const gate = deferred();
+    const started = deferred();
+    const cancelled = deferred();
+    const calls: unknown[] = [];
+    t.mock.method(toolRegistry.read_file, "execute", async (args: unknown, ctx: ToolContext) => {
+        calls.push(args);
+        if (calls.length === 4) {
+            ctx.requestSignal?.addEventListener("abort", cancelled.resolve, { once: true });
+            started.resolve();
+        }
+        await gate.promise;
+        return { content: [{ type: "text", text: "{}" }] };
+    });
+    t.after(async () => {
+        gate.resolve();
+        await client.close();
+        await session.shutdown();
+        await host.shutdown();
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+
+    const call = client.callTool({
+        name: "run_script",
+        arguments: { code: "await Promise.all(Array.from({length: 8}, (_, id) => tools.read_file({id})));" },
+    }, { signal: abort.signal });
+    const rejected = assert.rejects(call);
+    await started.promise;
+    abort.abort();
+    await cancelled.promise;
+    await rejected;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(host.getActivity(), { sessions: 1, operations: 1 });
+
+    const drained = deferred();
+    const unsubscribe = host.subscribeActivity(() => {
+        if (host.getActivity().operations === 0) drained.resolve();
+    });
+    try {
+        gate.resolve();
+        await drained.promise;
+    } finally {
+        unsubscribe();
+    }
+    assert.deepEqual(calls, [{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }]);
+    const reused = await client.callTool({ name: "run_script", arguments: { code: "return 42;" } });
+    assert.deepEqual(reused.content, [{ type: "text", text: "42" }]);
+});

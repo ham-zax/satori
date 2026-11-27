@@ -365,3 +365,17 @@ test("shared runtime identity binds the LateOn profile projection digest", (t) =
     assert.equal(lateOnIdentity.lateOnProfileDigest, expectedDigest);
     assert.notEqual(lateOnIdentity.hash, plainIdentity.hash);
 });
+
+test("CodeMode settings select the shared host before the session can attach", (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-codemode-identity-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const env = offlineEnv(root);
+    const enabled = buildSharedRuntimeIdentity(runtimeEntry, env);
+    const disabled = buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_CODEMODE: "0" });
+    const configured = buildSharedRuntimeIdentity(runtimeEntry, {
+        ...env, SATORI_CODEMODE_MCP_CONFIG: path.join(root, "servers.json"),
+    });
+    assert.equal(enabled.codeModeEnabled, "true");
+    assert.equal(disabled.codeModeEnabled, "false");
+    assert.equal(new Set([enabled.hash, disabled.hash, configured.hash]).size, 3);
+});

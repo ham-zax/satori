@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.mjs";
 
 const PNPM_ONLY_NPM_ENV_KEYS = new Set([
@@ -48,122 +50,64 @@ export function packPackage(packageRoot: string, smokePackDir: string): string {
     return path.join(smokePackDir, tarballName);
 }
 
-function runInitializeSmoke(
+async function runPackedMcpSmoke(
     command: string,
     args: string[],
     smokeExecDir: string,
-    timeoutMs: number
+    timeoutMs: number,
 ): Promise<void> {
-    const initializeInput = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: {
-                name: "satori-release-smoke",
-                version: "1.0.0",
-            },
+    // The default session would use cwd. Set an explicit non-home workspace so
+    // the authorization checks accept the smoke's isolated environment.
+    const workspaceDir = path.join(smokeExecDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const transport = new StdioClientTransport({
+        command,
+        args,
+        cwd: smokeExecDir,
+        stderr: "pipe",
+        env: {
+            PATH: process.env.PATH || "",
+            HOME: smokeExecDir,
+            SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceDir]),
+            EMBEDDING_PROVIDER: "",
+            OPENAI_API_KEY: "",
+            VOYAGEAI_API_KEY: "",
+            GEMINI_API_KEY: "",
+            MILVUS_ADDRESS: "",
+            MILVUS_TOKEN: "",
+            MCP_ENABLE_WATCHER: "false",
+            npm_config_package_lock: "false",
         },
-    }) + "\n";
-
-    return new Promise((resolve, reject) => {
-        // The spawned server's default workspace root is [process.cwd()]. The
-        // session-workspace policy rejects a root equal to the home directory
-        // as broad, so run the server with an explicit non-home workspace root.
-        const workspaceDir = path.join(smokeExecDir, "workspace");
-        fs.mkdirSync(workspaceDir, { recursive: true });
-        const child = spawn(command, args, {
-            cwd: smokeExecDir,
-            env: {
-                PATH: process.env.PATH || "",
-                HOME: smokeExecDir,
-                SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceDir]),
-                EMBEDDING_PROVIDER: "",
-                OPENAI_API_KEY: "",
-                VOYAGEAI_API_KEY: "",
-                GEMINI_API_KEY: "",
-                MILVUS_ADDRESS: "",
-                MILVUS_TOKEN: "",
-                MCP_ENABLE_WATCHER: "false",
-                npm_config_package_lock: "false",
-            },
-            detached: process.platform !== "win32",
-            stdio: ["pipe", "pipe", "pipe"],
-        });
-        let settled = false;
-        let stdout = "";
-        let stderr = "";
-
-        const terminateChild = () => {
-            child.stdin?.destroy();
-            child.stdout?.destroy();
-            child.stderr?.destroy();
-            if (child.pid && process.platform !== "win32") {
-                try {
-                    process.kill(-child.pid, "SIGTERM");
-                    child.unref();
-                    return;
-                } catch {
-                    // Fall back to killing the direct npm process below.
-                }
-            }
-            child.kill("SIGTERM");
-            child.unref();
-        };
-
-        const timeout = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            terminateChild();
-            reject(new Error(`MCP initialize smoke timed out. stdout=${stdout} stderr=${stderr}`));
-        }, timeoutMs);
-
-        const settleOk = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeout);
-            terminateChild();
-            resolve();
-        };
-
-        child.stdout?.on("data", (chunk) => {
-            stdout += String(chunk);
-            const initializeResponse = stdout
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter(Boolean)
-                .map((line) => {
-                    try {
-                        return JSON.parse(line);
-                    } catch {
-                        return null;
-                    }
-                })
-                .find((message) => message?.id === 1);
-            if (initializeResponse?.result?.serverInfo) {
-                settleOk();
-            }
-        });
-        child.stderr?.on("data", (chunk) => {
-            stderr += String(chunk);
-        });
-        child.on("error", (error) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeout);
-            reject(error);
-        });
-        child.on("exit", (code, signal) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeout);
-            reject(new Error(`MCP initialize smoke exited before initialize response. code=${code} signal=${signal} stdout=${stdout} stderr=${stderr}`));
-        });
-
-        child.stdin?.end(initializeInput);
     });
+    const client = new Client(
+        { name: "satori-release-smoke", version: "1.0.0" },
+        { supportedProtocolVersions: ["2024-11-05"] },
+    );
+    let stderr = "";
+    transport.stderr?.on("data", (chunk) => {
+        stderr = (stderr + String(chunk)).slice(-16_384);
+    });
+
+    try {
+        await client.connect(transport, { timeout: timeoutMs });
+        if (!client.getServerVersion()?.name) {
+            throw new Error("Packed MCP server did not identify itself.");
+        }
+        const result = await client.callTool({
+            name: "run_script",
+            arguments: { code: "return [2, 3].map((n) => n * n);" },
+        }, { timeout: timeoutMs });
+        if (result.isError || result.content.length !== 1
+            || result.content[0]?.type !== "text" || result.content[0].text !== "[4,9]") {
+            throw new Error(`Packed CodeMode did not return the expected result: ${JSON.stringify(result)}`);
+        }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const diagnostics = stderr ? `\nstderr=${stderr}` : "";
+        throw new Error(`Packed MCP smoke failed: ${message}${diagnostics}`, { cause: error });
+    } finally {
+        await transport.close();
+    }
 }
 
 export function installPackedRuntimeClosure(
@@ -385,16 +329,16 @@ async function main(): Promise<void> {
             env: process.env,
             stdio: ["ignore", "pipe", "pipe"],
         });
-        await runInitializeSmoke(process.execPath, [packedRuntime.serverEntry], smokeExecDir, 30000);
+        await runPackedMcpSmoke(process.execPath, [packedRuntime.serverEntry], smokeExecDir, 30_000);
         console.log(
             "[release:smoke] One installed packed closure passed Core parser, "
-            + "MCP executable-bin, shared-runtime client import, and direct runtime initialization checks.",
+            + "MCP executable-bin, shared-runtime client import, and direct CodeMode execution checks.",
         );
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";
         console.error(`[release:smoke] ${message}${detail ? ` ${detail}` : ""}`);
-        process.exit(1);
+        process.exitCode = 1;
     } finally {
         fs.rmSync(smokePackDir, { recursive: true, force: true });
         fs.rmSync(smokeExecDir, { recursive: true, force: true });

@@ -182,6 +182,27 @@ function createExactReadHarness(t: test.TestContext, fileContent: string) {
     return { root, absFile, ctx };
 }
 
+test("read_file propagates a disconnect during exact symbol composition", async (t) => {
+    const { absFile, ctx } = createExactReadHarness(t, "export function handleBatch() {}\n");
+    const controller = new AbortController();
+    const reason = new Error("request disconnected");
+    ctx.requestSignal = controller.signal;
+    t.mock.method(ctx.toolHandlers, "composeSymbolContext", async (
+        _input: ComposeSymbolContextInput,
+        signal?: AbortSignal,
+    ) => {
+        assert.equal(signal, controller.signal);
+        controller.abort(reason);
+        signal?.throwIfAborted();
+        assert.fail("composition must stop on disconnect");
+    });
+
+    await assert.rejects(readFileTool.execute({
+        path: absFile,
+        open_symbol: { contractVersion: 2, symbolId: "sym_handle_batch" },
+    }, ctx), (error) => error === reason);
+});
+
 test("readFileInputSchema accepts format json/text and rejects invalid format values", () => {
     assert.equal(readFileInputSchema.safeParse({ path: "/repo/a.ts" }).success, true);
     assert.equal(readFileInputSchema.safeParse({ path: "/repo/a.ts", format: "json" }).success, true);

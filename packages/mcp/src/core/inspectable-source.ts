@@ -153,7 +153,10 @@ export async function prepareInspectableSource(input: {
     codebaseRoot: string;
     relativeFile: string;
     maxInspectableBytes: number;
+    signal?: AbortSignal;
 }): Promise<PrepareInspectableSourceResult> {
+    const { signal } = input;
+    signal?.throwIfAborted();
     if (!Number.isSafeInteger(input.maxInspectableBytes) || input.maxInspectableBytes < 0) {
         throw new Error("maxInspectableBytes must be a non-negative safe integer.");
     }
@@ -162,8 +165,10 @@ export async function prepareInspectableSource(input: {
     try {
         canonicalRoot = await fs.realpath(input.codebaseRoot);
     } catch {
+        signal?.throwIfAborted();
         return { status: "unavailable", reason: "source_descriptor_unavailable" };
     }
+    signal?.throwIfAborted();
     if (canonicalRoot !== path.resolve(input.codebaseRoot)) return rootBindingFailure();
     const logicalFile = path.resolve(canonicalRoot, input.relativeFile);
     if (!isRelativeFileInsideRoot(input.relativeFile, logicalFile, canonicalRoot)) {
@@ -183,6 +188,7 @@ export async function prepareInspectableSource(input: {
     try {
         opened = await openPublishedPath();
     } catch (error) {
+        signal?.throwIfAborted();
         return mapRootBoundFailure(error)
             ?? { status: "unavailable", reason: "source_descriptor_unavailable" };
     }
@@ -191,6 +197,7 @@ export async function prepareInspectableSource(input: {
     let observationNeedsOutcome = false;
     let descriptorTransferred = false;
     try {
+        signal?.throwIfAborted();
         if (!canPublishRootBoundFileIdentity(opened.identity)) {
             return { status: "unavailable", reason: "path_identity_unavailable" };
         }
@@ -212,13 +219,15 @@ export async function prepareInspectableSource(input: {
                 opened.handle,
                 opened.observedStat.size,
                 measurementObservation,
-                { deferSuccessfulObservationOutcome: true },
+                { deferSuccessfulObservationOutcome: true, signal },
             );
         } catch (error) {
             observationNeedsOutcome = false;
+            signal?.throwIfAborted();
             return mapRootBoundFailure(error)
                 ?? { status: "unavailable", reason: "source_descriptor_unavailable" };
         }
+        signal?.throwIfAborted();
 
         const source = sourceBytes.toString("utf8");
         const hashingStartedAt = performance.now();
@@ -268,6 +277,7 @@ export async function prepareInspectableSource(input: {
                     throw new Error("Inspectable source finalization is one-shot.");
                 }
                 finalized = true;
+                signal?.throwIfAborted();
                 let finalDescriptorStat: Awaited<ReturnType<typeof verifyStableFileDescriptorObservation>>;
                 try {
                     finalDescriptorStat = await verifyStableFileDescriptorObservation(
@@ -277,19 +287,24 @@ export async function prepareInspectableSource(input: {
                     );
                 } catch (error) {
                     finishPartial();
+                    signal?.throwIfAborted();
                     return mapRootBoundFailure(error)
                         ?? { status: "stale", reason: "source_changed_during_inspection" };
                 }
 
+                signal?.throwIfAborted();
                 await finalizeInput.validatePreparedAuthority?.();
+                signal?.throwIfAborted();
 
                 try {
                     rebound = await openPublishedPath();
                 } catch (error) {
                     finishPartial();
+                    signal?.throwIfAborted();
                     return mapRootBoundFailure(error)
                         ?? { status: "stale", reason: "path_identity_changed_during_inspection" };
                 }
+                signal?.throwIfAborted();
                 if (!canPublishRootBoundFileIdentity(rebound.identity)) {
                     finishPartial();
                     return { status: "unavailable", reason: "path_identity_unavailable" };

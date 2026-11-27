@@ -101,6 +101,7 @@ export type PrepareSymbolContextSnapshotResult = {
 };
 
 export interface SymbolContextComposerDependencies {
+    signal?: AbortSignal;
     prepareSnapshot(input: {
         codebaseRoot: string;
         relativeFile: string;
@@ -798,6 +799,7 @@ async function composeSource(input: {
     snapshot: PreparedSymbolContextSnapshot;
     persistedSymbol: SymbolRecord;
     prepareSource: typeof prepareInspectableSource;
+    signal?: AbortSignal;
     resolveCurrentSpans: typeof validateCurrentSourceSymbolSpansFromEvidence;
     sourceContextEvidence: Pick<SourceContextEvidenceOwner, "collect">;
     reservedResponseBytesForSource(input: {
@@ -828,6 +830,7 @@ async function composeSource(input: {
             codebaseRoot: input.snapshot.canonicalRoot,
             relativeFile: input.persistedSymbol.file,
             maxInspectableBytes: input.request.budgets.maxInspectableBytes,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
     } catch (error) {
         if (error instanceof PreparedAuthorityChangedError) {
@@ -855,12 +858,14 @@ async function composeSource(input: {
 
     let transferFinalizer = false;
     try {
+        input.signal?.throwIfAborted();
         const resolution = await resolveSourceSpan({
             snapshot: input.snapshot,
             persistedSymbol: input.persistedSymbol,
             evidence: prepared.evidence,
             resolveCurrentSpans: input.resolveCurrentSpans,
         });
+        input.signal?.throwIfAborted();
         if (!resolution.symbol || !resolution.continuationIdentity) {
             if (input.request.continuation?.kind === "source_range") {
                 return {
@@ -1129,6 +1134,7 @@ export async function composeSymbolContext(
     input: ComposeSymbolContextInput,
     dependencies: SymbolContextComposerDependencies,
 ): Promise<ComposeSymbolContextResult> {
+    dependencies.signal?.throwIfAborted();
     validateBudgets(input.budgets);
     validateContinuationRequest(input);
     const prepared = await dependencies.prepareSnapshot({
@@ -1137,6 +1143,7 @@ export async function composeSymbolContext(
         ...(input.symbolId ? { symbolId: input.symbolId } : {}),
         ...(input.symbolLabel ? { symbolLabel: input.symbolLabel } : {}),
     });
+    dependencies.signal?.throwIfAborted();
     if (prepared.status !== "ready") {
         return { status: "navigation_unavailable", reason: prepared.reason };
     }
@@ -1284,6 +1291,7 @@ export async function composeSymbolContext(
         snapshot,
         persistedSymbol,
         prepareSource: dependencies.prepareSource || prepareInspectableSource,
+        signal: dependencies.signal,
         resolveCurrentSpans: dependencies.resolveCurrentSpans
             || validateCurrentSourceSymbolSpansFromEvidence,
         sourceContextEvidence: dependencies.sourceContextEvidence || sourceContextEvidenceOwner,

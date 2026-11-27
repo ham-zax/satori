@@ -101,6 +101,32 @@ test("inspectable source completes measurement only for fully validated evidence
     }
 });
 
+test("inspectable source records partial evidence when final authority validation aborts", async (t) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-inspectable-abort-")));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const relativeFile = "source.ts";
+    const ledgerFile = path.join(root, "source-ledger.jsonl");
+    fs.writeFileSync(path.join(root, relativeFile), "export const value = true;\n");
+    const controller = new AbortController();
+    const reason = new Error("request disconnected");
+    await withSourceMeasurementOperation({ operation: "read_file", ledgerFile, rootDir: root }, async () => {
+        const prepared = await prepareInspectableSource({
+            codebaseRoot: root, relativeFile, maxInspectableBytes: 1024, signal: controller.signal,
+        });
+        assert.equal(prepared.status, "available");
+        if (prepared.status !== "available") return;
+        try {
+            await assert.rejects(prepared.finalizer.finalize({
+                validatePreparedAuthority: async () => { controller.abort(reason); },
+            }), (error) => error === reason);
+        } finally {
+            await prepared.finalizer.release();
+        }
+    });
+    const outcomes = readLedger(ledgerFile).filter((record) => record.kind === "source_observation_outcome");
+    assert.deepEqual(outcomes.map((record) => record.status), ["partial"]);
+});
+
 test("inspectable source reports its explicit inspection ceiling without a resource-limit error", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-inspectable-limit-"));
     const relativeFile = "src/large.ts";

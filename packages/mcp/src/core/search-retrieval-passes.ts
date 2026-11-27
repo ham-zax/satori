@@ -108,6 +108,7 @@ export function runSemanticSearchPasses(input: {
                 ? []
                 : buildSearchLexicalFallbackTerms(pass.query, { compoundJoin: input.compoundJoin });
             return host.semanticSearch({
+                ...(input.signal ? { signal: input.signal } : {}),
                 codebasePath: input.codebasePath,
                 query: pass.query,
                 topK: input.candidateLimit,
@@ -231,6 +232,7 @@ export async function runMustConstraintLane(input: {
         const laneResponse = await host.measureSearchPhase(
             "semanticSearch",
             () => host.semanticSearch({
+                ...(input.signal ? { signal: input.signal } : {}),
                 codebasePath: input.effectiveRoot,
                 query: input.mustTokens.join(" "),
                 topK: input.candidateBudget,

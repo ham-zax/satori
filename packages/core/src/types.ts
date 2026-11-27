@@ -9,6 +9,7 @@ export interface SearchQuery {
 export interface SemanticSearchRequest {
     codebasePath: string;
     query: string;
+    signal?: AbortSignal;
     topK?: number;
     retrievalMode?: RetrievalMode;
     /**

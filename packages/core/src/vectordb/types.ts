@@ -68,6 +68,7 @@ export type VectorFilter =
     };
 
 export interface DenseCandidateRequest {
+    readonly signal?: AbortSignal;
     readonly vector: readonly number[];
     readonly limit: number;
     readonly minimumScore?: number;
@@ -75,6 +76,7 @@ export interface DenseCandidateRequest {
 }
 
 export interface LexicalCandidateRequest {
+    readonly signal?: AbortSignal;
     readonly query: string;
     readonly limit: number;
     readonly filter?: VectorFilter;

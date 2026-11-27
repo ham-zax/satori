@@ -448,6 +448,7 @@ function buildSearchMustCoverage(
 export type SearchExecutionHost = {
     searchQuerySupport: SearchQuerySupport;
     semanticSearch: (request: {
+        signal?: AbortSignal;
         codebasePath: string;
         query: string;
         topK: number;

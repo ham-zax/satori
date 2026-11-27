@@ -451,3 +451,24 @@ test('Voyage embedding response indexes preserve input order and reject invalid 
         });
     }
 });
+
+test('Voyage passes per-query cancellation to the client without cancelling a peer', async () => {
+    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3', outputDimension: 1024 });
+    const started = deferred();
+    const controller = new AbortController();
+    stubEmbedClient(embedding, async (request, options) => {
+        const signal = (options as EmbedOptions & { abortSignal?: AbortSignal }).abortSignal;
+        if (request.input[0] === 'cancel') {
+            assert.equal(signal, controller.signal);
+            started.resolve();
+            await new Promise<void>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+        }
+        return { data: [{ index: 0, embedding: Buffer.alloc(1024 * 4).toString('base64') }] };
+    });
+    const cancelled = embedding.embedQuery('cancel', controller.signal);
+    await started.promise;
+    controller.abort(new Error('cancel'));
+    await assert.rejects(cancelled);
+    const peer = await embedding.embedQuery('peer');
+    assert.equal(peer.dimension, 1024);
+});

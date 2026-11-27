@@ -867,6 +867,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     }
 
     async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
+        request.signal?.throwIfAborted();
         assertCollectionName(collectionName);
         validateLimit(request.limit, 'Dense candidate');
         if (request.minimumScore !== undefined && !Number.isFinite(request.minimumScore)) {
@@ -876,12 +877,16 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             throw new Error('Dense query vector must be non-empty and finite.');
         }
         const connection = await this.getConnection();
+        request.signal?.throwIfAborted();
         return withTable(connection, collectionName, async (table) => {
+            request.signal?.throwIfAborted();
             const dimension = await this.vectorDimension(table);
+            request.signal?.throwIfAborted();
             if (request.vector.length !== dimension) {
                 throw new Error(`Dense query vector dimension does not match table dimension ${dimension}.`);
             }
             return this.retrieveStableCandidates(table, request.limit, request.filter, async (fetchLimit, filter) => {
+                request.signal?.throwIfAborted();
                 let query = table.query()
                     .nearestTo([...request.vector])
                     .distanceType('cosine')
@@ -891,6 +896,8 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                     .select([...DATA_FIELDS, '_distance'])
                     .limit(fetchLimit)
                     .toArray() as LanceDbPhysicalRow[];
+                // LanceDB calls cannot be interrupted individually; finish the native call first.
+                request.signal?.throwIfAborted();
                 return rows.map((row) => {
                     const distance = requiredNumber(row, '_distance', 'dense candidate');
                     const score = 1 - distance;
@@ -904,12 +911,16 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     }
 
     async retrieveLexical(collectionName: string, request: LexicalCandidateRequest): Promise<VectorCandidate[]> {
+        request.signal?.throwIfAborted();
         assertCollectionName(collectionName);
         validateLimit(request.limit, 'Lexical candidate');
         if (request.query.trim().length === 0 || request.limit === 0) return [];
         const connection = await this.getConnection();
+        request.signal?.throwIfAborted();
         return withTable(connection, collectionName, async (table) => {
+            request.signal?.throwIfAborted();
             return this.retrieveStableCandidates(table, request.limit, request.filter, async (fetchLimit, filter) => {
+                request.signal?.throwIfAborted();
                 let query = table.query().fullTextSearch(new MatchQuery(
                     request.query,
                     'lexicalText',
@@ -920,6 +931,8 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                     .select([...DATA_FIELDS, '_score'])
                     .limit(fetchLimit)
                     .toArray() as LanceDbPhysicalRow[];
+                // LanceDB calls cannot be interrupted individually; finish the native call first.
+                request.signal?.throwIfAborted();
                 return rows.map((row) => {
                     const score = requiredNumber(row, '_score', 'lexical candidate');
                     return { document: decodeDocument(row), score };

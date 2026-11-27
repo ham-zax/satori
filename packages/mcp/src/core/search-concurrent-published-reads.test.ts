@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runSearchFrontDoor, type SearchFrontDoorHost } from './search-frontdoor.js';
-import { SearchRequestCoordinator } from './search-request-coordinator.js';
+import { SearchContinuationCoordinator, SearchRequestCoordinator } from './search-request-coordinator.js';
 import { SearchQuerySupport } from './search-query-support.js';
 import { CapabilityResolver } from './capabilities.js';
 import { ToolResponseBuilders } from './tool-response-builders.js';
@@ -415,6 +415,14 @@ test('coordinator characterization: five parallel stale reads stay pinned across
         let currentAuthorityObservation = 'obs-n';
         const servedCollections: string[] = [];
         let unpinnedSemanticSearchCalls = 0;
+        let abortOnTouch: AbortController | undefined;
+        let paginated = false;
+        let stores = 0;
+        let rejectFinalAdmission = false;
+        let admissionChecks = 0;
+        const continuations = new SearchContinuationCoordinator();
+        const store = continuations.store.bind(continuations);
+        continuations.store = (...args) => { stores += 1; return store(...args); };
 
         const capabilities = new CapabilityResolver({
             name: 'test',
@@ -462,7 +470,7 @@ test('coordinator characterization: five parallel stale reads stay pinned across
 
         coordinator = new SearchRequestCoordinator({
             readiness: {
-                touchWatchedCodebaseBestEffort: async () => {},
+                touchWatchedCodebaseBestEffort: async () => { abortOnTouch?.abort(); },
                 assessReadFreshness: async () => ({
                     mode: 'read_only',
                     checkedAt: new Date().toISOString(),
@@ -534,7 +542,11 @@ test('coordinator characterization: five parallel stale reads stay pinned across
                         : (publicationId === publicationN1.id ? publicationN1 : publicationN);
                     return { ...publication, release: () => undefined } satisfies PublicationLease;
                 },
-                isPublicationLeaseAdmitted: async () => true,
+                isPublicationLeaseAdmitted: async () => {
+                    admissionChecks += 1;
+                    if (rejectFinalAdmission && admissionChecks === 2) return false;
+                    return true;
+                },
                 isPublicationAdmitted: async () => true,
                 getPublicationNavigationStatus: async () => 'valid',
             },
@@ -556,10 +568,14 @@ test('coordinator characterization: five parallel stale reads stay pinned across
                 },
                 semanticSearchInPublication: async (publication) => {
                     servedCollections.push(publication.publication.vector.collectionName);
-                    return [];
+                    return paginated ? [0, 1, 2].map((index) => ({
+                        relativePath: `src/billing${index}.ts`, startLine: 1, endLine: 1,
+                        language: 'typescript', content: `export function billing${index}() {}`,
+                        score: 1 - index / 10, symbolLabel: `function billing${index}()`,
+                    })) : [];
                 },
             },
-        }, support, null);
+        }, support, null, continuations);
 
         // 1. Hold real sync in writing: fire 5 parallel searches without settle or sleep ritual
         const queries = [
@@ -614,6 +630,33 @@ test('coordinator characterization: five parallel stale reads stay pinned across
         const nextEnvelope = JSON.parse(nextResult.content[0]!.text);
         assert.equal(nextEnvelope.status, 'ok');
         assert.equal(servedCollections[servedCollections.length - 1], 'col_gen_n1');
+
+        paginated = true;
+        abortOnTouch = new AbortController();
+        await assert.rejects(coordinator.attempt({
+            path: tempRoot, query: 'billing implementation', limit: 3, disclosureLimit: 1,
+        }, 0, abortOnTouch.signal), { name: 'AbortError' });
+        assert.equal(stores, 0, 'cancelled first page must not store a continuation');
+
+        abortOnTouch = undefined;
+        const first = JSON.parse((await coordinator.attempt({
+            path: tempRoot, query: 'billing implementation', limit: 3, disclosureLimit: 1,
+        })).content[0]!.text);
+        assert.equal(stores, 1);
+        assert.equal(first.pagination.continuation, 'attached');
+        const args = { handle: first.continuation.handle, expectedOffset: first.continuation.nextOffset };
+        const page = await coordinator.continueOwned(args);
+        assert.equal(JSON.parse(page.content[0]!.text).status, 'ok');
+        const replay = await coordinator.continueOwned(args);
+        assert.equal(replay.content[0]!.text, page.content[0]!.text);
+
+        admissionChecks = 0;
+        rejectFinalAdmission = true;
+        const retried = JSON.parse((await coordinator.attempt({
+            path: tempRoot, query: 'billing implementation', limit: 3, disclosureLimit: 1,
+        })).content[0]!.text);
+        assert.equal(retried.pagination.continuation, 'attached');
+        assert.equal(stores, 2, 'only the admitted retry may store a continuation');
     } finally {
         coordinator?.releaseContinuationOwnership();
         fs.rmSync(tempRoot, { recursive: true, force: true });

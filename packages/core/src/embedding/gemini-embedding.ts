@@ -64,7 +64,8 @@ export class GeminiEmbedding extends Embedding {
         return this.dimension;
     }
 
-    async embedQuery(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector> {
+        signal?.throwIfAborted();
         const processedText = this.preprocessText(text);
         const model = this.config.model || 'gemini-embedding-001';
 
@@ -73,6 +74,7 @@ export class GeminiEmbedding extends Embedding {
                 model: model,
                 contents: processedText,
                 config: {
+                    ...(signal ? { abortSignal: signal } : {}),
                     outputDimensionality: this.config.outputDimensionality || this.dimension,
                 },
             });

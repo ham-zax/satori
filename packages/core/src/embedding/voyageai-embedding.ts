@@ -226,9 +226,9 @@ export class VoyageAIEmbedding extends Embedding {
         return this.dimension;
     }
 
-    async embedQuery(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector> {
         try {
-            const [embedding] = await this.embedTexts([text], 'query');
+            const [embedding] = await this.embedTexts([text], 'query', signal);
             if (!embedding) {
                 throw new Error('VoyageAI API returned invalid response');
             }
@@ -246,7 +246,8 @@ export class VoyageAIEmbedding extends Embedding {
         }
     }
 
-    private async embedTexts(texts: string[], inputType: VoyageInputType): Promise<EmbeddingVector[]> {
+    private async embedTexts(texts: string[], inputType: VoyageInputType, signal?: AbortSignal): Promise<EmbeddingVector[]> {
+        signal?.throwIfAborted();
         const processedTexts = this.preprocessTexts(texts);
         if (processedTexts.length === 0) return [];
 
@@ -256,21 +257,23 @@ export class VoyageAIEmbedding extends Embedding {
             for (let offset = 0; offset < processedTexts.length; offset += policy.hardMaxItems) {
                 embeddings.push(...await this.embedProcessedBatch(
                     processedTexts.slice(offset, offset + policy.hardMaxItems),
-                    inputType,
+                    inputType, signal,
                 ));
             }
             return embeddings;
         }
 
-        return this.embedProcessedBatch(processedTexts, inputType);
+        return this.embedProcessedBatch(processedTexts, inputType, signal);
     }
 
     private async embedProcessedBatch(
         processedTexts: string[],
         inputType: VoyageInputType,
+        signal?: AbortSignal,
     ): Promise<EmbeddingVector[]> {
+        signal?.throwIfAborted();
         try {
-            const response = await this.requestEmbeddingBatch(processedTexts, inputType);
+            const response = await this.requestEmbeddingBatch(processedTexts, inputType, signal);
 
             if (!response.data || response.data.length !== processedTexts.length) {
                 throw new Error(
@@ -301,13 +304,13 @@ export class VoyageAIEmbedding extends Embedding {
             // estimate. Split in stable input order instead of enabling silent
             // truncation and weakening the resulting index.
             const midpoint = Math.ceil(processedTexts.length / 2);
-            const left = await this.embedProcessedBatch(processedTexts.slice(0, midpoint), inputType);
-            const right = await this.embedProcessedBatch(processedTexts.slice(midpoint), inputType);
+            const left = await this.embedProcessedBatch(processedTexts.slice(0, midpoint), inputType, signal);
+            const right = await this.embedProcessedBatch(processedTexts.slice(midpoint), inputType, signal);
             return [...left, ...right];
         }
     }
 
-    private async requestEmbeddingBatch(processedTexts: string[], inputType: VoyageInputType) {
+    private async requestEmbeddingBatch(processedTexts: string[], inputType: VoyageInputType, signal?: AbortSignal) {
         const model = this.config.model || 'voyage-4';
         const submittedBytes = processedTexts.reduce(
             (total, text) => total + Buffer.byteLength(text, 'utf8'),
@@ -316,6 +319,7 @@ export class VoyageAIEmbedding extends Embedding {
         let lastError: unknown;
 
         for (let attempt = 1; attempt <= VOYAGE_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+            signal?.throwIfAborted();
             const startedAt = Date.now();
             this.operationMetrics = {
                 ...this.operationMetrics,
@@ -338,6 +342,7 @@ export class VoyageAIEmbedding extends Embedding {
                 }, {
                     timeoutInSeconds: VOYAGE_INDEXING_REQUEST_TIMEOUT_SECONDS,
                     maxRetries: 0,
+                    ...(signal ? { abortSignal: signal } : {}),
                 });
                 this.operationMetrics = {
                     ...this.operationMetrics,
@@ -345,6 +350,7 @@ export class VoyageAIEmbedding extends Embedding {
                 };
                 return response;
             } catch (error) {
+                signal?.throwIfAborted();
                 lastError = error;
                 if (!isRetryableVoyageError(error) || attempt === VOYAGE_REQUEST_MAX_ATTEMPTS) {
                     throw error;
@@ -354,7 +360,7 @@ export class VoyageAIEmbedding extends Embedding {
                     retryCount: this.operationMetrics.retryCount + 1,
                 };
                 console.warn(`[VoyageAI] Retrying embedding request (${attempt}/${VOYAGE_REQUEST_MAX_ATTEMPTS - 1}).`);
-                await this.waitBeforeRetry(attempt);
+                await this.waitBeforeRetry(attempt, signal);
             } finally {
                 this.operationMetrics = {
                     ...this.operationMetrics,
@@ -366,8 +372,16 @@ export class VoyageAIEmbedding extends Embedding {
         throw lastError;
     }
 
-    protected async waitBeforeRetry(attempt: number): Promise<void> {
-        await new Promise((resolve) => setTimeout(resolve, VOYAGE_RETRY_BASE_DELAY_MS * attempt));
+    protected async waitBeforeRetry(attempt: number, signal?: AbortSignal): Promise<void> {
+        signal?.throwIfAborted();
+        await new Promise<void>((resolve, reject) => {
+            const onAbort = () => { clearTimeout(timer); reject(signal?.reason); };
+            const timer = setTimeout(() => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve();
+            }, VOYAGE_RETRY_BASE_DELAY_MS * attempt);
+            signal?.addEventListener('abort', onAbort, { once: true });
+        });
     }
 
     getDimension(): number {

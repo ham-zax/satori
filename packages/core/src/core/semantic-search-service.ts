@@ -499,6 +499,8 @@ export class SemanticSearchService {
             filter,
         );
         const resolvedRequest = this.resolveRequest(request);
+        const signal = resolvedRequest.signal;
+        signal?.throwIfAborted();
         const codebasePath = resolvedRequest.codebasePath;
         const diagnosticCandidateRetrievalLimit = candidateTraceConsumer
             ? Math.max(
@@ -543,6 +545,7 @@ export class SemanticSearchService {
             ? publication
             : null;
 
+        signal?.throwIfAborted();
         if (!admittedPublication) {
             console.log(
                 `[Context] ⚠️  No admitted Publication exists for '${codebasePath}'. Please index the codebase first.`,
@@ -562,9 +565,21 @@ export class SemanticSearchService {
         }
 
         const collectionName = admittedPublication.publication.vector.collectionName;
+        // Native providers may not support per-request interruption. Keep the
+        // publication read alive until the operation settles, then stop here.
+        const retrieveDense: typeof vectorDatabase.retrieveDense = async (collection, request) => {
+            signal?.throwIfAborted();
+            try { return await vectorDatabase.retrieveDense(collection, { ...request, ...(signal ? { signal } : {}) }); }
+            finally { signal?.throwIfAborted(); }
+        };
+        const retrieveLexical: typeof vectorDatabase.retrieveLexical = async (collection, request) => {
+            signal?.throwIfAborted();
+            try { return await vectorDatabase.retrieveLexical(collection, { ...request, ...(signal ? { signal } : {}) }); }
+            finally { signal?.throwIfAborted(); }
+        };
 
         if (isSparseOnly) {
-            const productSearchResults = await vectorDatabase.retrieveLexical(collectionName, {
+            const productSearchResults = await retrieveLexical(collectionName, {
                 query: resolvedRequest.query,
                 limit: resolvedRequest.topK,
                 filter: resolvedRequest.filter,
@@ -577,13 +592,14 @@ export class SemanticSearchService {
             let productLexicalFallback: VectorCandidate[] = [];
             if (productLexicalFallbackAttempted) {
                 try {
-                    productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
+                    productLexicalFallback = await retrieveLexical(collectionName, {
                         query: productLexicalFallbackQuery,
                         limit: resolvedRequest.topK,
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
                     });
                 } catch (error) {
+                    signal?.throwIfAborted();
                     console.warn(
                         '[Context] Lexical fallback retrieval failed; preserving the primary lexical result.',
                         error,
@@ -605,7 +621,7 @@ export class SemanticSearchService {
                 diagnosticRequests.push(retrieveDiagnosticCandidates({
                     arm: 'precise_lexical',
                     requestedLimit: diagnosticCandidateRetrievalLimit,
-                    retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
+                    retrieve: () => retrieveLexical(collectionName, {
                         query: resolvedRequest.query,
                         limit: diagnosticCandidateRetrievalLimit,
                         filter: resolvedRequest.filter,
@@ -619,7 +635,7 @@ export class SemanticSearchService {
                 diagnosticRequests.push(retrieveDiagnosticCandidates({
                     arm: 'fallback_lexical',
                     requestedLimit: diagnosticCandidateRetrievalLimit,
-                    retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
+                    retrieve: () => retrieveLexical(collectionName, {
                         query: diagnosticLexicalFallbackQuery,
                         limit: diagnosticCandidateRetrievalLimit,
                         filter: resolvedRequest.filter,
@@ -628,6 +644,7 @@ export class SemanticSearchService {
                 }));
             }
             const diagnosticOutcomes = await Promise.all(diagnosticRequests);
+            signal?.throwIfAborted();
             const diagnosticLexical = diagnosticOutcomes.find(
                 (outcome) => outcome.retrieval.arm === 'precise_lexical',
             )?.candidates;
@@ -698,17 +715,20 @@ export class SemanticSearchService {
 
         const embedding = this.embeddingAccess.getEmbedding();
         this.embeddingAccess.assertEmbeddingIdentityCurrent();
-        const queryEmbedding: EmbeddingVector = await embedding.embedQuery(resolvedRequest.query);
+        signal?.throwIfAborted();
+        let queryEmbedding: EmbeddingVector;
+        try { queryEmbedding = await embedding.embedQuery(resolvedRequest.query, signal); }
+        finally { signal?.throwIfAborted(); }
         this.embeddingAccess.assertEmbeddingIdentityCurrent();
 
         if (isHybrid) {
-            const [productDenseCandidates, productLexicalCandidates] = await Promise.all([
-                vectorDatabase.retrieveDense(collectionName, {
+            const hybridRequests = [
+                retrieveDense(collectionName, {
                     vector: queryEmbedding.vector,
                     limit: resolvedRequest.topK,
                     filter: resolvedRequest.filter,
                 }),
-                vectorDatabase.retrieveLexical(collectionName, {
+                retrieveLexical(collectionName, {
                     query: resolvedRequest.query,
                     limit: resolvedRequest.topK,
                     filter: resolvedRequest.filter,
@@ -716,19 +736,31 @@ export class SemanticSearchService {
                         ? { matchMode: effectivePrimaryMatchMode }
                         : {}),
                 }),
-            ]);
+            ] as const;
+            let productDenseCandidates: VectorCandidate[];
+            let productLexicalCandidates: VectorCandidate[];
+            try {
+                [productDenseCandidates, productLexicalCandidates] = await Promise.all(hybridRequests);
+            } catch (error) {
+                // The other arm still owns its publication read until it settles.
+                await Promise.allSettled(hybridRequests);
+                signal?.throwIfAborted();
+                throw error;
+            }
+            signal?.throwIfAborted();
             const productLexicalFallbackAttempted = productLexicalCandidates.length < resolvedRequest.topK
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
             if (productLexicalFallbackAttempted) {
                 try {
-                    productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
+                    productLexicalFallback = await retrieveLexical(collectionName, {
                         query: productLexicalFallbackQuery,
                         limit: resolvedRequest.topK,
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
                     });
                 } catch (error) {
+                    signal?.throwIfAborted();
                     console.warn(
                         '[Context] Hybrid lexical fallback retrieval failed; preserving dense retrieval.',
                         error,
@@ -750,7 +782,7 @@ export class SemanticSearchService {
                     retrieveDiagnosticCandidates({
                         arm: 'dense',
                         requestedLimit: diagnosticCandidateRetrievalLimit,
-                        retrieve: () => vectorDatabase.retrieveDense(collectionName, {
+                        retrieve: () => retrieveDense(collectionName, {
                             vector: queryEmbedding.vector,
                             limit: diagnosticCandidateRetrievalLimit,
                             filter: resolvedRequest.filter,
@@ -759,7 +791,7 @@ export class SemanticSearchService {
                     retrieveDiagnosticCandidates({
                         arm: 'precise_lexical',
                         requestedLimit: diagnosticCandidateRetrievalLimit,
-                        retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
+                        retrieve: () => retrieveLexical(collectionName, {
                             query: resolvedRequest.query,
                             limit: diagnosticCandidateRetrievalLimit,
                             filter: resolvedRequest.filter,
@@ -774,7 +806,7 @@ export class SemanticSearchService {
                 diagnosticRequests.push(retrieveDiagnosticCandidates({
                     arm: 'fallback_lexical',
                     requestedLimit: diagnosticCandidateRetrievalLimit,
-                    retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
+                    retrieve: () => retrieveLexical(collectionName, {
                         query: diagnosticLexicalFallbackQuery,
                         limit: diagnosticCandidateRetrievalLimit,
                         filter: resolvedRequest.filter,
@@ -783,6 +815,7 @@ export class SemanticSearchService {
                 }));
             }
             const diagnosticOutcomes = await Promise.all(diagnosticRequests);
+            signal?.throwIfAborted();
             const diagnosticDense = diagnosticOutcomes.find(
                 (outcome) => outcome.retrieval.arm === 'dense',
             )?.candidates;
@@ -878,7 +911,7 @@ export class SemanticSearchService {
         const denseThreshold = resolvedRequest.scorePolicy.kind === 'dense_similarity_min'
             ? resolvedRequest.scorePolicy.min
             : undefined;
-        const productSearchResults = await vectorDatabase.retrieveDense(collectionName, {
+        const productSearchResults = await retrieveDense(collectionName, {
             vector: queryEmbedding.vector,
             limit: resolvedRequest.topK,
             minimumScore: denseThreshold,
@@ -889,7 +922,7 @@ export class SemanticSearchService {
             ? await retrieveDiagnosticCandidates({
                 arm: 'dense',
                 requestedLimit: diagnosticCandidateRetrievalLimit,
-                retrieve: () => vectorDatabase.retrieveDense(collectionName, {
+                retrieve: () => retrieveDense(collectionName, {
                     vector: queryEmbedding.vector,
                     limit: diagnosticCandidateRetrievalLimit,
                     minimumScore: denseThreshold,
@@ -897,6 +930,7 @@ export class SemanticSearchService {
                 }),
             })
             : undefined;
+        signal?.throwIfAborted();
         const diagnosticDense = diagnosticOutcome?.candidates;
         diagnosticCandidateArmsConsumer?.(
             diagnosticOutcome
@@ -956,9 +990,10 @@ export class SemanticSearchService {
 
     private resolveRequest(request: SemanticSearchRequest): Omit<
         Required<SemanticSearchRequest>,
-        'filter' | 'lexicalMatchMode' | 'lexicalFallbackTerms'
+        'filter' | 'lexicalMatchMode' | 'lexicalFallbackTerms' | 'signal'
     > & {
         filter?: VectorFilter;
+        signal?: AbortSignal;
         lexicalMatchMode?: 'all_terms' | 'any_terms';
         lexicalFallbackTerms?: string[];
         retrievalMode: RetrievalMode;
@@ -1013,6 +1048,7 @@ export class SemanticSearchService {
         }
         return {
             codebasePath: request.codebasePath,
+            ...(request.signal ? { signal: request.signal } : {}),
             query: request.query,
             topK: request.topK ?? 5,
             retrievalMode,

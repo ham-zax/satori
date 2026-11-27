@@ -819,8 +819,11 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
+        request.signal?.throwIfAborted();
         await this.ensureInitialized();
+        request.signal?.throwIfAborted();
         await this.ensureLoaded(collectionName);
+        request.signal?.throwIfAborted();
 
         if (!this.client) {
             throw new Error('MilvusClient is not initialized after ensureInitialized().');
@@ -834,7 +837,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
             expr: serializeMilvusFilter(request.filter),
         };
 
+        // The SDK does not expose per-request cancellation here; await the shared client call.
         const searchResult = await this.client.search(searchParams);
+        request.signal?.throwIfAborted();
 
         if (!searchResult.results || searchResult.results.length === 0) {
             return [];
@@ -1086,8 +1091,11 @@ export class MilvusVectorDatabase implements VectorDatabase {
         if (request.matchMode !== undefined) {
             throw new Error('Milvus sparse retrieval does not support explicit lexical term operators.');
         }
+        request.signal?.throwIfAborted();
         await this.ensureInitialized();
+        request.signal?.throwIfAborted();
         await this.ensureLoaded(collectionName);
+        request.signal?.throwIfAborted();
 
         if (!this.client) {
             throw new Error('MilvusClient is not initialized after ensureInitialized().');
@@ -1106,7 +1114,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
             expr: serializeMilvusFilter(request.filter),
         };
 
+        // The SDK does not expose per-request cancellation here; await the shared client call.
         const searchResult = await this.client.search(searchParams);
+        request.signal?.throwIfAborted();
         if (!searchResult.results || searchResult.results.length === 0) {
             return [];
         }

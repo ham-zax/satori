@@ -9,7 +9,9 @@ import {
     type PublicationLease,
     type PublicationRef,
     JsonNavigationStore,
+    isPerfTraceEnabled,
     perfSpan,
+    perfTrace,
     type Reranker,
 } from "@satori-code/core";
 import type { SemanticSearchCandidateTraceOptions, SemanticSearchExecutionResult, SemanticSearchRequest, SemanticSearchResult } from "@satori-code/core";
@@ -364,6 +366,18 @@ type ToolTextResponse = {
 type SearchToolTextResponse = ToolTextResponse & {
     meta?: Record<string, unknown>;
 };
+
+type PreparedSearchResponse = SearchToolTextResponse | (() => SearchToolTextResponse);
+
+function measureResponsePhase<T>(span: string, run: () => T): T {
+    if (!isPerfTraceEnabled()) return run();
+    const startedAt = performance.now();
+    try {
+        return run();
+    } finally {
+        perfTrace(span, performance.now() - startedAt);
+    }
+}
 
 type ValidatedSearchRequest = {
     input: SearchRequestInput & {
@@ -826,7 +840,8 @@ export class SearchRequestCoordinator {
             for (const retryCount of [0, 1] as const) {
                 if (retryCount < sourceDriftRetryCount) continue;
                 const response = await this.executeSearchAttempt(request, retryCount, signal);
-                if (response) return response;
+                signal?.throwIfAborted();
+                if (response) return typeof response === "function" ? response() : response;
             }
             throw new Error('Search exhausted its source-drift retry without a response.');
         });
@@ -948,7 +963,7 @@ export class SearchRequestCoordinator {
         request: ValidatedSearchRequest,
         sourceDriftRetryCount: 0 | 1,
         signal?: AbortSignal,
-    ): Promise<SearchToolTextResponse | undefined> {
+    ): Promise<PreparedSearchResponse | undefined> {
         const { input, parsedOperators } = request;
         const { debugMode } = input;
         const searchDiagnostics: SearchDiagnostics = {
@@ -1277,7 +1292,7 @@ export class SearchRequestCoordinator {
                     return observation.state === 'ready' && observation.collectionName === selectedCollection;
                 },
             });
-            const outcome = await session.read(async (prepared, lease): Promise<SearchToolTextResponse | undefined> => {
+            const outcome = await session.read(async (prepared, lease): Promise<PreparedSearchResponse | undefined> => {
                 const {
                     absolutePath: absolutePathFromFrontDoor,
                     searchableRoot,
@@ -1619,40 +1634,33 @@ export class SearchRequestCoordinator {
                             },
                         };
                     }
-                    if (
-                        exactFastPath.finalized.kind === "ok"
-                        && exactEnvelope.resultMode === "grouped"
-                    ) {
-                        const groupedEnvelope = exactEnvelope;
-                        const resultSet = exactFastPath.finalized.resultSet;
-                        const indexedEnvelope = await perfSpan('search.exact_result_set', () => attachSearchResultSet(
-                            groupedEnvelope,
-                            resultSet,
-                            false,
-                            "retrieval_order",
-                        ));
-                        exactEnvelope = attachHydratedExactSource(indexedEnvelope, exactFastPath.hydratedExactSource, responseByteLimit);
-                    }
                     await perfSpan('search.exact_watcher_touch', () => (
                         this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot)
                     ));
                     this.preparedRead.seedPreparedRead(preparedReadState, preservePreparedProofAge);
-                    const serialized = await perfSpan('search.exact_serialize', () => (
-                        this.hints.stringifyToolJson(exactEnvelope)
-                    ));
-                    return {
-                        content: [{ type: "text", text: serialized }],
-                        ...(exactFastPath.finalized.kind === "page_too_large" ? { isError: true } : {}),
-                        meta: {
-                            searchDiagnostics: {
-                                ...searchDiagnostics,
-                                resultsBeforeFilter: exactFastPath.resultsBeforeFilter,
-                                resultsAfterFilter: exactFastPath.resultsAfterFilter,
-                                searchPassCount: 0,
-                                searchPassSuccessCount: 0,
-                                searchPassFailureCount: 0,
-                            }
+                    return () => {
+                        if (exactFastPath.finalized.kind === "ok" && exactEnvelope.resultMode === "grouped") {
+                            const groupedEnvelope = exactEnvelope;
+                            const resultSet = exactFastPath.finalized.resultSet;
+                            const indexedEnvelope = measureResponsePhase('search.exact_result_set', () => attachSearchResultSet(
+                                groupedEnvelope, resultSet, false, "retrieval_order",
+                            ));
+                            exactEnvelope = attachHydratedExactSource(indexedEnvelope, exactFastPath.hydratedExactSource, responseByteLimit);
                         }
+                        return {
+                            content: [{ type: "text", text: measureResponsePhase('search.exact_serialize', () => this.hints.stringifyToolJson(exactEnvelope)) }],
+                            ...(exactFastPath.finalized.kind === "page_too_large" ? { isError: true } : {}),
+                            meta: {
+                                searchDiagnostics: {
+                                    ...searchDiagnostics,
+                                    resultsBeforeFilter: exactFastPath.resultsBeforeFilter,
+                                    resultsAfterFilter: exactFastPath.resultsAfterFilter,
+                                    searchPassCount: 0,
+                                    searchPassSuccessCount: 0,
+                                    searchPassFailureCount: 0,
+                                }
+                            }
+                        };
                     };
                 }
 
@@ -2072,24 +2080,21 @@ export class SearchRequestCoordinator {
                 if (barrierChanged) {
                     return undefined;
                 }
-                if (finalized.kind === "ok" && envelope.resultMode === "grouped") {
-                    signal?.throwIfAborted();
-                    envelope = attachSearchResultSet(
-                        envelope,
-                        finalized.resultSet,
-                        searchDiagnostics.rerankerUsed,
-                        execution.orderAuthority,
-                    );
-                }
-
                 signal?.throwIfAborted();
                 await this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot);
                 signal?.throwIfAborted();
                 this.preparedRead.seedPreparedRead(preparedReadState, preservePreparedProofAge);
-                return {
-                    content: [{ type: "text", text: this.hints.stringifyToolJson(envelope) }],
-                    ...(initialPageTooLarge ? { isError: true } : {}),
-                    meta: { searchDiagnostics }
+                return () => {
+                    if (finalized.kind === "ok" && envelope.resultMode === "grouped") {
+                        envelope = attachSearchResultSet(
+                            envelope, finalized.resultSet, searchDiagnostics.rerankerUsed, execution.orderAuthority,
+                        );
+                    }
+                    return {
+                        content: [{ type: "text", text: this.hints.stringifyToolJson(envelope) }],
+                        ...(initialPageTooLarge ? { isError: true } : {}),
+                        meta: { searchDiagnostics }
+                    };
                 };
             }, { signal });
             signal?.throwIfAborted();
@@ -2120,6 +2125,7 @@ export class SearchRequestCoordinator {
                     meta: { searchDiagnostics },
                 };
             }
+            // The caller commits only after the session and source evidence release.
             return outcome.result;
         } catch (error) {
             if (signal?.aborted) {

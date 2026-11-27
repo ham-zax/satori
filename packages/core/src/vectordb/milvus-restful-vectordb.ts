@@ -267,7 +267,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
     /**
      * Make HTTP request to Milvus REST API
      */
-    private async makeRequest<T = unknown>(endpoint: string, method: 'GET' | 'POST' = 'POST', data?: unknown): Promise<MilvusRestResponse<T>> {
+    private async makeRequest<T = unknown>(endpoint: string, method: 'GET' | 'POST' = 'POST', data?: unknown, signal?: AbortSignal): Promise<MilvusRestResponse<T>> {
         const url = `${this.baseUrl}${endpoint}`;
 
         const headers: Record<string, string> = {
@@ -300,6 +300,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         try {
             const response = await fetchWithDeadline({
                 url,
+                signal,
                 init: requestOptions,
                 attemptTimeoutMs: this.config.requestTimeoutMs ?? MILVUS_REST_HTTP_POLICY.attemptTimeoutMs,
                 maxAttempts,
@@ -592,8 +593,11 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
     }
 
     async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
+        request.signal?.throwIfAborted();
         await this.ensureInitialized();
+        request.signal?.throwIfAborted();
         await this.ensureLoaded(collectionName);
+        request.signal?.throwIfAborted();
 
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
@@ -619,7 +623,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 filter: serializeMilvusFilter(request.filter),
             };
 
-            const response = await this.makeRequest<MilvusPhysicalRow[]>('/entities/search', 'POST', searchRequest);
+            const response = await this.makeRequest<MilvusPhysicalRow[]>('/entities/search', 'POST', searchRequest, request.signal);
 
             // Transform response to VectorSearchResult format
             const results: VectorCandidate[] = Array.isArray(response.data)
@@ -877,8 +881,11 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         if (request.matchMode !== undefined) {
             throw new Error('Milvus sparse retrieval does not support explicit lexical term operators.');
         }
+        request.signal?.throwIfAborted();
         await this.ensureInitialized();
+        request.signal?.throwIfAborted();
         await this.ensureLoaded(collectionName);
+        request.signal?.throwIfAborted();
 
         const restfulConfig = this.config as MilvusRestfulConfig;
         const searchRequest: MilvusRestSearchRequest = {
@@ -897,7 +904,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             filter: serializeMilvusFilter(request.filter),
         };
 
-        const response = await this.makeRequest<MilvusPhysicalRow[]>('/entities/search', 'POST', searchRequest);
+        const response = await this.makeRequest<MilvusPhysicalRow[]>('/entities/search', 'POST', searchRequest, request.signal);
         if (!isSuccessCode(response.code)) {
             throw new Error(`Sparse search failed: ${response.message || 'Unknown error'}`);
         }

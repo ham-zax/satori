@@ -875,11 +875,16 @@ export class PotionEmbedding extends Embedding {
         return POTION_DIMENSION;
     }
 
-    async embedQuery(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector> {
+        signal?.throwIfAborted();
         this.activeOperations += 1;
         try {
             await this.ensureStarted();
-            return this.validateResponse(await this.request('query', text));
+            signal?.throwIfAborted();
+            // The shared native worker cannot cancel one request; wait for it to settle.
+            const response = await this.request('query', text);
+            signal?.throwIfAborted();
+            return this.validateResponse(response);
         } finally {
             this.activeOperations -= 1;
             if (this.activeOperations === 0 && this.pending.size === 0) {

@@ -128,9 +128,9 @@ export class PotionEmbeddingPool extends Embedding {
         }
     }
 
-    async embedQuery(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector> {
         // Queries use each helper's reserved foreground slot, not a batch slot.
-        return this.members[this.leastBusy()].embedQuery(text);
+        return this.members[this.leastBusy()].embedQuery(text, signal);
     }
 
     async detectDimension(): Promise<number> {

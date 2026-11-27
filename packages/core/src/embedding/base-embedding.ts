@@ -117,7 +117,7 @@ export abstract class Embedding {
      * @param text Query text
      * @returns Embedding vector
      */
-    abstract embedQuery(text: string): Promise<EmbeddingVector>;
+    abstract embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector>;
 
     /**
      * Generate document embeddings in stable input order.

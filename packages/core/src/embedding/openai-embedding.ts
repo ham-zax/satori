@@ -32,7 +32,8 @@ export class OpenAIEmbedding extends Embedding {
         });
     }
 
-    async detectDimension(testText: string = "test"): Promise<number> {
+    async detectDimension(testText: string = "test", signal?: AbortSignal): Promise<number> {
+        signal?.throwIfAborted();
         const model = this.config.model || 'text-embedding-3-small';
         const knownModels = OpenAIEmbedding.getSupportedModels();
 
@@ -48,7 +49,7 @@ export class OpenAIEmbedding extends Embedding {
                 model: model,
                 input: processedText,
                 encoding_format: 'float',
-            });
+            }, signal ? { signal } : undefined);
             return response.data[0].embedding.length;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -63,7 +64,8 @@ export class OpenAIEmbedding extends Embedding {
         }
     }
 
-    async embedQuery(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string, signal?: AbortSignal): Promise<EmbeddingVector> {
+        signal?.throwIfAborted();
         const processedText = this.preprocessText(text);
         const model = this.config.model || 'text-embedding-3-small';
 
@@ -71,15 +73,16 @@ export class OpenAIEmbedding extends Embedding {
         if (knownModels[model] && this.dimension !== knownModels[model].dimension) {
             this.dimension = knownModels[model].dimension;
         } else if (!knownModels[model]) {
-            this.dimension = await this.detectDimension();
+            this.dimension = await this.detectDimension(undefined, signal);
         }
 
+        signal?.throwIfAborted();
         try {
             const response = await this.client.embeddings.create({
                 model: model,
                 input: processedText,
                 encoding_format: 'float',
-            });
+            }, signal ? { signal } : undefined);
 
             // Update dimension from actual response
             this.dimension = response.data[0].embedding.length;

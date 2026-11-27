@@ -520,7 +520,7 @@ export class PotionEmbedding extends Embedding {
     }
 
     private handleStdout(chunk: Buffer): void {
-        if (this.state === 'closed' || this.state === 'failed') return;
+        if (this.state === 'closing' || this.state === 'closed' || this.state === 'failed') return;
         this.lastHelperOutputAt = Date.now();
         this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
         while (true) {
@@ -995,6 +995,9 @@ export class PotionEmbedding extends Embedding {
                 retryable: false,
                 message: 'Potion worker is shutting down.',
             });
+            this.rejectStartup?.(closeError);
+            this.resolveStartup = null;
+            this.rejectStartup = null;
             for (const pending of this.pending.values()) {
                 clearTimeout(pending.timeout);
                 pending.reject(closeError);

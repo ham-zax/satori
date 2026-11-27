@@ -84,6 +84,53 @@ test('Potion startup still rejects a worker that never reports readiness', async
     );
 });
 
+test('Potion close rejects an in-flight startup immediately and stops the worker', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-potion-close-starting-'));
+    const helperPath = path.join(root, 'silent-worker.cjs');
+    fs.writeFileSync(helperPath, `${NODE_SHEBANG}\nprocess.stdin.resume();\n`, { mode: 0o755 });
+    const embedding = new TestPotionEmbedding({
+        helperPath, modelPath: root, requestTimeoutMs: 5_000, startupTimeoutMs: 30_000, maxBatchItems: 1,
+    });
+    t.after(async () => {
+        await embedding.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const starting = (embedding as unknown as { start(): Promise<void> }).start();
+    const internals = embedding as unknown as { child: import('node:child_process').ChildProcess | null; state: string };
+    const child = internals.child;
+    assert.ok(child, 'worker process should be spawned');
+
+    const settled = Promise.all([
+        assert.rejects(
+            starting,
+            (error: unknown) => error instanceof EmbeddingProviderError
+                && error.code === 'EMBEDDING_PROVIDER_UNAVAILABLE'
+                && error.message === 'Potion worker is shutting down.',
+        ),
+        embedding.close(),
+    ]);
+    const outcome = await Promise.race([
+        settled.then(() => 'settled'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('timed_out'), 2_000)),
+    ]);
+    assert.equal(outcome, 'settled', 'close() during starting must reject startupPromise promptly');
+    assert.equal(internals.state, 'closed');
+    assert.ok(child.exitCode !== null || child.signalCode !== null, 'worker process must exit on close');
+});
+
+test('Potion close lets a ready worker exit cleanly on shutdown ack without SIGKILL', async (t) => {
+    const embedding = await createFakeEmbedding(t);
+    const internals = embedding as unknown as { child: import('node:child_process').ChildProcess | null; state: string };
+    const child = internals.child;
+    assert.ok(child, 'worker process should be running');
+
+    await embedding.close();
+    assert.equal(internals.state, 'closed');
+    assert.equal(child.exitCode, 0);
+    assert.equal(child.signalCode, null);
+});
+
 const FAKE_WORKER = `${NODE_SHEBANG}\n` + String.raw`const readline = require('node:readline');
 
 process.stdout.write(JSON.stringify({

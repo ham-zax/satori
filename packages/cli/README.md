@@ -1,228 +1,56 @@
 # @satori-code/cli
 
-Installer, diagnostics, and command-line access for [Satori](https://github.com/ham-zax/satori).
+Install [Satori](https://github.com/ham-zax/satori) and connect it to your coding agent. The CLI configures MCP clients and verifies the runtime. Use it from the terminal to inspect indexes or call Satori tools directly.
 
-The CLI installs one managed MCP runtime, writes a stable launcher under `~/.satori/`, configures Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, Antigravity (`agy`), or all of them, and verifies the installed protocol path. The default qualified offline install gives those agents natural-language repository search using local Potion embeddings, BM25, LateOn reranking, and LanceDB without requiring a model API key after installation.
+## Install
 
-## Quick Start
-
-Offline on Linux x64, Linux ARM64 with glibc, or Windows through WSL2, no global install required:
+Requires Node.js 22.22 or newer on Linux x64 or ARM64 with glibc, including WSL2.
 
 ```bash
 npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor
 ```
 
-For a persistent `satori` command:
+The default offline runtime downloads Potion and LateOn models, then uses local embeddings, reranking, and LanceDB without a model API key. The installer detects Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, and Pi. Select one with `--client <name>`, or use `--client agy` for Antigravity.
 
-```bash
-npm install -g @satori-code/cli@latest
-satori install
-satori doctor
-```
+Run `install --dry-run` to see the planned changes. Use `--index` inside a Git repository to index it during setup. Restart your coding agent after installation.
 
-`install` auto-detects supported Codex, Claude Code, OpenCode, Cursor, VS Code,
-and Windsurf clients from their documented local markers or CLI executables.
-`--client auto` is the explicit equivalent. Antigravity (`agy`) is opt-in:
-configure it with `--client agy`, or use `--client all` to configure every
-supported client. If no supported client is detected, Satori stops before
-runtime installation and shows explicit client commands. `satori uninstall`
-defaults to all supported clients; use `--client auto` to limit cleanup to
-currently detected clients.
-
-Git workspaces are indexed automatically in the background when your agent
-starts (within Satori's byte budgets). Pass `--index` inside a Git repository
-to index it immediately during install, or `--no-index` to leave indexing to
-agent startup.
-
-Codex entries pointing to this home's `~/.satori/bin/satori-mcp.js` are updated
-automatically, including after Codex rewrites its config. Satori changes its
-launcher wiring while preserving other servers, credentials, and user options
-such as timeouts. Comment markers are not required. Invalid TOML or a different
-custom server named `satori` stops installation before runtime downloads.
-
-The package installs the `satori` command. Run `satori` without arguments for
-human-readable help.
-
-For the default offline Potion + LanceDB runtime on Linux x64/WSL2 and Linux ARM64 with glibc, LateOn D128 (`LateOn-Code-edge`)
-reranks the bounded query-time candidate set. The installer downloads its pinned Apache-2.0 model closure once
-into `~/.satori/models/`, verifies every artifact, and reuses it across MCP
-upgrades. `--reranker none` is the explicit opt-out: it keeps the selected
-embedding provider plus baseline ordering (exact + BM25 + single vector). The
-offline baseline uses Potion embeddings with BM25. The runtime also falls back to that baseline automatically on any LateOn
-failure; automatic failure fallback and explicit opt-out are different
-concepts. Compatible
-clients attach through one private local host instead of each starting a full
-MCP runtime. Each client still has its own MCP session and continuations. The
-shared host idles out after disconnect and is not used for connected runtimes.
-
-Connected Voyage runtime:
-
-```bash
-satori install --client all --runtime voyage
-satori doctor
-```
-
-Restart the MCP client after installation.
-
-Use `satori upgrade` to update the globally installed CLI, then stage and activate that release's exact MCP and Core versions. Without a global CLI, use `npx -y @satori-code/cli@latest upgrade`. The CLI update happens first. If MCP/Core verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run the command again. Client configuration, indexes, hooks, and repository profiles are not rewritten.
-
-The command reports progress before each potentially slow phase:
-
-```text
-Checking latest Satori release...
-Installing MCP <version> and Core <version>...
-Verifying candidate runtime...
-Activating verified runtime...
-```
-
-The latest CLI manifest is the release authority: it names one exact MCP/Core closure. Upgrade never mixes independently selected `latest` versions, so an MCP or Core release becomes available through `satori upgrade` only after a compatible CLI release points to it.
-
-For a no-install invocation, replace `satori` with `npx -y @satori-code/cli@latest`.
-
-The Potion embedding model (about 32 MB) and the LateOn reranker (about 72 MB)
-are downloaded once into `~/.satori/models/` and shared across runtime versions.
-The runtime needs at least 2 GiB of available memory; that is a deployment
-allowance, not measured steady consumption.
+For a persistent command, run `npm install -g @satori-code/cli@latest`. The examples below use the global command. With a temporary install, replace `satori` with `npx -y @satori-code/cli@latest`.
 
 ## Commands
 
-```text
-install [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy]
-        [--runtime offline|voyage] # defaults to offline Potion + LateOn D128
-        [--vector-store lancedb|milvus]
-        [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify]
-        [--profile default|minimal|all-text]
-        [--skill|--no-skill] [--index|--no-index]
-        [--dry-run]
+| Command | Purpose |
+| --- | --- |
+| `satori install --help` | List install options, including clients, runtimes, index profiles, and rerankers. |
+| `satori doctor --verbose` | Check managed launcher, active runtime, and client settings. Use `--json` for structured results. |
+| `satori -v` | Print CLI, MCP, and Core versions. |
+| `satori upgrade` | Verify and activate the MCP and Core versions pinned by the CLI release. |
+| `satori reranker status` | Inspect the active reranker. |
+| `satori gc --dry-run` | Preview index and runtime cleanup. |
+| `satori terminate` | Gracefully stop verified Satori runtimes. |
+| `satori uninstall --dry-run` | Preview removal of managed client configuration. |
+| `satori uninstall --purge` | Remove managed configuration and delete stored models and indexes. |
 
-reranker use lateon|voyage|none [--model <model>] [--no-verify]
-reranker [status]
-reranker enable
-reranker disable [--purge]
-doctor [--verbose] [--json]
-version # aliases: -v, --version
-upgrade
-terminate
-uninstall [--client auto|all|codex|claude|opencode|cursor|vscode|windsurf|agy] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
-tools list
-tool call <toolName> --args-json '<json>'
-tool call <toolName> --args-file <path>
-<toolName> [schema-driven flags]
+The managed launcher lives at `~/.satori/bin/satori-mcp.js`. Upgrade switches it only after activating a verified release pair. Existing clients can load the new runtime when restarted.
+
+## Call a tool from the terminal
+
+```bash
+satori tools list
+satori tool call search_codebase --args-json '{"path":"/absolute/path/to/repo","query":"where are failed jobs retried?"}'
 ```
 
-`satori reranker` shows the current provider and model, plus switch commands
-in a terminal. To switch from local LateOn to Voyage:
-
-```sh
-satori reranker use voyage --model rerank-3
-```
-
-Voyage is a paid API. In Satori's 28-question evaluation, `rerank-3` with
-definition fusion off put the owning code at rank 1 for 20 questions versus 13 for LateOn
-([measured results](../../docs/improvements/voyage-reranker-and-definition-fusion.md)).
-Without `--model`, Voyage defaults to `rerank-3-lite`.
-
-If `VOYAGEAI_API_KEY` is missing from both the process environment and
-`~/.satori/.env`, the switch prompts for it with hidden input when stdin and
-stdout are terminals. Press Enter with no key to cancel without changing the
-reranker. The CLI saves the key atomically to `~/.satori/.env` with mode `0600`,
-creates the directory with mode `0700` if needed, and keeps other settings.
-It prints the saved path, never the key. Existing keys skip the prompt; the
-process environment takes precedence over the file. Without a terminal, set
-`VOYAGEAI_API_KEY` in either location before switching.
-
-The switch verifies the selected Voyage model using that key in the same run;
-`--no-verify` skips the API check but still requires a key. A failed verification
-keeps the current reranker; a newly saved key remains in the env file. The
-managed MCP runtime reads the same file on startup. Restart your coding agent
-after a successful switch. `--format json` keeps stdout as structured output;
-prompt and progress messages go to stderr, and cancellation reports
-`status: "cancelled"`.
-
-Agents receive Satori guidance natively, with nothing injected per tool call:
-
-- the Satori MCP server sends short tool guidance once per session through the
-  MCP `instructions` field, which compatible MCP clients such as Codex, Claude
-  Code, OpenCode, Cursor, VS Code, and Windsurf load natively. It covers
-  automatic background indexing within Satori's byte budgets and the approval
-  rule when a repository exceeds those budgets;
-- `satori install` installs the shared `satori` skill
-  (`~/.agents/skills/satori/SKILL.md`) with the full workflow by default
-  (`--skill` is also accepted explicitly). Codex and OpenCode load
-  `~/.agents/skills/satori` directly; Claude Code gets a link at
-  `~/.claude/skills/satori` (plus one read-only `SessionStart` hook in
-  `~/.claude/settings.json` that reports index state and never indexes), and
-  Antigravity gets a link at `~/.gemini/skills/satori`. Pass `--no-skill` to
-  skip installing the skill (only refreshing an existing Satori-managed skill if
-  already present).
-
-Install adds nothing to `AGENTS.md`, and it never removes or overwrites files
-it did not write: a real directory at a skill-link path is refused with
-instructions to remove it yourself. `satori uninstall` removes the shared skill
-only when it targets all clients (the default).
-
-Global flags (accepted before or after built-in commands):
-
-```text
---startup-timeout-ms <n>
---call-timeout-ms <n>
---format json|text
---debug
-```
-
-`doctor` prints a concise human summary by default, including an
-applied-runtime table for supported clients (Codex, Claude Code, OpenCode,
-Cursor, VS Code, Windsurf, and Antigravity). The table reports
-configuration status, effective profile, embedding provider/model/dimension,
-reranker, vector store, and configuration source without exposing credentials
-or local artifact paths. A launcher that targets a local repository build keeps
-its outside-managed-store warning, but the table still reports the profile that
-launcher actually applies. Use `doctor --verbose` for paths, individual
-successful checks, package sources, and local diagnostics. Use `doctor --json`
-or the compatible global form `--format json doctor` for the complete
-machine-readable result, including `runtimeConfigurations`.
-
-`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Pass `--format json` for a structured receipt without interactive progress text, or use `--debug` to expose MCP startup details during install verification.
-
-`satori -v`, `satori --version`, and `satori version` print the installed CLI,
-MCP runtime, and Core versions. Put `--format json` first for structured output.
-
-`satori terminate` gracefully stops every verified Satori runtime owner and
-shared host under the active state root. Provider workers close through the
-normal server lifecycle. The command does not uninstall clients or delete
-indexes. Put `--format json` first for a structured termination receipt.
-
-## Runtime Ownership
-
-The installer persists non-secret runtime identity in its managed launcher. Provider keys and Milvus credentials remain client-owned environment values. Reinstall preserves compatible managed selections and rejects conflicting explicit provider or backend configuration instead of silently overriding it.
-
-Use `satori.toml` only for repository index policy:
-
-```toml
-[index]
-profile = "minimal"
-```
-
-Do not place provider keys, model names, or backend credentials in `satori.toml`.
-
-Supported runtime paths include Potion (model downloaded once from Hugging Face into `~/.satori/models`) + LanceDB, Voyage + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
+Use an actual absolute repository path. For longer requests, pass `--args-file` instead. See the [Satori reference](https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md) for client configuration, indexing behavior, and tool contracts.
 
 ## Development
 
 ```bash
 pnpm --filter @satori-code/cli build
 pnpm --filter @satori-code/cli test
-pnpm run release:smoke:cli
 ```
 
-Node.js 22.22 or newer is required.
+See the [release guide](https://github.com/ham-zax/satori/blob/master/docs/RELEASING.md) for packed smoke tests and publication.
 
 ## License
 
-Copyright (c) 2026 Hamza (@ham-zax)
-
-Satori is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](./LICENSE).
-
-Alternative commercial licensing terms are available separately from the copyright holder.
-
+[AGPL-3.0-only](LICENSE). [Commercial licensing](https://github.com/ham-zax/satori/blob/master/COMMERCIAL-LICENSING.md) is available.

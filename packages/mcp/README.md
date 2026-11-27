@@ -1,132 +1,27 @@
 # @satori-code/mcp
 
-The MCP runtime behind [Satori](https://github.com/ham-zax/satori), a local-first code-intelligence layer for coding agents.
+The Model Context Protocol server behind [Satori](https://github.com/ham-zax/satori). It exposes local code search, bounded source reads, repository structure, and relationships supported by the index.
 
-Agents can ask a repository question in natural language and move from hybrid semantic + lexical search to owning symbols, exact source, structural context, references, relationship navigation, architecture evidence, change orientation, and freshness-aware index state. The live MCP registry exposes 11 tools, including bounded `trace_path` and ranking-independent `find_references`.
-
-Most users should install Satori through `@satori-code/cli`. The installer writes a stable local launcher, configures supported MCP clients, and selects the managed runtime. This package is the server/runtime surface, not a separate end-user product and not a client-configuration manager.
-
-## Install
+## Install through the CLI
 
 ```bash
 npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor
 ```
 
-`install` auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and
-Windsurf; Antigravity (`agy`) is opt-in, and `--client all` configures every supported client. A persistent `satori` command is optional:
-`npm install -g @satori-code/cli@latest`.
+The installer configures supported clients to run a stable launcher. It sets up the default offline Potion, BM25, LateOn, and LanceDB stack on qualified Linux x64 and ARM64 with glibc, including WSL2. See the [client setup reference](https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#client-setup) for client selectors and manual registration.
 
-The qualified default offline path supports Linux x64 and Linux ARM64 with glibc, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
+For a standalone deployment, inspect the runtime options with `npx -y @satori-code/mcp@latest --help`. Use an installed runtime entry or the stable managed launcher as the resident stdio command. Package resolution through `npx` can exceed client startup timeouts.
 
-When installed through the CLI, compatible offline Potion + LanceDB clients
-share one private local host, provider/LanceDB state, and one Potion worker. Each
-client remains an independent MCP session. Direct `npx @satori-code/mcp`
-execution is still isolated and does not join the managed host.
+## Use the tools
 
-Direct package execution is intended for inspection and custom harnesses:
+Ask `search_codebase` where a behavior lives, then follow its `recommendedNextAction` to read the source. Use the exact published symbol when requesting relationships. Repository and source paths are absolute.
 
-```bash
-npx -y @satori-code/mcp@latest --help
-```
+For a direct `read_file` symbol request, pass the published `symbolId` under `open_symbol` with `contractVersion: 2`. When a result supplies `codebaseRoot`, preserve that root across exact reads and continuations to disambiguate overlapping indexes.
 
-Do not use `npx` as the resident MCP command when the CLI installer supports your client; package resolution can exceed normal MCP startup timeouts.
+For grouped search, `limit` controls the whole frozen ranking and `disclosureLimit` controls the initial page. Pass the continuation handle and exact `nextOffset` as `expectedOffset` to `continue_search`.
 
-## Workflow
-
-The product flow is intentionally narrower than the tool list:
-
-```text
-ask by intent
-  -> search_codebase
-  -> identify the owner
-  -> file_outline / call_graph when useful
-  -> read_file for exact proof
-  -> continue_search only when the frozen result contains more useful evidence
-```
-
-A first repository still needs an explicit create:
-
-```text
-manage_index action="create" path="/absolute/path/to/repo"
-```
-
-Then a typical evidence path is:
-
-```text
-search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
-file_outline path="/absolute/path/to/repo" file="src/auth.ts"
-call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
-read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
-```
-
-Public paths are absolute. Search is freshness-aware; exact reads are limited to indexed searchable roots. Follow `recommendedNextAction` when returned.
-
-Exact-symbol recommendations include `codebaseRoot` to identify the originating
-Publication when indexed roots overlap. Preserve it in the `read_file` request.
-Successful symbol-context responses also return `codebaseRoot`; reuse that root,
-the absolute file path, and the symbol ID when requesting a continuation. An
-explicit root is authorized and never replaced by another overlapping root.
-
-For a concrete symbol result, the recommended read uses bounded implementation
-context for implementation searches, call context for reference searches, and
-definition context for exact lookups. Large symbols still recommend the matched
-source span first. Continuation pages preserve the same recommendation policy.
-
-Within Satori's automatic eligible-source byte budgets (and `50,000`-file OOM fuse), a tracked rebuild-safe incompatibility automatically starts or joins one background reindex (`<= 150 MiB` on offline runtimes, `<= 8 MiB` / `~2M` tokens on connected/Voyage runtimes) and returns deterministic `not_ready` / `indexing` (`indexing.mode="auto_indexing"`) state for retry. Explicit reindex remains the operator recovery override above those budgets, for unsafe states, or after a failed automatic attempt. `clear` remains explicit.
-
-First-time workspace indexing is enabled by default (`SATORI_AUTO_INDEX_WORKSPACE=false` opts out) and gated by eligible source bytes rather than raw file counts:
-- **Offline runtimes**: auto-indexes `<= 20 MiB` Git workspaces after MCP session handshake, and `<= 150 MiB` Git workspaces (up to `50,000` eligible files) on the first Satori search/navigation tool call.
-- **Connected / paid-capable API runtimes**: never auto-indexes on idle session open; auto-indexes `<= 8 MiB` (`~2M` tokens) Git workspaces on the first Satori tool call, and asks before indexing larger repositories.
-
-Existing publications are preserved. Indexing uses the repository's existing
-index policy and the normal background operation limits; inspect progress with
-`manage_index status`. Workspace creates and compatibility reindexes are
-single-flight. Transient provider/network/worker failures may retry in the same
-runtime after bounded exponential backoff, while deterministic configuration or
-compatibility failures, resource limits, and cancellation stay suppressed until
-relevant state changes or a successful manual create/reindex supersedes them.
-File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
-
-Full indexing and sync choose one memory resource plan from cgroup memory
-headroom (v2 ancestors or the v1 memory controller), Linux `MemAvailable`, or
-portable OS free memory. Set
-`SATORI_INDEX_MEMORY_BUDGET_MB` to a positive integer MiB to lower the planning
-budget; a value above available memory cannot raise it. Invalid values produce
-a diagnostic and use the derived budget. The plan leaves a host reserve and a
-20% GC/native burst reserve, scales compiler project and parser concurrency and
-payload queues, and reaches up to 3 compiler projects and 8 parser workers on
-large machines. `SATORI_ANALYSIS_WORKERS` retains precedence, including zero for
-in-process parsing. Progress and `manage_index status` expose the last run's
-`operation.memoryBudget` (`budgetMb`, `hint`), explaining reduced concurrency.
-Plans with analysis workers use baseline-only WASM parser child processes, recycled
-at the plan's file/byte bounds; large files use a fresh process. Linux full-index
-mutation workers use `MALLOC_ARENA_MAX=2` under those plans, without changing the
-server or shell environment. Idle semantic WASM workers exit before compiler
-resolution. The plan is computed before mutation-worker startup and passed
-unchanged into Core. Setting `SATORI_ANALYSIS_WORKERS=0` bypasses parser isolation.
-This is planning guidance; a single large project or native stage can still OOM.
-
-Semantic relationship analysis is resource-bounded independently from search.
-WASM-backed languages skip sources over 1 MiB rather than duplicating them into
-linear memory. TypeScript compiler-backed analysis defaults to 4 MiB per source
-and 64 MiB across the compiler project. Skipped or failed provider work remains
-searchable but is persisted as `degraded` / `unavailable` provider coverage, so
-`manage_index status` capability evidence cannot report a healthy call graph
-when the owning provider did not cover the required source set. Search itself
-skips searchable sources over 8 MiB. A full Publication has no aggregate source
-byte or chunk limit. Broad workspace roots (filesystem root, home directory, state root)
-stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
-
-Grouped search shows up to 8 results initially and retains up to 200 ranked
-results for continuation by default, subject to available groups and response
-byte limits. Set `limit` to customize the total and `disclosureLimit` to customize
-the first page (`disclosureLimit` must not exceed `limit`). For example,
-`limit=100, disclosureLimit=20` retains up to 100 results and shows up to 20 now.
-Use `continue_search` with the returned handle and exact `nextOffset` as
-`expectedOffset`. Each continuation defaults to the initial page size, or accepts
-a custom `limit` from 1 to 200. Continuation reveals existing ranked results
-without new retrieval or reranking. Raw search defaults to 8 chunks.
+Eligible Git workspaces automatically index within the runtime’s byte and file budgets. A ready Publication groups search, source checkpoints, symbols, and relationships for one repository generation. While a replacement is pending, tools may return evidence from the compatible prior generation with freshness warnings. See the [index lifecycle](https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#index-lifecycle) for readiness and recovery.
 
 <!-- TOOLS_START -->
 
@@ -148,89 +43,24 @@ without new retrieval or reranking. Raw search defaults to 8 chunks.
 
 <!-- TOOLS_END -->
 
-`read_file` accepts `open_symbol: {"contractVersion":2,"symbolId":"…"}` with an absolute file `path`;
-mode defaults to `plain` and context to `definition`. Preserve `codebaseRoot`
-from search recommendations when publications overlap.
+## Runtime boundaries
 
-Grouped search exposes the oldest contributing `indexedAt` and `stalenessBucket`.
-Age is not proof that source changed. Exact registry hits expose `registryBuiltAt`
-separately. Outline and graph freshness also include current-source hash checks;
-per-file index dates are `null` because the symbol registry does not retain them. Call edges expose `strategy` (`rule` or
-`heuristic`), existing confidence scores, and `args` source expressions when
-available. These expressions are not evaluated values or complete data flow.
+- Source reads are scoped to authorized searchable roots. Use native tools to edit code.
+- Call-graph evidence is bounded by language and source coverage. Confirm important inbound relationships with exact occurrences, source reads, or tests.
+- A failed index mutation leaves the previous completed Publication in place. Cancel supervised create, reindex, and sync operations by their exact operation ID.
+- Provider, model, dimensions, and vector storage participate in index compatibility. Incompatible live runtimes cannot mutate the same index.
+- Offline managed sessions can share a private local host. Connected runtimes use per-client servers.
+- Voyage reranking is explicit and sends queries and projected code excerpts to Voyage AI. Offline LateOn runs on the local CPU. When a reranker fails, search returns retrieval order with a diagnostic.
 
-`detect_changes` compares `baseRef` (default `HEAD`) to the tracked working tree
-and returns changed files, symbol seeds, and transitive callers up to depth 3.
-It includes staged and unstaged tracked edits, excludes untracked files, and
-reports missing/stale files, deleted-symbol limitations, and truncation. It uses
-current publications across bounded navigation calls, not one atomic snapshot;
-its results are advisory and do not establish complete impact coverage.
-
-## Runtime Boundaries
-
-- The server does not edit repository source.
-- `read_file` is not a general host-filesystem reader.
-- Inbound call-graph evidence is advisory and should be verified before blast-radius edits.
-- Python inbound relationships cover bounded static constructor-receiver and
-  direct service/callback value-origin patterns. Dynamic or ambiguous flows
-  remain partial, so an absent inbound edge is not proof that no caller exists.
-- `manage_index` has no force-unlock or repair path. Full create/reindex and explicit `sync` use supervised executors; `cancel` targets only the exact live supervised create/reindex/sync operation ID, and the writer lease is retained until executor quiescence is proven. A failed reindex preserves the previous completed Publication. Use `reindex` when current Publication authority is missing, corrupt, partial, or incompatible.
-- Full-index candidate ownership is durably recorded before vector collection creation. A later same-root create/reindex can reclaim an older unreferenced candidate collection, while any collection referenced by a Publication generation remains protected.
-- Provider, model, dimensions, projection, and vector backend are persisted compatibility identities; changing them requires a reindex.
-- Multiple incompatible live Satori runtimes are blocked from mutating the same publication. Mutation ownership is scoped to the backend authority root: each LanceDB state root has its own owner registry, and Milvus runtimes are keyed by endpoint.
-- Rerank context v4 sends the exact question once plus a positive-only answer
-  type line, and each projected document is a bounded answer packet carrying a
-  factual `candidate_role` plus trusted structural context (direct callers,
-  callees, supporting tests — exact instance identities, sorted and capped).
-  The reranker's published order is final; there are no ranking weights, score
-  multipliers, or global test/documentation penalties. Partial projection
-  reranks the projectable candidates and reports `RERANKER_INPUT_DEGRADED`;
-  zero projectable candidates skip the provider with `RERANKER_SKIPPED_INPUT`
-  (never `RERANKER_FAILED`); terminal provider failures report
-  `RERANKER_FAILED` with qualified deadline and lateness diagnostics while the
-  frozen retrieval order is published.
-- Under `debugMode=full`, candidate survival records per-document rerank input
-  provenance — UTF-8 bytes, SHA-256, candidate role, and projection identities —
-  never source text.
-- Managed offline Potion + LanceDB clients on Linux x64/WSL2 and Linux ARM64 with glibc share one private
-  local host. Connected providers and Milvus keep the direct per-client lifecycle.
-- LateOn projection-v4 D32 is the semantic reranking contract whenever LateOn
-  is selected. Managed offline installs bind
-  `lateon_offline_quality_projection_v6_d128_v1` automatically. The v6 profile
-  pins the model, artifacts, projection, candidate depth, and sequential CPU
-  execution semantics, but does not encode machine-speed assumptions such as
-  queue wait, scoring latency, or a fixed CPU thread count. One local worker
-  serves overlapping searches through a FIFO queue; each request is reranked
-  unless it is cancelled, the worker genuinely fails, or the hard safety
-  ceiling is exceeded. Direct runtimes enable LateOn when
-  `SATORI_RERANKER_PROVIDER=lateon` and an absolute `SATORI_LATEON_MODEL_PATH`
-  are configured. Any other LateOn profile ID is rejected and cannot execute;
-  reinstall the managed runtime to bind v5.
-  `SATORI_RERANKER_PROVIDER=none` is the explicit opt-out: it keeps the selected
-  embedding provider plus baseline ordering. Automatic failure fallback and explicit opt-out are different
-  concepts.
-- Direct runtimes select Voyage with `SATORI_RERANKER_PROVIDER=voyage`. This
-  needs `VOYAGEAI_API_KEY`; the key alone does not enable it. Startup fails with
-  `SATORI_RERANKER_PROVIDER=voyage requires VOYAGEAI_API_KEY.` when the key is
-  missing. `VOYAGEAI_RERANKER_MODEL` sets the model (default `rerank-3-lite`),
-  and the name is passed to Voyage unchanged. Each search sends the query and
-  candidate code excerpts to Voyage, which bills for them. A rejected rerank
-  returns results in retrieval order with `RERANKER_FAILED`.
+See the [runtime reference](https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#runtime-choices) for provider settings and the [local development guide](https://github.com/ham-zax/satori/blob/master/docs/LOCAL_DEV_MCP.md) for testing an unreleased MCP server.
 
 ## Development
 
 ```bash
 pnpm --filter @satori-code/mcp build
 pnpm --filter @satori-code/mcp test
-pnpm --filter @satori-code/mcp docs:check
 ```
-
-Node.js 22.22 or newer is required.
 
 ## License
 
-Copyright (c) 2026 Hamza (@ham-zax)
-
-Satori is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](./LICENSE).
-
-Alternative commercial licensing terms are available separately from the copyright holder.
+[AGPL-3.0-only](LICENSE). [Commercial licensing](https://github.com/ham-zax/satori/blob/master/COMMERCIAL-LICENSING.md) is available.

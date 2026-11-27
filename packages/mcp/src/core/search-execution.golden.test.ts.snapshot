@@ -12,18 +12,18 @@ exports[`golden: abort_after_retrieval 1`] = `
   ],
   "rerankerCalls": [],
   "metadataQueries": [],
-  "stubCalls": {"dirtyOverlayCalls":0,"trackedLexicalCalls":1,"livePathCalls":0},
+  "stubCalls": {"dirtyOverlayCalls":0,"trackedLexicalCalls":0,"livePathCalls":0},
   "outcome": {"kind":"threw","message":"cancel retrieval"},
   "searchDiagnostics": {
     "queryLength": 0,
     "limitRequested": 3,
-    "resultsBeforeFilter": 3,
-    "resultsAfterFilter": 3,
+    "resultsBeforeFilter": 0,
+    "resultsAfterFilter": 0,
     "excludedByIgnore": 0,
     "excludedBySubdirectory": 0,
     "filterPass": "expanded",
     "searchPassCount": 1,
-    "searchPassSuccessCount": 1,
+    "searchPassSuccessCount": 0,
     "searchPassFailureCount": 0,
     "rerankerAttempted": false,
     "rerankerUsed": false,
@@ -42,9 +42,7 @@ exports[`golden: abort_after_retrieval 1`] = `
     "candidatesWithCurrentSourceEvidence": 0,
     "semanticExpansionAttempted": false,
     "routeKind": "conceptual",
-    "retrievalMode": "hybrid",
-    "semanticExpansionReason": "explicit_role_cue",
-    "semanticPassFailures": []
+    "retrievalMode": "hybrid"
   }
 }
 

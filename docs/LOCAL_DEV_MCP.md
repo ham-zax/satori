@@ -62,9 +62,10 @@ Satori installer manages the `satori` entry and may add it back on reinstall.
 ## Use
 
 1. Build (above), then start the client in the target repository.
-2. Index once with `manage_index` (`action: "create"`). The first index under
-   `~/.satori-dev` is built from scratch, so allow time on large repositories.
-   Later changes are picked up by sync like the installed runtime.
+2. Check `manage_index` with `action="status"`. Wait for automatic indexing
+   when it has started. If the test repository still needs an index, create it
+   with `action="create"`. The first index under `~/.satori-dev` is built
+   from scratch. Later source changes can be picked up by sync.
 3. Exercise the change through the normal tools (`search_codebase`,
    `call_graph`, `find_references`, `detect_changes`, ...).
 
@@ -87,10 +88,12 @@ launcher's settings take precedence, then the dev state paths.
 
 ```bash
 claude mcp remove satori-dev -s user   # or: codex mcp remove satori-dev
-rm -rf ~/.satori-dev
 ```
 
-Re-add the installed server if you removed it, e.g. for Claude Code:
+The dev index lives at `~/.satori-dev` by default. You can delete that directory
+after stopping its MCP sessions if you no longer need the dev indexes.
+
+Re-add the installed server if you removed it. For example, in Claude Code:
 
 ```bash
 claude mcp add satori -s user -- "$(command -v node)" ~/.satori/bin/satori-mcp.js

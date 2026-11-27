@@ -334,23 +334,12 @@ exact local Core and MCP.
 The release smokes run inside both `release:check` and `release:all` before any
 publication.
 
-### Deferred managed-runtime size investigation
+### Managed runtime size gate
 
-On 2026-10-03, the Linux x64 packed smoke measured an installed managed runtime
-of 944,907,777 bytes (about 901 MiB), exceeding the previous 720 MiB budget.
-The budget is temporarily raised to 960 MiB for this release. This measures
-installed disk usage, not compressed npm upload size.
-
-The October 1 dependency upgrades increased ONNX Runtime Node from about
-180 to 288 MiB, ONNX Runtime Web from 93 to 138 MiB, and the LanceDB Linux x64
-native package from 155 to 193 MiB. ONNX Runtime Node includes binaries for
-other platforms; its Linux x64 binaries occupy about 45 MiB. Transformers also
-installs ONNX Runtime Web in the Node runtime.
-
-Investigation is deferred: determine whether unused platform binaries and
-browser runtime artifacts can be safely excluded from the managed installation,
-verify the resulting packed runtime, and reassess the size budget. This release
-does not remove those artifacts.
+The Linux packed CLI smoke test prunes unused runtime artifacts before measuring
+the installed managed runtime. The gate uses a 960 MiB budget for that installed
+closure. If it fails, inspect the packed dependency footprint and the required
+host-native artifacts before changing the budget.
 
 ## User-Visible Upgrade Behavior
 

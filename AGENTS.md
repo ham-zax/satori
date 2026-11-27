@@ -11,6 +11,7 @@ Your global instructions (`~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENT
 * **Answer the question asked.** Questions, explanations, reviews, audits, and diagnoses are read-only. Answer briefly from what you already know. Look something up only when you cannot answer without it, and leave side topics I did not raise.
 * **Results before new work.** Report the finished run and deliver what is already owed before starting anything new.
 * **Start from the workflow skill** your global instructions name, and use its fast path for small changes.
+* **Use Satori first for code navigation.** When you need to locate unfamiliar behavior or its owner, start with Satori MCP `search_codebase` and follow `recommendedNextAction`. Use Satori’s graph tools for callers, architecture, and change impact. Use native reads and `rg` for exact lookups or when Satori or its index is unavailable.
 * **I dictate by voice.** Read for intent, state your reading of an unclear phrase in one line, and continue with what is clear.
 
 ## Scope

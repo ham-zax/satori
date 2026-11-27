@@ -1,249 +1,75 @@
 <p align="center">
-  <a href="https://satori.hamza.my.id"><img src="satori-landing/logo.svg" alt="Satori" width="96" height="96" /></a>
+  <a href="https://satori.hamza.my.id"><img src="satori-landing/logo.svg" alt="Satori" width="88" height="88" /></a>
 </p>
 
 <h1 align="center">Satori</h1>
 
-<h3 align="center">Semantic code search for coding agents.</h3>
-
 <p align="center">
-  Ask where behavior lives in plain English. Satori finds the owning code and hands your agent the exact source, locally, through MCP.
+  <strong>Local code search and navigation for coding agents.</strong><br />
+  Ask where a behavior lives. Get the owning symbol, its relationships, and the exact source.
 </p>
 
 <p align="center">
-  <a href="https://satori.hamza.my.id"><strong>Website</strong></a> &nbsp;·&nbsp;
-  <a href="#start"><strong>Get started</strong></a> &nbsp;·&nbsp;
-  <a href="https://satori.hamza.my.id/docs/"><strong>Docs</strong></a> &nbsp;·&nbsp;
-  <a href="https://satori.hamza.my.id/architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
-  <a href="docs/REFERENCE.md"><strong>Full reference</strong></a>
+  <a href="https://www.npmjs.com/package/@satori-code/cli"><img src="https://img.shields.io/npm/v/@satori-code/cli?label=npm" alt="npm version" /></a>
+  <a href="https://github.com/ham-zax/satori/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ham-zax/satori/ci.yml?branch=master&label=CI" alt="CI status" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0 license" /></a>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@satori-code/cli"><img src="https://img.shields.io/npm/v/@satori-code/cli?style=flat-square&color=e5553b&label=npm" alt="npm version" /></a>
-  <a href="https://github.com/ham-zax/satori/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ham-zax/satori/ci.yml?branch=master&style=flat-square&label=CI" alt="CI status" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-c9c1b2?style=flat-square" alt="AGPL-3.0 license" /></a>
-  <img src="https://img.shields.io/badge/node-%E2%89%A522.22-c9c1b2?style=flat-square" alt="Node.js 22.22 or newer" />
-  <img src="https://img.shields.io/badge/Linux%20x64%20%7C%20ARM64%20%7C%20WSL2-c9c1b2?style=flat-square" alt="Linux x64, Linux ARM64, and WSL2" />
-</p>
-
-<p align="center">
-  <a href="https://satori.hamza.my.id"><img src="satori-landing/og-image.png" alt="Satori: ask your codebase, follow the evidence" width="880" /></a>
+  <a href="#install">Install</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
+  <a href="https://satori.hamza.my.id">Website</a>
 </p>
 
 <a id="start"></a>
 
-## Start
+## Install
 
-> **Beta.** Satori supports Linux only for now (x64 and ARM64 with glibc, including WSL2 on Windows). macOS and native Windows are not supported yet.
-
-Needs Node.js 22.22+ on Linux x64, Linux ARM64 with glibc, or WSL2.
+**Requirements.** Node.js 22.22 or newer on Linux x64 or ARM64 with glibc, including WSL2. The default install downloads its models once, then runs offline with no model API key.
 
 ```bash
 npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor
 ```
 
-`install` auto-detects Codex, Claude Code, OpenCode, Cursor, VS Code, and Windsurf (`--client agy` for Antigravity; `--client all` for all), and installs the shared `satori` skill by default. Git workspaces within Satori's byte budgets auto-index in the background when your agent starts; pass `--index` inside a Git repository to index it immediately during setup (`--no-index` skips immediate indexing). Restart your agent and say:
+The installer detects **Codex, Claude Code, OpenCode, Cursor, VS Code, Windsurf, and Pi**. For Antigravity, use `install --client agy`. Restart your client after installation. See the [client setup reference](docs/REFERENCE.md#client-setup) for other MCP clients.
 
-```text
-Index /absolute/path/to/repo with Satori, then find where auth refresh is handled.
-```
+## Ask your first question
 
-That's it. No account, no API key.
+Open your coding agent in a Git repository and ask:
 
-Or let your agent do the setup. Paste this:
+> Use Satori to find where authentication tokens are refreshed. Show me the owning function, its source, and one caller.
 
-```text
-Install Satori by following the "For AI agents" section of
-https://github.com/ham-zax/satori, then index this repository.
-```
+Small offline workspaces index in the background at startup. Larger eligible workspaces begin indexing on the first Satori query. To index the current Git repository during installation, add `--index`. [Indexing behavior and limits](docs/REFERENCE.md#index-lifecycle)
 
-## For AI agents
+## What you can do
 
-If you are a coding agent setting up or using Satori, follow these steps.
+| Task | Example |
+| --- | --- |
+| Find unfamiliar behavior | “Where does the background worker decide to retry?” |
+| Inspect an implementation | “Show the owning symbol and the code that validates that setting.” |
+| Trace a change | “Which indexed callers reach this function, and what should I verify before changing it?” |
+| Review a diff | “Map the changed lines to their symbols and identify likely affected callers.” |
 
-**Install**
+Satori combines semantic search, BM25, and exact matches, then reranks candidates locally by default. Its MCP tools give agents bounded source reads, file outlines, and call navigation where language support is available. Graph edges are leads to verify in source and tests. [Language support](docs/REFERENCE.md#language-support)
 
-1. Check the platform: `node -v` must be 22.22 or newer, on Linux x64, Linux ARM64 with glibc, or WSL2. Native Windows and macOS are not supported; on Windows, run inside WSL2.
-2. Run `npx -y @satori-code/cli@latest install`, then `npx -y @satori-code/cli@latest doctor`. Inside a Git repository, pass `--index` to index it immediately during setup (`--no-index` leaves indexing to agent startup).
-3. If install reports no supported client, rerun it with `--client codex`, `claude`, `opencode`, `cursor`, `vscode`, `windsurf`, `agy`, or `all`.
-4. Tell the user to restart you. The Satori MCP tools load only at agent startup.
+Satori reads repository source and keeps its index local by default. Compatible local MCP sessions can share the same runtime and index. [Runtime and data handling](docs/REFERENCE.md#runtime-choices)
 
-**Use**
+<a id="for-ai-agents"></a>
 
-1. Call `list_codebases`. If the repository is not indexed, call `manage_index` with `action="create"` and the repository's absolute `path`. Indexing runs in the background; check it with `action="status"`.
-2. Start every "where is…", "what owns…", or "what calls…" question with `search_codebase`. For plain-English questions, pass up to 4 likely code identifiers or terms in `alt_terms`.
-3. Follow `recommendedNextAction` when it is returned. Use `file_outline` to pick a symbol, and `call_graph` or `trace_path` for relationships.
-4. Read the exact code with `read_file` before you claim anything or edit.
-5. After editing files, call `manage_index` with `action="sync"` when you need fresh results.
-
-**Rules**
-
-- Every `path` is absolute.
-- `manage_index action="status"` can start or join an automatic rebuild for an incompatible tracked root. Check roots serially on memory-constrained hosts.
-- Treat `call_graph` results as leads to verify, not complete proof.
-- Satori is read-only. Make source edits with your own tools.
-- `satori install` installs the shared `satori` skill (`~/.agents/skills/satori/SKILL.md`) with the full workflow by default; pass `--no-skill` to skip installing it (it still refreshes an existing Satori-managed skill if present).
-
-## How it works
-
-You ask a question. Your agent follows the evidence:
-
-```text
-search_codebase  →  owner  →  file_outline / call_graph  →  read_file
-  by meaning         the         structure and              exact source
-  and exact text     symbol      supported relationships    to verify
-```
-
-Satori combines embeddings with BM25 and exact matches, maps hits to the symbols that own them, and keeps every answer on one indexed snapshot of the repository. Edits sync incrementally, and every answer says whether its evidence is still current.
-
-<details>
-<summary><strong>The 11 MCP tools</strong></summary>
-
-| Tool | What it does |
-|---|---|
-| `manage_index` | Create, sync, inspect, cancel, reindex, or clear the index. |
-| `search_codebase` | Find behavior by meaning and exact evidence. Start here. |
-| `architecture_overview` | Summarize areas, boundaries, and hotspots. |
-| `continue_search` | Page through a result set without searching again. |
-| `file_outline` | List the symbols and spans in one file, with the current span next to the published span when it was proven. |
-| `call_graph` | Callers, callees, imports, and exports where supported. |
-| `trace_path` | Shortest relationship path between two symbols. |
-| `find_references` | Exact textual occurrences of one symbol. |
-| `detect_changes` | Map a Git diff to affected symbols and callers. |
-| `read_file` | Read one symbol or a bounded source span. |
-| `list_codebases` | List indexed repositories and their readiness. |
-
-</details>
-
-## Why use it
-
-- **Unfamiliar code.** Ask where behavior lives before you know a filename.
-- **Bugs.** Go from an error string to the code that owns it.
-- **Refactors.** See the owner, its structure, and its callers before the first edit.
-- **Less context waste.** Your agent reads symbol-sized evidence, not whole files. Smaller local models benefit most.
-- **Many agents, one index.** Local sessions share one runtime.
-
-## Free, local, read-only
-
-- Free and open source under AGPL-3.0. No account and no telemetry upload.
-- The default stack runs offline after install: Potion embeddings, BM25, LateOn reranking, and LanceDB.
-- Satori never edits your source and adds nothing to `AGENTS.md`. For Claude Code, install adds one read-only `SessionStart` hook that reports index state and never indexes.
-- `satori uninstall` removes client config; `--purge` also deletes `~/.satori`.
-- Connected Voyage and Milvus/Zilliz are optional. See the [reference](docs/REFERENCE.md#runtime-choices).
+For agent setup and first-tool guidance, see [using Satori with an agent](docs/PRODUCT_GUIDE.md#ask-an-agent-to-use-satori).
 
 ## Benchmarks
 
-**The offline stack.** [Potion](https://huggingface.co/minishlab/potion-code-16M-v2) is a 16M-parameter static code embedding, fast enough to embed a whole repository on a laptop CPU. BM25 and exact matching catch the identifiers it misses. [LateOn](https://huggingface.co/lightonai/LateOn-Code-edge) is a 17M-parameter late-interaction code model. It is too costly to run over everything, so Satori uses it only to rerank the top candidates (budget 64), together with each candidate's role, callers, callees, and tests.
+Browse the [benchmarks](docs/BENCHMARKS.md) for measured agent discovery, retrieval quality, and indexing and navigation latency. Each comparison links to its setup and limitations.
 
-**What reranking adds.** 36 owner-finding tasks across 6 repositories, where "owner at 1" means the right symbol comes first:
+## Documentation
 
-| Stack | Owner at 1 | Owner at 3 | MRR |
-|---|---:|---:|---:|
-| Potion + BM25 + exact | 0.19 | 0.36 | 0.29 |
-| + LateOn reranking (depth 32) | **0.39** | **0.64** | **0.50** |
-
-Tuning-set results, measured on an earlier prompt projection; the held-out run is still pending. [Evidence and limits](docs/evidence/lateon-quality-20260804/). On the current build (budget 64), baseline reaches 0.44 owner@1 and 0.78 owner@10 across 18 judged real-repo tasks.
-
-On the current default (LateOn reranking plus definition fusion, which runs only with reranking), 19 named-symbol questions across 4 repositories went from 4 to 13 owners at rank 1 against no reranker; owner in the top 10 stayed at 15 either way. [Corrected comparison](docs/improvements/reranker-owner-investigation.md).
-
-**Choosing a reranker.** LateOn is the local default. Voyage is an opt-in online reranker (`satori reranker use voyage`); it works with the offline Potion index and sends each query and its candidate code excerpts to Voyage AI, a MongoDB company. Each Voyage account gets 200 million free tokens per model, about 4,600 searches at the measured rate. 28 plain-English questions over React, Polars, and FlatBuffers, same Potion index for every row:
-
-| Reranker | Right answer first | In top 5 | In top 10 | MRR | Rerank median |
-|---|---:|---:|---:|---:|---:|
-| LateOn (local, default) | 13/28 | 22/28 | 24/28 | 0.566 | 2.58 s |
-| Voyage `rerank-3-lite` (Voyage default) | 23/28 | 27/28 | 27/28 | 0.881 | 1.03 s |
-
-Voyage's canonical projection sends about 60% more input bytes than the native document, so it uses the free quota faster. Three runs per row on one WSL2 laptop; times are the median reranker time. Measured at `fb125738`, before the default-on `cleanup` → `destroy` bridge (`9abe9006`); the bridge moves r1 to rank 1 on the 28-question rerank-3 run, and the `rerank-3-lite` row is not re-measured. [How to choose, and the limits of these numbers](docs/REFERENCE.md#choosing-a-reranker).
-
-**Plain-English questions.** 46 conceptual questions over React, Polars, and FlatBuffers ("cleanup of useEffect" → `commitHookEffectListUnmount`). Agents can pass up to 4 code-vocabulary guesses in `alt_terms`; Satori searches them as separate passes, including definitions, and fuses them with the original question:
-
-| `alt_terms` | Owner at 1 | Owner in top 10 | Median request |
-|---|---:|---:|---:|
-| None | 8 | 16 | 2.7 s |
-| The agent's own guesses | **16** | **34** | 2.9 s |
-| Another question's guesses (stress test) | 1 | 8 | 2.8 s |
-
-Tuning set with seven labels corrected to the pinned commits. Wrong guesses cost more than none; fixes that limited that cost also cost owners with good guesses, so they were rejected. [Details](docs/improvements/agent-alt-terms-definition-discovery.md).
-
-**Search latency.** Measured on React (6,918 files, 36,233 chunks) with the offline CPU stack:
-
-| Phase / Mode | Median latency | Notes |
-|---|---:|---|
-| Fast retrieval (Potion + BM25) | **178 ms** | Dense vector search and lexical candidate fusion |
-| + LateOn reranking (budget 64, CPU FP32) | **2.5–3.1 s** | Full cross-attention reranking of top 64 code passages, one model session |
-| Fast mode (`--reranker none`) | **~200 ms** | Disables LateOn; pure embedding + BM25 search |
-| Cold query with filesystem watcher | **< 1 s** | Bounded watcher settle; avoids recursive directory stat scan |
-
-**Reranking adapts to the machine.** LateOn encodes candidates in parallel model sessions sized from the host's CPUs and free memory: 1 session on 1 CPU, 4 single-threaded sessions on 4–6 CPUs, 4 × 2 threads on 8–16 CPUs, up to 8 × 2 on 32 or more (above 16 CPUs the rule is extrapolated, not measured). Scores are bit-identical to the single-session path. On a Ryzen 7 3800X under WSL2 (15 logical CPUs visible):
-
-| Measurement | One session (1 × 8 threads) | Adaptive pool (4 × 2) |
-|---|---:|---:|
-| Rerank 64 candidates (median of 3 runs) | 1.86 s | **1.22 s** |
-| Plain-English question to ranked owners (46 questions, median) | 2.63 s | **2.24 s** |
-| Rerank phase of those requests (median) | 2.12 s | **1.68 s** |
-| Peak reranker memory | 0.53 GB | 1.64 GB |
-
-Each session needs 1 GiB of free memory at worker start, so memory-limited hosts and containers run fewer sessions with more threads. The worker is released after 2 minutes idle.
-
-**Agent discovery (100% local offline).** Paired protocol v4 benchmark (Claive + Pi, DeepSeek V4.1 Flash `xhigh`, local Potion embeddings + LanceDB + local LateOn reranker on CPU, zero external search APIs) comparing Satori against guarded native search (`grep`, `find`, bounded 200-line `read`) across two frozen discovery tasks (three alternating runs per arm, all-run medians):
-
-| Task | Arm | Strict v4 Pass | Total input tokens | Reasoning tokens | Tool calls | Source call | Wall time |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `unknown-freshness-reuse` | Native | 0/3 | 201,905 | 6,975 | 25 | 24 [16–26] | 151.4 s |
-| | **Satori (offline)** | **3/3** | **37,549 (-81.4%)** | **1,571 (-77.5%)** | **5 (-80.0%)** | **2 [2–2]** | **58.2 s (-61.6%)** |
-| `known-exact-target` | Native | 2/3 | 77,784 | 2,504 | 13 | 3 [3–3] | 73.5 s |
-| | **Satori (offline)** | **3/3** | **72,022 (-7.4%)** | **1,257 (-49.8%)** | **9 (-30.8%)** | **2 [2–2]** | **52.3 s (-28.8%)** |
-
-Across all 6 runs per arm, offline Satori passed **6/6 (100%)** strict v4 runs vs **2/6 (33.3%)** for native search (combined medians: **-59.9%** input tokens, **-57.6%** calls, **-46.3%** reasoning tokens, **-35.0%** wall time; zero wrong code claims, zero budget overflows, zero protocol violations). Satori started from a warm local index and a harness-supplied first `search_codebase` query; later call, token, and pass-rate gains follow from reaching the owner source at call 2 instead of call 24 and verifying relations via `call_graph`. [Full v4 benchmark report, passing-only medians, and limits](docs/improvements/agent-discovery-benchmark-2026-11-23.md) ([earlier Oct 26 v3 OpenCode/Voyage report](docs/improvements/agent-discovery-benchmark-2026-10-26.md)).
-
-**Against [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 0.11.0.** Same machine, 5 public repositories; each range spans two runs:
-
-| Repository | System | Full index | Symbol lookup (p50) | Callers (p50) | One-file edit |
-|:---|:---|---:|---:|---:|---:|
-| **ripgrep** (Rust) | **Satori** | 5.8 s | **8–9 ms** | 136–146 ms | 3.3 s |
-| | CBM 0.11 | **2.8–2.9 s** | 13 ms | **13 ms** | **2.1–2.2 s** |
-| **trufflehog** (Go) | **Satori** | 42–55 s | 22–23 ms | 29–30 ms | **19 s** |
-| | CBM 0.11 | **8.9–9.2 s** | **17–18 ms** | **15 ms** | 24–32 s |
-| **satori** (TypeScript) | **Satori** | 42–46 s | **11 ms** | 21–24 ms | **13 s** |
-| | CBM 0.11 | **20 s** | 29–30 ms | **20 ms** | 13 s |
-
-codebase-memory-mcp builds only a graph, so it indexes and answers caller queries faster. Satori also builds embeddings and a vector index, which is what lets it answer plain-English "where is this behavior" questions that a graph cannot. [All 5 repositories and the raw results](docs/REFERENCE.md#satori-versus-codebase-memory-mcp).
-
-## Languages
-
-Call graphs for TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, Scala, Kotlin, and PHP. Symbols and outlines for 88 more languages. Semantic search across about 140. [Details](docs/REFERENCE.md#language-support).
-
-## Commands
-
-| Command | Does |
-|---|---|
-| `satori install` | Install the runtime and configure your agents. |
-| `satori doctor` | Check the installation. |
-| `satori upgrade` | Upgrade to the latest verified release. |
-| `satori terminate` | Stop running Satori servers. |
-| `satori uninstall` | Remove client config (`--purge` removes everything). |
-
-Without a global install, prefix commands with `npx -y @satori-code/cli@latest`.
-
-## Learn more
-
-- [Docs](https://satori.hamza.my.id/docs/): setup, tools, and troubleshooting.
-- [Full reference](docs/REFERENCE.md): runtimes, configuration, index profiles, benchmarks.
-- [Product guide](docs/PRODUCT_GUIDE.md): how to get the most out of Satori.
-
-## Development
-
-```bash
-pnpm install
-pnpm build
-pnpm run check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [docs/RELEASING.md](docs/RELEASING.md).
+- [Product guide](docs/PRODUCT_GUIDE.md) for finding owners, verifying call paths, and deciding when to use native tools.
+- [Reference](docs/REFERENCE.md) for client setup, configuration, CLI and MCP commands, and troubleshooting.
+- [Contributing](CONTRIBUTING.md), [local MCP development](docs/LOCAL_DEV_MCP.md), and [security reporting](SECURITY.md).
 
 ## License
 
-[AGPL-3.0-only](LICENSE). Commercial licensing is available: see [COMMERCIAL-LICENSING.md](COMMERCIAL-LICENSING.md).
-
-Copyright (c) 2026 Hamza ([@ham-zax](https://github.com/ham-zax)).
+[AGPL-3.0-only](LICENSE). [Commercial licensing](COMMERCIAL-LICENSING.md) is available.

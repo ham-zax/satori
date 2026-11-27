@@ -5,11 +5,13 @@ This repository is intentionally narrow. Keep changes focused on:
 - `packages/mcp`: MCP server runtime
 - `packages/cli`: installer, doctor, and shell entrypoints
 - `scripts/` and `evals/`: release tooling, benchmarks, and retrieval evaluations
-- `docs/` and `satori-landing/`: public documentation and launch collateral
+- [`docs/`](docs/README.md) and `satori-landing/` contain product documentation, evidence, and the website.
 
 Do not add UI extensions or parallel product surfaces here.
 
 ## Setup
+
+Use Node.js 22.22 or newer and pnpm 10.
 
 ```bash
 pnpm install
@@ -17,7 +19,7 @@ pnpm install
 
 ## Architecture Guardrails
 
-- Keep orchestration logic inside `src/core/` modules.
+- Put domain behavior with its owner and keep `Context` focused on composition and delegation.
 - Keep provider/config plumbing isolated from business flow.
 - Keep indexing, search, and sync logic testable without external services.
 - Prefer small focused modules over monolithic handlers.

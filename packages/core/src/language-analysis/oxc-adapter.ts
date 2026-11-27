@@ -64,6 +64,23 @@ function isFunctionValue(value: unknown): boolean {
     );
 }
 
+function returnedObjectLiteral(value: unknown): AstNode | undefined {
+    while (isAstNode(value)) {
+        switch (value.type) {
+            case 'ObjectExpression': return value;
+            case 'ParenthesizedExpression':
+            case 'TSAsExpression':
+            case 'TSSatisfiesExpression':
+            case 'TSTypeAssertion':
+            case 'TSNonNullExpression':
+                value = value.expression;
+                break;
+            default: return undefined;
+        }
+    }
+    return undefined;
+}
+
 function expressionName(value: unknown): string | undefined {
     if (!isAstNode(value)) return undefined;
     if (value.type === 'Identifier' && typeof value.name === 'string') return value.name;
@@ -297,32 +314,32 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         const earlyExitSpans: SourceSpan[] | undefined = input.includeEarlyExitSpans ? [] : undefined;
         const callSites: CallSite[] = [];
         const receiverTypeBindings: ReceiverTypeBinding[] = [];
-        // Only declarations directly in the program (including exports) own object callers.
+        // Module bindings and direct factory returns establish object ownership.
         const moduleDeclarations = childNodes(parsed.program as Program & AstNode)
             .flatMap((node) => node.type === 'ExportNamedDeclaration' ? childNodes(node) : [node])
             .filter((node) => node.type === 'VariableDeclaration');
+        const objectOwners = new WeakMap<AstNode, readonly string[]>();
+        const boundFactories = new WeakMap<AstNode, readonly string[]>();
         const visit = (
             node: AstNode,
             parent?: AstNode,
             parents: readonly string[] = [],
             insideCallable = false,
             insideRegistrationCallback = false,
-            directObject?: { literal: AstNode; owner: string },
+            enclosingFactory?: readonly string[],
         ): void => {
             if (earlyExitSpans) {
                 const start = earlyExitContextStart(node, parent);
                 if (start !== undefined) earlyExitSpans.push(sourceMap.spanFromUtf16(start, node.end));
             }
             const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
-            const objectProperty = node.type === 'Property' && node.kind === 'init' && parent === directObject?.literal
+            const objectOwner = node.type === 'Property' && parent ? objectOwners.get(parent) : undefined;
+            const objectProperty = objectOwner && node.kind === 'init'
                 && isFunctionValue(node.value)
                 && (!node.computed || (isAstNode(node.key) && node.key.type === 'Literal' && typeof node.key.value === 'string'));
             const kind = objectProperty ? 'method' : callback ? 'function' : symbolKind(node, parent, insideCallable);
             const name = callback ?? (kind ? symbolName(node) : undefined);
-            const symbolParents = objectProperty && directObject ? [...parents, directObject.owner] : parents;
-            const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
-                ? [...parents, name]
-                : parents;
+            const symbolParents = objectProperty ? objectOwner : parents;
             if (kind && name) {
                 const span = sourceMap.spanFromUtf16(node.start, node.end);
                 symbols.push({
@@ -348,26 +365,49 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
                     });
                 }
             }
-            const childInsideCallable = insideCallable || (
-                node.type === 'FunctionDeclaration'
-                || node.type === 'FunctionExpression'
-                || node.type === 'ArrowFunctionExpression'
-                || node.type === 'MethodDefinition'
+            const functionDeclaration = node.type === 'FunctionDeclaration';
+            const functionValue = isFunctionValue(node);
+            const callableBody = functionDeclaration || functionValue;
+            const childInsideCallable = insideCallable || callableBody || (
+                node.type === 'MethodDefinition'
                 || node.type === 'TSAbstractMethodDefinition'
                 || (node.type === 'PropertyDefinition' && isFunctionValue(node.value))
             );
-            const childRegistrationCallback = isFunctionValue(node) || node.type === 'FunctionDeclaration'
+            const childRegistrationCallback = callableBody
                 || node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition'
                 ? Boolean(callback)
                 : insideRegistrationCallback;
-            const boundObject = node.type === 'VariableDeclarator' && parent && moduleDeclarations.includes(parent)
-                && nodeName(node) && isAstNode(node.init) && node.init.type === 'ObjectExpression'
-                ? { literal: node.init, owner: nodeName(node)! } : undefined;
+            const hasNamedScope = !insideCallable || enclosingFactory !== undefined;
+            if (name && node.type === 'VariableDeclarator' && isAstNode(node.init)) {
+                const moduleBinding = parent !== undefined && moduleDeclarations.includes(parent);
+                if (moduleBinding && node.init.type === 'ObjectExpression') {
+                    objectOwners.set(node.init, [...symbolParents, name]);
+                }
+                if ((moduleBinding || enclosingFactory) && isFunctionValue(node.init)) {
+                    boundFactories.set(node.init, [...symbolParents, name]);
+                }
+            }
+            if (name && hasNamedScope && kind === 'method' && node.type === 'MethodDefinition'
+                && !node.computed && isAstNode(node.value) && isFunctionValue(node.value)) {
+                boundFactories.set(node.value, [...symbolParents, name]);
+            }
+            if (name && objectProperty && isAstNode(node.value)) {
+                boundFactories.set(node.value, [...symbolParents, name]);
+            }
+            // Anonymous callables end the enclosing return scope. A named
+            // callable supplies the same path for its declaration and children.
+            const factory = functionDeclaration
+                ? name && hasNamedScope ? [...symbolParents, name] : undefined
+                : functionValue ? boundFactories.get(node) : enclosingFactory;
+            const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
+                ? [...parents, name]
+                : callableBody ? factory ?? [] : parents;
+            if (factory && (node.type === 'ReturnStatement' || node.type === 'ArrowFunctionExpression')) {
+                const literal = returnedObjectLiteral(node.type === 'ReturnStatement' ? node.argument : node.body);
+                if (literal) objectOwners.set(literal, factory);
+            }
             for (const child of childNodes(node)) {
-                // Ownership crosses only the binding-to-literal and literal-to-property edges.
-                const childObject = boundObject?.literal === child ? boundObject
-                    : directObject?.literal === node && child.type === 'Property' ? directObject : undefined;
-                visit(child, node, nextParents, childInsideCallable, childRegistrationCallback, childObject);
+                visit(child, node, nextParents, childInsideCallable, childRegistrationCallback, factory);
             }
         };
         visit(parsed.program as Program & AstNode);

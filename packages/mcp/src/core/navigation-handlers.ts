@@ -76,6 +76,7 @@ import {
     type CallGraphEvidenceRequest,
 } from "./call-graph-evidence-projection.js";
 import type { PublishedPathScope } from "./navigation-path-scope.js";
+import { buildMissingSymbolSourceSearchHint } from "./search-response-helpers.js";
 import {
     candidateWithinRequestedSubdirectory,
     resolveRequestedSearchSubdirectory,
@@ -1375,6 +1376,11 @@ export class NavigationHandlers {
                             path: leasedRootState.root.path,
                             symbolRef: resolvedInputSymbolRef,
                             message: "No exact canonical symbol matched symbolRef.",
+                            ...buildMissingSymbolSourceSearchHint(
+                                leasedRootState.root.path,
+                                normalizedSymbolFile,
+                                rawSymbolId ? undefined : rawSymbolLabel,
+                            ),
                         }),
                     }],
                 };
@@ -2388,6 +2394,7 @@ export class NavigationHandlers {
                     supported: false,
                     reason: "missing_symbol",
                     message: "No exact symbol match found in relationship-backed navigation state.",
+                    ...buildMissingSymbolSourceSearchHint(effectiveRoot, normalizedSymbolFile, rawSymbolId ? undefined : rawSymbolLabel),
                     nodes: [],
                     edges: [],
                     notes: [],

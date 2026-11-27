@@ -638,6 +638,23 @@ test("call_graph resolves unique symbolLabel (bare name and formatted label) and
     assert.equal(byFormattedPayload.symbolRef.file, "src/target.ts");
     assert.deepEqual(traversedIds, ["syminst_run_target", "syminst_run_target"]);
 
+    const missingLabel = await callGraphTool.execute({
+        path: canonicalRoot, symbolRef: { file: "src/target.ts", symbolLabel: "unextractedName" },
+    }, ctx);
+    const missingLabelPayload = JSON.parse(missingLabel.content[0]!.text);
+    assert.equal(missingLabelPayload.reason, "missing_symbol");
+    assert.deepEqual(missingLabelPayload.recommendedNextAction.args, {
+        path: canonicalRoot, query: 'path:"src/target.ts" must:"unextractedName"', scope: "mixed",
+    });
+    assert.equal(missingLabelPayload.symbolRef.symbolId, undefined);
+    const missingId = await callGraphTool.execute({
+        path: canonicalRoot, symbolRef: { file: "src/target.ts", symbolId: "unknown-id" },
+    }, ctx);
+    const missingIdPayload = JSON.parse(missingId.content[0]!.text);
+    assert.equal(missingIdPayload.reason, "missing_symbol");
+    assert.equal(missingIdPayload.recommendedNextAction, undefined);
+    assert.equal(missingIdPayload.symbolRef.symbolId, "unknown-id");
+
     for (const [requestRoot, fileRoot] of [[linkRoot, canonicalRoot], [canonicalRoot, linkRoot]]) {
         const mixed = await callGraphTool.execute({
             path: requestRoot,

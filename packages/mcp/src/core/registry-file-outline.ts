@@ -1,4 +1,5 @@
 import { compareContractStrings, type SymbolRecord } from "@satori-code/core";
+import { buildMissingSymbolSourceSearchHint } from "./search-response-helpers.js";
 import type { CallGraphHint } from "./search-types.js";
 import type { FileOutlineResponseEnvelope, FileOutlineSymbolResult } from "./search-types.js";
 import {
@@ -223,6 +224,9 @@ export async function buildRegistryFileOutlinePayload(input: {
                 outline: null,
                 hasMore: false,
                 message: "No exact symbol match found in file outline.",
+                ...(persistedExactMatches.length === 0 && !input.symbolIdExact
+                    ? buildMissingSymbolSourceSearchHint(input.codebaseRoot, input.file, input.symbolLabelExact)
+                    : {}),
                 ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
             };
         }

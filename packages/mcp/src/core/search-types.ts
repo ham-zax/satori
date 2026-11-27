@@ -1087,6 +1087,7 @@ export interface FileOutlineResponseEnvelope {
     warnings?: string[];
     freshnessDecision?: FreshnessDecision;
     message?: string;
+    recommendedNextAction?: SearchRecommendedNextAction;
     hints?: Record<string, unknown>;
     indexingFailure?: IndexingFailureMetadata;
 }
@@ -1331,6 +1332,7 @@ export type CallGraphEvidencePageResult =
     });
 
 export interface CallGraphTraversalResponseEnvelope {
+    recommendedNextAction?: SearchRecommendedNextAction;
     status: CallGraphResponseStatus;
     supported: boolean;
     reason?: CallGraphResponseReason;

@@ -3,9 +3,14 @@ import test, { type TestContext } from "node:test";
 import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
-import type { PublicationLease, SymbolRecord, SymbolRegistry } from "@satori-code/core";
+import {
+    buildSymbolRecordsForFile, buildSymbolRegistry, createLanguageAnalysisService,
+    type PublicationLease, type SymbolRecord, type SymbolRegistry,
+} from "@satori-code/core";
 import { ToolHandlers } from "../core/handlers.js";
 import { NavigationHandlers } from "../core/navigation-handlers.js";
+import { buildRegistryFileOutlinePayload } from "../core/registry-file-outline.js";
+import { parseSearchOperators } from "../core/search-query-planning.js";
 import { createSessionWorkspacePolicy } from "../core/session-workspace-policy.js";
 import {
     findReferencesInputSchema,
@@ -206,6 +211,111 @@ test("find_references pages through every occurrence with a scope-bound cursor",
     assert.equal(crossScope.isError, true);
     assert.equal(crossScope.payload.status, "not_found");
     assert.equal(crossScope.payload.reason, "invalid_continuation");
+});
+
+test("returned object methods have distinct exact identities and scoped source occurrences", async (t) => {
+    const root = fs.mkdtempSync(path.resolve("satori-find-references-test-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const factoryFile = "runtime factories.ts";
+    const interfaceFile = "session.ts";
+    const name = "installWorkspaceTemplateWithOutcome";
+    const label = `method ${name}`;
+    const files = [
+        { path: factoryFile, content: [
+            `export function createAppRuntime() {
+                const local = { async recoveryOnly() {} };
+                void local;
+                function makeTx() {
+                    return { async ${name}() { return "nested"; } };
+                }
+                const makePreview = () => ({ async ${name}() { return "local"; } });
+                return { async ${name}() { return "installed"; } };
+            }`,
+            `export function createPreviewRuntime() { return { async ${name}() { return "preview"; } }; }`,
+        ].join("\n") },
+        { path: interfaceFile, content: `export interface WorkspaceSession { ${name}(): Promise<string>; }\n` },
+    ];
+    const analyzer = createLanguageAnalysisService();
+    const symbols: SymbolRecord[] = [];
+    const manifestFiles = [];
+    for (const { path: file, content } of files) {
+        fs.writeFileSync(path.join(root, file), content);
+        const analysis = await analyzer.analyze({ content, relativePath: file, language: "typescript" });
+        const fileHash = sha256(content);
+        const records = buildSymbolRecordsForFile({
+            relativePath: file, language: "typescript", content, fileHash, extractorVersion: "fixture",
+            chunks: [...analysis.chunks], extractedSymbols: analysis.symbols,
+        });
+        manifestFiles.push({ path: file, hash: fileHash, symbolCount: records.length });
+        symbols.push(...records);
+    }
+    const registry = buildSymbolRegistry({ manifest: { files: manifestFiles } as never, symbols });
+    const lease = {
+        id: "publication-1", publication: { id: "publication-1", canonicalRoot: root }, release: () => {},
+    } as PublicationLease;
+    const policy = createSessionWorkspacePolicy({ roots: [root], homeDirectory: path.dirname(root), stateRoot: path.join(root, "state") });
+    const handlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: root }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        loadPreparedNavigationManifest: async () => ({ status: "ok", registry }),
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const find = async (file: string, ref: { symbolLabel: string } | { symbolId: string } = { symbolLabel: label }) => {
+        const result = await handlers.handleFindReferences({ path: root, symbolRef: { file, ...ref } }, policy);
+        return JSON.parse(result.content[0]!.text);
+    };
+    const exactOutline = (symbolLabelExact: string) => buildRegistryFileOutlinePayload({
+        codebaseRoot: root, file: factoryFile, symbols: registry.symbolsByFile.get(factoryFile) ?? [],
+        resolveMode: "exact", symbolLabelExact, publishedSpans: true, limitSymbols: 10,
+        buildCallGraphHint: () => ({ supported: false, reason: "missing_symbol" }),
+        buildOutlineSpanWarningCodes: () => [], readSourceLines: async () => undefined,
+    });
+    const outline = await exactOutline(label);
+    assert.equal(outline.status, "ambiguous");
+    assert.ok(outline.outline);
+    const methods = outline.outline.symbols;
+    assert.deepEqual(methods.map(symbol => [symbol.qualifiedName, symbol.parentResolution]), [
+        [`createAppRuntime.makeTx.${name}`, "resolved"],
+        [`createAppRuntime.makePreview.${name}`, "resolved"],
+        [`createAppRuntime.${name}`, "resolved"],
+        [`createPreviewRuntime.${name}`, "resolved"],
+    ]);
+    assert.equal(new Set(methods.map(symbol => symbol.symbolId)).size, 4);
+    assert.equal((await find(factoryFile)).reason, "ambiguous_symbol");
+    for (const method of methods) {
+        const result = await find(factoryFile, { symbolId: method.symbolId });
+        assert.equal(result.status, "ok");
+        assert.equal(result.target.qualifiedName, method.qualifiedName);
+    }
+
+    const localLabel = "method recoveryOnly";
+    for (const miss of [await find(factoryFile, { symbolLabel: localLabel }), await exactOutline(localLabel)]) {
+        assert.equal(miss.status, "not_found");
+        assert.equal(miss.reason, "missing_symbol");
+        const action = miss.recommendedNextAction;
+        assert.equal(action?.tool, "search_codebase");
+        assert.equal(action.args.path, root);
+        const operators = parseSearchOperators(action.args.query);
+        assert.deepEqual(operators.path, [factoryFile]);
+        assert.deepEqual(operators.must, ["recoveryOnly"]);
+    }
+    assert.equal((await find(factoryFile, { symbolId: "unknown-id" })).recommendedNextAction, undefined);
+
+    const control = await find(interfaceFile);
+    assert.equal(control.status, "ok");
+    assert.equal(control.recommendedNextAction, undefined);
+    assert.equal(control.target.qualifiedName, `WorkspaceSession.${name}`);
+    assert.deepEqual(control.references.map((ref: { file: string; owningSymbol: { symbolId: string }; evidenceClass: string }) => [
+        ref.file, ref.owningSymbol.symbolId, ref.evidenceClass,
+    ]), [
+        ...methods.map(method => [factoryFile, method.symbolId, "published_source_text"]),
+        [interfaceFile, control.target.symbolId, "published_source_text"],
+    ]);
 });
 
 function sha256(value: string): string {

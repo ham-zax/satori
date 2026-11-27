@@ -2,6 +2,7 @@ import * as path from "path";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import { compareContractStrings } from "@satori-code/core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
+import { parseSearchOperators } from "./search-query-planning.js";
 import type {
     CallGraphHint,
     SearchChunkResult,
@@ -757,6 +758,30 @@ export function extractIdentifierFromSymbolLabel(label: string | null | undefine
     ]);
     const identifiers = label.match(/\b[A-Za-z_$][\w$]*\b/g) || [];
     return identifiers.find((identifier) => !keywordLike.has(identifier));
+}
+
+export function buildMissingSymbolSourceSearchHint(
+    codebaseRoot: string,
+    file: string,
+    symbolLabel?: string,
+): { recommendedNextAction?: SearchRecommendedNextAction } {
+    const identifier = extractIdentifierFromSymbolLabel(symbolLabel);
+    if (!identifier || symbolLabel?.trim().split(/\s+/).at(-1) !== identifier) {
+        return {};
+    }
+    const query = `path:${JSON.stringify(file)} must:${JSON.stringify(identifier)}`;
+    // Offer the handoff only if the bounded query parser preserves both restrictions.
+    const operators = parseSearchOperators(query);
+    if (operators.path[0] !== file || operators.must[0] !== identifier) {
+        return {};
+    }
+    return {
+        recommendedNextAction: {
+            tool: "search_codebase",
+            args: { path: codebaseRoot, query, scope: "mixed" },
+            reason: "Search this file for the requested identifier in source.",
+        },
+    };
 }
 
 export function buildCallerSearchTerm(candidate: string | null | undefined): string | undefined {

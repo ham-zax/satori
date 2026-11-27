@@ -165,6 +165,61 @@ test('module object callable properties have static owners and UTF-8 source span
     assert.deepEqual(result.symbols.find(symbol => symbol.name === 'run')?.parentQualifiedNamePath, []);
 });
 
+test('direct factory returns qualify callable properties under the owning symbol', () => {
+    const content = `
+export function createLive() {
+    const local = () => ({ execute() {} });
+    function nested() { return { execute() {} }; }
+    [1].map(() => ({ unbound() {} }));
+    if (local) return { async execute() { return "café"; }, [String(nested())]() {} } as const;
+    return {};
+}
+export const createPreview = () => ({ async execute() { return "preview"; } } satisfies Preview);
+export class Factory {
+    create() { return { execute() { return "class"; } }; }
+}
+interface Preview { execute(): Promise<string> }
+`;
+    const result = analyzeWithOxc({ content, language: 'typescript', relativePath: 'factories.ts' });
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.symbols.filter(symbol => symbol.name === 'execute').map(symbol => [
+        symbol.qualifiedName, symbol.parentQualifiedNamePath,
+    ]), [
+        ['createLive.local.execute', ['createLive', 'local']],
+        ['createLive.nested.execute', ['createLive', 'nested']],
+        ['createLive.execute', ['createLive']],
+        ['createPreview.execute', ['createPreview']],
+        ['Factory.create.execute', ['Factory', 'create']],
+        ['Preview.execute', ['Preview']],
+    ]);
+    const method = result.symbols.find(symbol => symbol.qualifiedName === 'createLive.execute');
+    assert.ok(method);
+    assert.equal(Buffer.from(content).subarray(method.span.startByte, method.span.endByte).toString(),
+        'async execute() { return "café"; }');
+    assert.ok(!result.symbols.some(symbol => symbol.name === 'unbound'));
+});
+
+test('owned object methods scope descendants and anonymous callbacks cut that scope', async () => {
+    const content = `
+function createApp() {
+    return { execute() {
+        function helper() {}
+        const nested = () => ({ run() {} });
+        consume(() => { function detached() {} const factory = () => ({ hidden() {} }); });
+    } };
+}
+const tool = { execute: () => { function moduleHelper() {} } };
+function outer() { consume(() => { function outside() {} }); }
+`;
+    const result = await createLanguageAnalysisService().analyze({ content, language: 'typescript', relativePath: 'scope.ts' });
+    const names = result.symbols.map(symbol => symbol.qualifiedName);
+    for (const name of ['createApp.execute.helper', 'createApp.execute.nested.run', 'tool.execute.moduleHelper', 'detached', 'outside']) {
+        assert.ok(names.includes(name), `${name}: ${names.join(', ')}`);
+    }
+    assert.ok(!names.includes('createApp.execute.detached'));
+    assert.ok(!names.includes('outer.outside'));
+});
+
 test('object ownership does not cross nested, anonymous, local or dynamic property scopes', () => {
     const content = `
 const key = "dynamic";
@@ -186,6 +241,6 @@ function run() { const local = { localMethod() { return 1; } }; }
     const result = analyzeWithOxc({ content, language: 'typescript', relativePath: 'tool.ts' });
     assert.equal(result.complete, true);
     assert.deepEqual(result.symbols.filter(symbol => symbol.kind === 'method').map(symbol => symbol.qualifiedName), ['tool.execute']);
-    assert.deepEqual(result.symbols.find(symbol => symbol.name === 'helper')?.parentQualifiedNamePath, []);
+    assert.deepEqual(result.symbols.find(symbol => symbol.name === 'helper')?.parentQualifiedNamePath, ['tool', 'execute']);
     assert.ok(!result.symbols.some(symbol => ['dynamic', 'hidden', 'anonymous', 'unbound', 'defaultAnonymous', 'localMethod', 'blockMethod'].includes(symbol.name)));
 });

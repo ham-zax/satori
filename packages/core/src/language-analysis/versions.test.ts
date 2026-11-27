@@ -116,7 +116,7 @@ test('installed parser versions drive parser and extractor identity', () => {
 
     assert.ok(LANGUAGE_PARSER_VERSION.startsWith(`${composedParser}+`));
     assert.match(LANGUAGE_PARSER_VERSION, /\+cbm-extended-(present|absent)$/);
-    assert.equal(SYMBOL_EXTRACTOR_VERSION, `language-analysis-v24+${LANGUAGE_PARSER_VERSION}`);
+    assert.equal(SYMBOL_EXTRACTOR_VERSION, `language-analysis-v25+${LANGUAGE_PARSER_VERSION}`);
 
     const components = LANGUAGE_PARSER_VERSION.split('+');
     assert.deepEqual(components.slice(0, -1), [
@@ -140,7 +140,8 @@ test('parser version changes drive parser and extractor identity without touchin
     });
 
     assert.notEqual(changedParser, baselineParser);
-    assert.notEqual(`language-analysis-v24+${changedParser}`, SYMBOL_EXTRACTOR_VERSION);
+    const suffix = LANGUAGE_PARSER_VERSION.slice(baselineParser.length);
+    assert.notEqual(`language-analysis-v25+${changedParser}${suffix}`, SYMBOL_EXTRACTOR_VERSION);
     assert.equal(
         RELATIONSHIP_BUILDER_VERSION,
         composeRelationshipBuilderVersion({

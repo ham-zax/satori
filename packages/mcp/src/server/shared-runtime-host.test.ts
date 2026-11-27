@@ -1291,3 +1291,83 @@ test("acquireLifecycleLock release verifies inode identity and tolerates already
     fs.unlinkSync(lockPath);
     assert.doesNotThrow(() => held2.release());
 });
+
+test("forced socket-host shutdown waits for a disconnected draining session before tearing down the host", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-drain-host-"));
+    fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = root;
+    const runtimeEntry = path.resolve("dist/index.js");
+    const runtimeEnv = env(root);
+    const identity = buildSharedRuntimeIdentity(runtimeEntry, runtimeEnv);
+    const runtimeConfig = config(root);
+    const runtimeHost = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, POTION_DIMENSION),
+        "host",
+    );
+    const paths = resolveSharedRuntimePaths(identity, runtimeEnv);
+    const socketHost = new SharedRuntimeSocketHost(runtimeHost, identity, paths, 60_000);
+    const originalManageIndex = toolRegistry.manage_index!;
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let runtimeHostShutdownCalled = false;
+    const originalHostShutdown = runtimeHost.shutdown.bind(runtimeHost);
+    runtimeHost.shutdown = async () => {
+        runtimeHostShutdownCalled = true;
+        return originalHostShutdown();
+    };
+    toolRegistry.manage_index = {
+        ...originalManageIndex,
+        execute: async () => {
+            markStarted();
+            await handlerGate;
+            return { content: [{ type: "text", text: "{}" }] };
+        },
+    };
+    let peerBridge: Awaited<ReturnType<typeof createBridge>> | undefined;
+    let disconnectingBridge: Awaited<ReturnType<typeof createBridge>> | undefined;
+    t.after(async () => {
+        releaseHandler();
+        toolRegistry.manage_index = originalManageIndex;
+        await closeBridgeQuietly(disconnectingBridge);
+        await closeBridgeQuietly(peerBridge);
+        await socketHost.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    await socketHost.start();
+    const workspace = path.join(root, "repo");
+    fs.mkdirSync(workspace, { recursive: true });
+    const bridgeEnv = { ...runtimeEnv, SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspace]) };
+    disconnectingBridge = await createBridge(runtimeEntry, bridgeEnv);
+    peerBridge = await createBridge(runtimeEntry, bridgeEnv);
+
+    const inflight = disconnectingBridge.request("tools/call", {
+        name: "manage_index",
+        arguments: { action: "status", path: workspace },
+    }).catch(() => undefined);
+    await started;
+
+    // Disconnect the first bridge while its tool handler is still blocked.
+    await closeBridgeQuietly(disconnectingBridge);
+    disconnectingBridge = undefined;
+    // Peer session remains usable while the disconnected session drains.
+    assert.equal(((await peerBridge.request("tools/list")).result?.tools?.length ?? 0) > 0, true);
+
+    let forcedDone = false;
+    const forced = socketHost.shutdown().then(() => { forcedDone = true; });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(forcedDone, false, "forced shutdown must wait for draining session");
+    assert.equal(runtimeHostShutdownCalled, false, "runtimeHost.shutdown must not run before draining session settles");
+
+    releaseHandler();
+    await Promise.all([inflight, forced]);
+    assert.equal(forcedDone, true);
+    assert.equal(runtimeHostShutdownCalled, true);
+    peerBridge = undefined;
+});

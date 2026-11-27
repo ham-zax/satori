@@ -41,6 +41,6 @@ export const continueSearchTool: McpTool = {
                 isError: true,
             };
         }
-        return ctx.toolHandlers.handleContinueSearch(parsed.data);
+        return ctx.toolHandlers.handleContinueSearch(parsed.data, ctx.requestSignal);
     },
 };

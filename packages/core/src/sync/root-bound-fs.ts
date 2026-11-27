@@ -513,10 +513,11 @@ export async function readFileHandleExactly(
     handle: fsp.FileHandle,
     expectedSize: number,
     measurementObservation?: SourceMeasurementObservation,
-    options: { deferSuccessfulObservationOutcome?: boolean } = {},
+    options: { deferSuccessfulObservationOutcome?: boolean; signal?: AbortSignal } = {},
 ): Promise<Buffer> {
     let totalBytes = 0;
     try {
+        options.signal?.throwIfAborted();
         if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
             throw new Error(`Observed file size is invalid: ${expectedSize}`);
         }
@@ -525,6 +526,7 @@ export async function readFileHandleExactly(
         // probe is the whole read, so an empty file still costs one read.
         const buffer = Buffer.allocUnsafe(expectedSize + 1);
         while (totalBytes < buffer.length) {
+            options.signal?.throwIfAborted();
             const { bytesRead } = await handle.read(
                 buffer,
                 totalBytes,
@@ -540,6 +542,7 @@ export async function readFileHandleExactly(
                 endByte: totalBytes,
                 basis: 'stream_chunk',
             });
+            options.signal?.throwIfAborted();
             if (totalBytes > expectedSize) {
                 throw new RootBoundFileError(
                     'source_changed_during_inspection',
@@ -547,6 +550,7 @@ export async function readFileHandleExactly(
                 );
             }
         }
+        options.signal?.throwIfAborted();
         if (totalBytes !== expectedSize) {
             throw new RootBoundFileError(
                 'source_changed_during_inspection',

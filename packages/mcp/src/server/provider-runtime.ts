@@ -305,6 +305,8 @@ export class ProviderRuntime {
     private readonly indexMaintenanceCoordinator: IndexMaintenanceCoordinator;
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
+    private readonly pendingBootstraps = new Set<Promise<void>>();
+    private shutdownStarted = false;
     private sharedVectorBackendKey: string | null = null;
     private sharedVectorBackendPromise: Promise<VectorDatabase> | null = null;
     private activeContexts: ToolContext[] = [];
@@ -470,7 +472,18 @@ export class ProviderRuntime {
         return missing.length > 0 ? createMissingConfigIssue(missing) : null;
     }
 
+    private trackPendingBootstrap(promise: Promise<ToolContext>): Promise<ToolContext> {
+        const settled = promise.then(() => undefined, () => undefined).finally(() => {
+            this.pendingBootstraps.delete(settled);
+        });
+        this.pendingBootstraps.add(settled);
+        return promise;
+    }
+
     public async requireToolContext(operation: ProviderBackedOperation): Promise<ToolContext | MissingProviderConfigIssue> {
+        if (this.shutdownStarted) {
+            throw new Error("ProviderRuntime is shutting down.");
+        }
         const validation = this.validate(operation);
         if (validation) {
             return validation;
@@ -487,25 +500,28 @@ export class ProviderRuntime {
                 return this.embeddingRuntimePromise;
             }
             if (!this.vectorRuntimePromise) {
-                this.vectorRuntimePromise = this.createRuntime(false).catch((error) => {
+                this.vectorRuntimePromise = this.trackPendingBootstrap(this.createRuntime(false).catch((error) => {
                     this.vectorRuntimePromise = null;
                     throw error;
-                });
+                }));
             }
             return this.vectorRuntimePromise;
         }
 
         if (!this.embeddingRuntimePromise) {
-            this.embeddingRuntimePromise = this.createRuntime(true).catch((error) => {
+            this.embeddingRuntimePromise = this.trackPendingBootstrap(this.createRuntime(true).catch((error) => {
                 this.embeddingRuntimePromise = null;
                 throw error;
-            });
+            }));
         }
         return this.embeddingRuntimePromise;
     }
 
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
         const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
+        if (this.shutdownStarted) {
+            throw new Error("ProviderRuntime shut down during bootstrap.");
+        }
         const embedding = await this.createEmbeddingProvider(bootstrap);
         let vectorDatabase: VectorDatabase | null = null;
         let vectorBackendTrackedInFlight = false;
@@ -514,12 +530,18 @@ export class ProviderRuntime {
         let reranker: Reranker | null = null;
         let toolHandlers: ToolHandlers | null = null;
         try {
+            if (this.shutdownStarted) {
+                throw new Error("ProviderRuntime shut down during bootstrap.");
+            }
             vectorDatabase = await this.acquireSharedVectorBackend(bootstrap);
             this.inFlightVectorBackendConsumers.set(
                 vectorDatabase,
                 (this.inFlightVectorBackendConsumers.get(vectorDatabase) ?? 0) + 1,
             );
             vectorBackendTrackedInFlight = true;
+            if (this.shutdownStarted) {
+                throw new Error("ProviderRuntime shut down during bootstrap.");
+            }
             context = new Context({
                 embedding,
                 vectorDatabase,
@@ -585,6 +607,9 @@ export class ProviderRuntime {
                 embeddingCapable: bootstrap.embeddingCapable,
                 watcherEnabled: this.watchSyncEnabled,
             });
+            if (this.shutdownStarted) {
+                throw new Error("ProviderRuntime shut down during bootstrap.");
+            }
 
             const toolContext = {
                 context,
@@ -880,6 +905,14 @@ export class ProviderRuntime {
     }
 
     public async shutdown(): Promise<void> {
+        this.shutdownStarted = true;
+        // Wait for any in-flight bootstrap to settle (and run its own cleanup
+        // if it observed shutdownStarted) before tearing down active resources.
+        while (this.pendingBootstraps.size > 0) {
+            await Promise.all([...this.pendingBootstraps]);
+        }
+        this.embeddingRuntimePromise = null;
+        this.vectorRuntimePromise = null;
         await this.drainDetachedMutationCompletions();
         // Synchronization can still use shared providers until every context has drained.
         await Promise.all(this.activeContexts.map(async (toolContext) => {

@@ -82,8 +82,10 @@ export async function validateCompletionProof(args: {
     codebasePath: string;
     getCurrentPublication?: PublicationProofReader;
     onProbeError?: (error: unknown) => void;
+    signal?: AbortSignal;
 }): Promise<CompletionProofValidationResult> {
-    const { codebasePath, getCurrentPublication, onProbeError } = args;
+    const { codebasePath, getCurrentPublication, onProbeError, signal } = args;
+    signal?.throwIfAborted();
     if (typeof getCurrentPublication !== "function") {
         return { outcome: "probe_failed", reason: "probe_failed" };
     }
@@ -92,9 +94,13 @@ export async function validateCompletionProof(args: {
     try {
         raw = await getCurrentPublication(codebasePath);
     } catch (error) {
+        if (signal?.aborted) {
+            throw error;
+        }
         onProbeError?.(error);
         return { outcome: "probe_failed", reason: "probe_failed" };
     }
+    signal?.throwIfAborted();
     if (!isRecord(raw)) return { outcome: "stale_local", reason: "invalid_payload" };
     if (raw.status === "missing") return { outcome: "stale_local", reason: "missing_publication" };
     if (raw.status === "requires_reindex") return { outcome: "stale_local", reason: "requires_reindex" };

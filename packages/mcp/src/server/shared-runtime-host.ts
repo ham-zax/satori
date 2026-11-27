@@ -109,6 +109,12 @@ export class SharedRuntimeSocketHost {
     private readonly server: net.Server;
     private readonly sessions = new Set<McpSession>();
     /**
+     * Sessions whose transport closed while an operation was still active.
+     * Kept tracked until their drain settles so forced host shutdown never
+     * disposes shared providers or publication state underneath them.
+     */
+    private readonly drainingSessions = new Set<McpSession>();
+    /**
      * Sockets that connected but have not attached a session yet. Idle
      * shutdown must not close the listener while one of these can still
      * become a session, and forced shutdown must destroy them so listener
@@ -385,7 +391,11 @@ export class SharedRuntimeSocketHost {
             if (released) return;
             released = true;
             this.sessions.delete(session);
-            void session.shutdown().finally(() => this.scheduleIdleShutdown());
+            this.drainingSessions.add(session);
+            void session.shutdown().finally(() => {
+                this.drainingSessions.delete(session);
+                this.scheduleIdleShutdown();
+            });
         };
         const transport = new BoundedSocketTransport(socket, release, trailing);
         this.sessions.add(session);
@@ -410,6 +420,7 @@ export class SharedRuntimeSocketHost {
         if (
             this.closing
             || this.sessions.size > 0
+            || this.drainingSessions.size > 0
             || this.pendingHandshakes.size > 0
             || this.idleTimer
         ) {
@@ -452,6 +463,7 @@ export class SharedRuntimeSocketHost {
                 const activity = this.runtimeHost.getActivity();
                 if (
                     this.sessions.size > 0
+                    || this.drainingSessions.size > 0
                     || this.pendingHandshakes.size > 0
                     || activity.sessions > 0
                     || activity.operations > 0
@@ -477,8 +489,11 @@ export class SharedRuntimeSocketHost {
             const serverClosed = new Promise<void>((resolve) => {
                 this.server.close(() => resolve());
             });
-            await Promise.all([...this.sessions].map((session) => session.shutdown()));
+            await Promise.all([
+                ...new Set([...this.sessions, ...this.drainingSessions]),
+            ].map((session) => session.shutdown()));
             this.sessions.clear();
+            this.drainingSessions.clear();
             await serverClosed;
             await this.runtimeHost.shutdown();
             this.unsubscribeActivity();

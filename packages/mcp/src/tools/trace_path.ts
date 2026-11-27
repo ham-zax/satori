@@ -74,6 +74,6 @@ export const tracePathTool: McpTool = {
             throw error;
         }
         const input = { ...parsed.data, path: canonicalPath };
-        return ctx.toolHandlers.handleTracePath(input);
+        return ctx.toolHandlers.handleTracePath(input, ctx.requestSignal);
     },
 };

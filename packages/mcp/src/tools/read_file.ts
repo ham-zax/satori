@@ -664,6 +664,7 @@ export const readFileTool: McpTool = {
             : undefined;
 
         try {
+            ctx.requestSignal?.throwIfAborted();
             const resolvedPath = path.resolve(input.path);
             const boundRoot = input.codebaseRoot
                 ? ctx.workspacePolicy.authorizeRoot(input.codebaseRoot).canonicalPath
@@ -792,7 +793,9 @@ export const readFileTool: McpTool = {
                     });
                 }
 
+                ctx.requestSignal?.throwIfAborted();
                 await touchResolvedCodebaseRoot(absolutePath, executionContext.context, allowedRoot);
+                ctx.requestSignal?.throwIfAborted();
                 const result = await executionContext.context.toolHandlers.composeSymbolContext(
                     composeSymbolContextRequest({
                         root: allowedRoot,
@@ -801,7 +804,9 @@ export const readFileTool: McpTool = {
                         operation,
                         ...(input.format !== undefined ? { format: input.format } : {}),
                     }),
+                    ctx.requestSignal,
                 );
+                ctx.requestSignal?.throwIfAborted();
                 if (result.status === "ok") {
                     const envelope = composePublicSymbolContextEnvelope({
                         effectiveRequest: operation.effectiveRequest,
@@ -937,6 +942,7 @@ export const readFileTool: McpTool = {
                     requestedPath: resolvedPath,
                     publishedRelativePaths,
                     maxBytes,
+                    signal: ctx.requestSignal,
                     sourceMeasurement: {
                         owner: "validation",
                         filePath: absolutePath,
@@ -1146,7 +1152,10 @@ export const readFileTool: McpTool = {
                             file: relativeFile,
                             start_line: totalLines === 0 ? undefined : startLine,
                             end_line: totalLines === 0 ? undefined : endLine,
-                        }, ctx.workspacePolicy, { requireCurrentSource: true });
+                        }, ctx.workspacePolicy, {
+                            requireCurrentSource: true,
+                            ...(ctx.requestSignal ? { signal: ctx.requestSignal } : {}),
+                        });
                         const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
                         const status = parsedOutline?.status;
                         if (status === "ok" || status === "not_ready" || status === "requires_reindex" || status === "unsupported" || status === "ambiguous") {
@@ -1166,7 +1175,10 @@ export const readFileTool: McpTool = {
                             hints = parsedOutline.hints;
                         }
                     }
-                } catch {
+                } catch (error) {
+                    if (ctx.requestSignal?.aborted) {
+                        throw error;
+                    }
                     outlineStatus = "requires_reindex";
                 }
             }
@@ -1202,6 +1214,7 @@ export const readFileTool: McpTool = {
             };
             }
         } catch (error) {
+            ctx.requestSignal?.throwIfAborted();
             if (error instanceof WorkspaceAuthorizationError) {
                 return readFileAuthorizationDenial({
                     reason: error.code.toLowerCase(),

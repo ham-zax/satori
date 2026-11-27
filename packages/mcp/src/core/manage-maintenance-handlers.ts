@@ -358,7 +358,12 @@ export class ManageMaintenanceHandlers {
         }
     }
 
-    public async handleGetIndexingStatus(args: ToolArgs, rereadAfterTerminal = false): Promise<ToolTextResponse> {
+    public async handleGetIndexingStatus(
+        args: ToolArgs,
+        rereadAfterTerminal = false,
+        signal?: AbortSignal,
+    ): Promise<ToolTextResponse> {
+        signal?.throwIfAborted();
         const codebasePath = typeof args.path === "string" ? args.path : "";
         const requestedDetail = args.detail;
         const detail: ManageIndexStatusDetail = requestedDetail === "capabilities"
@@ -393,6 +398,7 @@ export class ManageMaintenanceHandlers {
 
             const liveMutation = this.host.mutationRuntime.getActiveMutation(absolutePath);
             const preparedTrackedRootState = await this.host.prepareStatusTrackedRootRead(absolutePath);
+            signal?.throwIfAborted();
             const trackedRootState = preparedTrackedRootState.state === "indexing"
                 && liveMutation?.action === "sync"
                 && preparedTrackedRootState.searchableGenerationAvailable
@@ -444,6 +450,7 @@ export class ManageMaintenanceHandlers {
                     0,
                     { preparedPublication: trackedRootState.publication },
                 );
+                signal?.throwIfAborted();
                 sourceFreshness = freshnessDecision.sourceFreshness;
             }
 
@@ -608,22 +615,26 @@ export class ManageMaintenanceHandlers {
             let structuralCoverage: ManageStructuralCoverage | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
+                signal?.throwIfAborted();
                 const lease = trackedRootState.state === 'ready'
                     ? this.host.acquirePublicationLease(envelopePath)
                     : undefined;
-                const leaseMatchesReadiness = Boolean(
-                    lease
-                    && trackedRootState.state === 'ready'
-                    && lease.id === trackedRootState.publication.id
-                    && await this.host.isPublicationAdmitted(lease)
-                );
-                const navigation = leaseMatchesReadiness && lease
-                    ? this.host.getPublicationNavigationAddress(lease)
-                    : null;
                 try {
+                    signal?.throwIfAborted();
+                    const leaseMatchesReadiness = Boolean(
+                        lease
+                        && trackedRootState.state === 'ready'
+                        && lease.id === trackedRootState.publication.id
+                        && await this.host.isPublicationAdmitted(lease)
+                    );
+                    signal?.throwIfAborted();
+                    const navigation = leaseMatchesReadiness && lease
+                        ? this.host.getPublicationNavigationAddress(lease)
+                        : null;
                     const registryRead = navigation
                         ? await perfSpan("status.symbol_registry_read", () => this.host.readPublicationSymbolRegistry(lease!))
                         : undefined;
+                    signal?.throwIfAborted();
                     const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
                         trackedRootState.state === 'ready'
                             && trackedRootState.navigationStatus === 'valid'
@@ -746,7 +757,8 @@ export class ManageMaintenanceHandlers {
                 && TERMINAL_OPERATION_PHASES.has(operation.phase)
                 && (operation.id !== latestOperation?.id || operation.phase !== latestOperation.phase)
             ) {
-                return this.handleGetIndexingStatus(args, true);
+                signal?.throwIfAborted();
+                return this.handleGetIndexingStatus(args, true, signal);
             }
             const pendingSync = activeMutation?.action === "sync"
                 ? pendingSyncProjection(operation, activeMutation)
@@ -793,6 +805,9 @@ export class ManageMaintenanceHandlers {
                 },
             );
         } catch (error: unknown) {
+            if (signal?.aborted) {
+                throw error;
+            }
             return this.host.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${formatUnknownError(error)}`, { detail });
         }
     }

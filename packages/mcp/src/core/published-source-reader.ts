@@ -91,6 +91,7 @@ export async function readAuthorizedPublishedSource(input: {
     requestedPath: string;
     publishedRelativePaths: ReadonlySet<string>;
     maxBytes?: number;
+    signal?: AbortSignal;
     onAuthorized?: () => Promise<void> | void;
     sourceMeasurement?: {
         owner: SourceIoOwner;
@@ -98,6 +99,7 @@ export async function readAuthorizedPublishedSource(input: {
         scanKind: "complete" | "partial";
     };
 }): Promise<AuthorizedSourceRead> {
+    input.signal?.throwIfAborted();
     const maxBytes = Math.max(1, input.maxBytes ?? READ_FILE_MAX_BYTES_DEFAULT);
     const authorized = await openAuthorizedPublishedFile({
         workspacePolicy: input.workspacePolicy,
@@ -107,6 +109,7 @@ export async function readAuthorizedPublishedSource(input: {
     });
     const { handle, codebaseRoot, absolutePath, relativePath, observedStat, identity } = authorized;
     try {
+        input.signal?.throwIfAborted();
         // Hard pre-read byte ceiling: deny before allocating a whole-file
         // buffer or reading any content.
         if (observedStat.size > maxBytes) {
@@ -118,6 +121,7 @@ export async function readAuthorizedPublishedSource(input: {
         }
 
         await input.onAuthorized?.();
+        input.signal?.throwIfAborted();
 
         const measurementObservation = input.sourceMeasurement
             ? beginSourceMeasurementObservation({
@@ -139,13 +143,18 @@ export async function readAuthorizedPublishedSource(input: {
                 handle,
                 observedStat.size,
                 measurementObservation,
-                { deferSuccessfulObservationOutcome: true },
+                {
+                    deferSuccessfulObservationOutcome: true,
+                    ...(input.signal ? { signal: input.signal } : {}),
+                },
             );
             readSucceeded = true;
+            input.signal?.throwIfAborted();
 
             await verifyStableFileObservation(handle, absolutePath, codebaseRoot, observedStat, {
                 rejectFinalSymlink: true,
             });
+            input.signal?.throwIfAborted();
 
             if (measurementObservation) {
                 finishSourceMeasurementObservation({

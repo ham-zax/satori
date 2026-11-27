@@ -855,3 +855,124 @@ test("session ToolHandlers and localHandlers wire reclaimIdleMemoryForMutation t
 
     assert.equal(reclaimCalls, 2);
 });
+
+test("concurrent McpSession.shutdown callers join one active-operation drain", async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-concurrent-shutdown-"));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    const runtimeConfig = config();
+    const host = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, 1024),
+        "cli",
+    );
+    const connected = await connectClient(host, "concurrent-shutdown", stateRoot);
+    const originalTool = toolRegistry.manage_index!;
+    let releaseOperation!: () => void;
+    const operationGate = new Promise<void>((resolve) => { releaseOperation = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    toolRegistry.manage_index = {
+        ...originalTool,
+        execute: async () => {
+            markStarted();
+            await operationGate;
+            return { content: [{ type: "text", text: "{}" }] };
+        },
+    };
+    t.after(async () => {
+        releaseOperation();
+        toolRegistry.manage_index = originalTool;
+        await connected.client.close().catch(() => undefined);
+        await connected.session.shutdown();
+        await host.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+
+    const call = connected.client.callTool({
+        name: "manage_index",
+        arguments: { action: "status", path: stateRoot },
+    }).catch(() => undefined);
+    await started;
+
+    let firstDone = false;
+    let secondDone = false;
+    const first = connected.session.shutdown().then(() => { firstDone = true; });
+    const second = connected.session.shutdown().then(() => { secondDone = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(firstDone, false);
+    assert.equal(secondDone, false);
+
+    releaseOperation();
+    await Promise.all([call, first, second]);
+    assert.equal(firstDone, true);
+    assert.equal(secondDone, true);
+    assert.deepEqual(host.getActivity(), { sessions: 0, operations: 0 });
+});
+
+test("aborting a session waiting on shared provider bootstrap settles immediately without cancelling peer bootstrap", async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-abort-bootstrap-wait-"));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    const runtimeConfig = {
+        ...config(),
+        voyageKey: "test-key",
+        milvusEndpoint: "http://127.0.0.1:19530",
+    };
+    const host = new SharedRuntimeHost(
+        runtimeConfig,
+        buildRuntimeIndexFingerprint(runtimeConfig, 1024),
+        "cli",
+    );
+    const first = await connectClient(host, "waiter-aborted", stateRoot);
+    const second = await connectClient(host, "waiter-peer", stateRoot);
+    const providerRuntime = host.getProviderRuntime() as unknown as {
+        createRuntime(requireEmbedding: boolean): Promise<ToolContext>;
+    };
+    const originalCreateRuntime = providerRuntime.createRuntime.bind(providerRuntime);
+    let releaseBootstrap!: () => void;
+    const bootstrapGate = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+    let markBootstrapStarted!: () => void;
+    const bootstrapStarted = new Promise<void>((resolve) => { markBootstrapStarted = resolve; });
+    let bootstrapCount = 0;
+    providerRuntime.createRuntime = async () => {
+        bootstrapCount += 1;
+        markBootstrapStarted();
+        await bootstrapGate;
+        const firstResources = (first.session as unknown as { resources: { toolContext: ToolContext } }).resources;
+        return firstResources.toolContext;
+    };
+    t.after(async () => {
+        releaseBootstrap();
+        providerRuntime.createRuntime = originalCreateRuntime;
+        await first.client.close().catch(() => undefined);
+        await first.session.shutdown();
+        await second.client.close().catch(() => undefined);
+        await second.session.shutdown();
+        await host.shutdown();
+        if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+
+    const firstResources = (first.session as unknown as { resources: { toolContext: ToolContext } }).resources;
+    const secondResources = (second.session as unknown as { resources: { toolContext: ToolContext } }).resources;
+    const controller = new AbortController();
+    const firstWait = firstResources.toolContext.providerRuntime!.requireToolContext(
+        "embedding_vector",
+        { signal: controller.signal },
+    );
+    const secondWait = secondResources.toolContext.providerRuntime!.requireToolContext("embedding_vector");
+    await bootstrapStarted;
+
+    controller.abort(new Error("caller_aborted"));
+    await assert.rejects(firstWait, /caller_aborted/);
+    assert.equal(bootstrapCount, 1);
+
+    releaseBootstrap();
+    const peerContext = await secondWait;
+    assert.equal("code" in peerContext, false);
+    assert.equal(bootstrapCount, 1);
+});

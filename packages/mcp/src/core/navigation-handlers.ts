@@ -803,7 +803,8 @@ export class NavigationHandlers {
 
     constructor(private readonly host: NavigationHandlersHost) {}
 
-    public async handleTracePath(args: ToolArgs): Promise<ToolTextResponse> {
+    public async handleTracePath(args: ToolArgs, signal?: AbortSignal): Promise<ToolTextResponse> {
+        signal?.throwIfAborted();
         const requestedPath = String(args.path);
         const respond = (payload: Record<string, unknown>): ToolTextResponse => ({
             content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
@@ -849,7 +850,9 @@ export class NavigationHandlers {
                 maxDepth: Number(args.maxDepth),
                 maxVisitedNodes: Number(args.maxVisitedNodes),
                 maxTraversedEdges: Number(args.maxTraversedEdges),
+                ...(signal ? { signal } : {}),
             });
+            signal?.throwIfAborted();
             if (result.status === "missing_symbol") {
                 return respond({
                     status: "not_found", reason: "missing_symbol", symbol: result.symbol,
@@ -908,7 +911,7 @@ export class NavigationHandlers {
                     ? "One shortest path found in the selected Publication and relationship scope."
                     : "No path found within this Publication, path scope, relationship kinds, and traversal budgets.",
             });
-        });
+        }, { signal });
         return outcome.status === "completed"
             ? outcome.result
             : respond({ status: "not_ready", reason: "publication_read_not_admitted", path: requestedPath });
@@ -916,7 +919,9 @@ export class NavigationHandlers {
 
     public async handleArchitectureOverview(
         args: ToolArgs,
+        signal?: AbortSignal,
     ): Promise<ToolTextResponse> {
+        signal?.throwIfAborted();
         const absolutePathResult = typeof args.path === "string"
             ? requireAbsoluteFilesystemPath(args.path, "path")
             : { ok: false as const, path: "", message: "path is required." };
@@ -975,6 +980,7 @@ export class NavigationHandlers {
                 publication: lease,
                 navigationStatus: await this.host.getPublicationNavigationStatus(lease),
             };
+            signal?.throwIfAborted();
             let packageOwnership: PublicationPackageOwnership | null;
             try {
                 packageOwnership = this.host.getPublicationPackageOwnership(lease);
@@ -1019,6 +1025,7 @@ export class NavigationHandlers {
             }
 
             const manifest = await this.host.loadPreparedNavigationManifest(leasedRootState);
+            signal?.throwIfAborted();
             if (manifest.status !== "ok") {
                 return {
                     content: [{
@@ -1039,6 +1046,7 @@ export class NavigationHandlers {
                 leasedRootState,
                 manifest.manifestHash,
             );
+            signal?.throwIfAborted();
             if (compatibility.relationships.status !== "ok") {
                 return {
                     content: [{
@@ -1166,6 +1174,7 @@ export class NavigationHandlers {
                     }],
                 };
             }
+            signal?.throwIfAborted();
             writeBoundedLru(
                 this.architectureOverviewCache,
                 overviewCacheKey,
@@ -1178,7 +1187,7 @@ export class NavigationHandlers {
                 publicationId: lease.id,
                 freshnessDecision: leasedRootState.freshnessDecision,
             });
-        });
+        }, { signal });
 
         return outcome.status === "stale"
             ? {
@@ -1294,7 +1303,9 @@ export class NavigationHandlers {
                 publication: lease,
                 navigationStatus: await this.host.getPublicationNavigationStatus(lease),
             };
+            signal?.throwIfAborted();
             const manifest = await this.host.loadPreparedNavigationManifest(leasedRootState);
+            signal?.throwIfAborted();
             if (manifest.status !== "ok") {
                 return {
                     content: [{
@@ -1462,6 +1473,7 @@ export class NavigationHandlers {
                         requestedPath: path.resolve(leasedRootState.root.path, relativeFilePath),
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
+                        signal,
                     });
                     signal?.throwIfAborted();
                     const sourceSha256 = this.sourceDigestFor(
@@ -1557,7 +1569,7 @@ export class NavigationHandlers {
                     }),
                 }],
             };
-        });
+        }, { signal });
 
         return outcome.status === "stale"
             ? {
@@ -1907,6 +1919,7 @@ export class NavigationHandlers {
                         requestedPath: absoluteFile,
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
+                        signal,
                     });
                     sourceBytes = sourceRead.bytes;
                 } catch (error) {
@@ -1986,7 +1999,7 @@ export class NavigationHandlers {
             return {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
-            });
+            }, { signal });
             signal?.throwIfAborted();
             return outcome.status === 'stale'
                 ? {
@@ -2446,6 +2459,7 @@ export class NavigationHandlers {
                 codebaseRoot: string,
                 relativeFilePath: string,
             ): Promise<string[] | undefined> => {
+                signal?.throwIfAborted();
                 if (!candidateWithinRequestedSubdirectory(relativeFilePath, requestedSubdirectory)) {
                     return undefined;
                 }
@@ -2456,6 +2470,7 @@ export class NavigationHandlers {
                         requestedPath: path.resolve(codebaseRoot, relativeFilePath),
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
+                        signal,
                     });
                     const bytes = relativeFilePath === normalizedSymbolFile && sourceOptions?.publishedSource !== undefined
                         ? sourceOptions.publishedSource : sourceRead.bytes;
@@ -2477,6 +2492,7 @@ export class NavigationHandlers {
             const readExactPublishedSource = async (
                 relativeFilePath: string,
             ): Promise<ExactReferenceSourceRead> => {
+                signal?.throwIfAborted();
                 try {
                     const sourceRead = await readAuthorizedPublishedSource({
                         workspacePolicy,
@@ -2484,6 +2500,7 @@ export class NavigationHandlers {
                         requestedPath: path.resolve(effectiveRoot, relativeFilePath),
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
+                        signal,
                     });
                     return {
                         status: "ok",
@@ -2533,6 +2550,7 @@ export class NavigationHandlers {
                     requestedPath: absoluteSymbolFile,
                     publishedRelativePaths,
                     maxBytes: this.host.readFileMaxBytes,
+                    signal,
                 });
                 symbolSourceBytes = sourceRead.bytes;
             } catch (error) {
@@ -2701,6 +2719,7 @@ export class NavigationHandlers {
 
             const fileFreshnessByPath = new Map<string, NonNullable<CallGraphResponseEnvelope["nodes"][number]["freshness"]>>();
             for (const node of relationshipBackedGraph.nodes) {
+                signal?.throwIfAborted();
                 let freshness = fileFreshnessByPath.get(node.file);
                 if (!freshness) {
                     let sourceState: "fresh" | "stale" | "unknown" | "inconsistent" = "unknown";
@@ -2709,6 +2728,7 @@ export class NavigationHandlers {
                             workspacePolicy, codebaseRoot: effectiveRoot,
                             requestedPath: path.resolve(effectiveRoot, node.file), publishedRelativePaths,
                             maxBytes: this.host.readFileMaxBytes,
+                            signal,
                         });
                         sourceState = this.host.getRegistryFileFreshness({
                             symbols: registryState.registry.symbolsByFile.get(node.file) ?? [],
@@ -2756,7 +2776,8 @@ export class NavigationHandlers {
                 ? projectCallGraphEvidence(fullPayload, evidenceRequest)
                 : fullPayload;
             return { payload };
-            });
+            }, { signal });
+            signal?.throwIfAborted();
             return outcome.status === 'stale'
                 ? {
                     payload: buildSourceStateUnverifiedCallGraphPayload(
@@ -3036,6 +3057,7 @@ export class NavigationHandlers {
             codebaseRoot: string,
             relativeFilePath: string,
         ): Promise<string[] | undefined> => {
+            input.sourceOptions?.signal?.throwIfAborted();
             try {
                 const sourceRead = await readAuthorizedPublishedSource({
                     workspacePolicy,
@@ -3043,6 +3065,7 @@ export class NavigationHandlers {
                     requestedPath: path.resolve(codebaseRoot, relativeFilePath),
                     publishedRelativePaths,
                     maxBytes: this.host.readFileMaxBytes,
+                    signal: input.sourceOptions?.signal,
                 });
                 return sourceRead.bytes.toString("utf8").split(/\r?\n/);
             } catch (error) {

@@ -152,6 +152,9 @@ export const manageIndexTool: McpTool = {
                     : ctx;
             }
         } catch (error) {
+            if (ctx.requestSignal?.aborted) {
+                throw error;
+            }
             const diagnostic = classifyVectorBackendError(error);
             if (input.action === "status" && diagnostic) {
                 executionContext = ctx;
@@ -177,9 +180,11 @@ export const manageIndexTool: McpTool = {
             let response: ToolResponse;
             switch (input.action) {
                 case 'create':
+                    ctx.requestSignal?.throwIfAborted();
                     response = await executionContext.toolHandlers.handleIndexCodebase(input);
                     break;
                 case 'reindex':
+                    ctx.requestSignal?.throwIfAborted();
                     response = await executionContext.toolHandlers.handleReindexCodebase(input);
                     break;
                 case 'sync':
@@ -189,7 +194,10 @@ export const manageIndexTool: McpTool = {
                     );
                     break;
                 case 'status':
-                    response = await executionContext.toolHandlers.handleGetIndexingStatus(input);
+                    response = await executionContext.toolHandlers.handleGetIndexingStatus(
+                        input,
+                        ctx.requestSignal,
+                    );
                     if (statusProviderIssue) {
                         response = preferProviderIncompleteForStatus(
                             response,
@@ -203,6 +211,7 @@ export const manageIndexTool: McpTool = {
                     response = await executionContext.toolHandlers.handleCancelIndexOperation(input);
                     break;
                 case 'clear':
+                    ctx.requestSignal?.throwIfAborted();
                     response = await executionContext.toolHandlers.handleClearIndex(input);
                     break;
                 default:
@@ -216,6 +225,9 @@ export const manageIndexTool: McpTool = {
             }
             return response;
         } catch (error) {
+            if (ctx.requestSignal?.aborted) {
+                throw error;
+            }
             const diagnostic = classifyVectorBackendError(error);
             if (!diagnostic) {
                 throw error;

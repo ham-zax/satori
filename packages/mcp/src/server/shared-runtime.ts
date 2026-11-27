@@ -109,6 +109,27 @@ function workspaceIndexRequests(
     };
 }
 
+function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return promise;
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = (): void => {
+            reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        promise.then(
+            (value) => {
+                signal.removeEventListener("abort", onAbort);
+                resolve(value);
+            },
+            (error) => {
+                signal.removeEventListener("abort", onAbort);
+                reject(error);
+            },
+        );
+    });
+}
+
 class SessionProviderRuntime {
     private readonly contexts = new Map<ToolContext, ToolContext>();
     private readonly handlers = new Set<ToolHandlers>();
@@ -124,7 +145,12 @@ class SessionProviderRuntime {
         operation: ProviderBackedOperation,
         request: { signal?: AbortSignal } = {},
     ): Promise<ToolContext | MissingProviderConfigIssue> {
-        const shared = await this.providerRuntime.requireToolContext(operation);
+        request.signal?.throwIfAborted();
+        const shared = await awaitWithAbort(
+            this.providerRuntime.requireToolContext(operation),
+            request.signal,
+        );
+        request.signal?.throwIfAborted();
         if (isMissingProviderConfigIssue(shared)) {
             return shared;
         }
@@ -569,6 +595,7 @@ export class McpSession {
     private activeToolCalls = 0;
     private connected = false;
     private closed = false;
+    private shutdownPromise: Promise<void> | null = null;
     private resourcesReleased = false;
     private resourceReleasePromise: Promise<void> | null = null;
     private resolveResourceRelease: (() => void) | null = null;
@@ -698,8 +725,14 @@ export class McpSession {
         }, 60 * 60 * 1000);
     }
 
-    async shutdown(): Promise<void> {
-        if (this.closed) return;
+    shutdown(): Promise<void> {
+        if (!this.shutdownPromise) {
+            this.shutdownPromise = this.performShutdown();
+        }
+        return this.shutdownPromise;
+    }
+
+    private async performShutdown(): Promise<void> {
         this.closed = true;
         if (this.keepAliveTimer) {
             clearInterval(this.keepAliveTimer);

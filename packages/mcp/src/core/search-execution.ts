@@ -615,19 +615,23 @@ export async function runSearchExecution(
     // The overlay depends only on the query and the working tree, so every
     // attempt reuses one read. Indexed results are dropped only for dirty paths
     // it re-read; the rest keep their indexed evidence.
+    input.signal?.throwIfAborted();
     const dirtyOverlay = dirtyFilesNotFreshened
         ? await runDirtyOverlayPass({
             host,
             effectiveRoot: input.effectiveRoot,
             queryPlan: input.queryPlan,
             changedFiles: observedChangedFilesState.files,
+            signal: input.signal,
         })
         : { results: [], unreadPaths: new Set<string>() };
+    input.signal?.throwIfAborted();
     const rereadDirtyPaths = new Set(
         [...normalizedObservedChangedFiles].filter((relativePath) => !dirtyOverlay.unreadPaths.has(relativePath)),
     );
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        input.signal?.throwIfAborted();
         attemptsUsed = attempt + 1;
         const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
         const primarySettled = await runSemanticSearchPasses({
@@ -640,7 +644,9 @@ export async function runSearchExecution(
             retrievalFilter: input.retrievalFilter,
             candidateLimit,
             passDescriptors: [primaryDescriptor],
+            signal: input.signal,
         });
+        input.signal?.throwIfAborted();
         const primaryResult = primarySettled[0];
         const primaryEmbeddingDiagnostic = primaryResult.status === "rejected"
             ? host.classifyEmbeddingProviderError(primaryResult.reason)
@@ -699,6 +705,7 @@ export async function runSearchExecution(
         const passDescriptors: Array<{ id: SearchPassId; query: string }> = [primaryDescriptor];
         const passSettled = [...primarySettled];
         if (shouldExpand) {
+            input.signal?.throwIfAborted();
             const expandedDescriptor = { id: "expanded" as const, query: expandedQuery };
             passDescriptors.push(expandedDescriptor);
             passSettled.push(...await runSemanticSearchPasses({
@@ -711,7 +718,9 @@ export async function runSearchExecution(
                 retrievalFilter: input.retrievalFilter,
                 candidateLimit,
                 passDescriptors: [expandedDescriptor],
+                signal: input.signal,
             }));
+            input.signal?.throwIfAborted();
         }
 
         const successfulPasses: Array<{
@@ -859,6 +868,7 @@ export async function runSearchExecution(
             }
         }
 
+        input.signal?.throwIfAborted();
         const trackedLexical = !publicationOnlyStaleRead
             ? await runTrackedLexicalPass({
                 host,
@@ -868,8 +878,10 @@ export async function runSearchExecution(
                 scope: input.scope,
                 limit: candidateLimit,
                 exactRegistryFallback: input.exactRegistryFallbackForTrackedLexical,
+                signal: input.signal,
             })
             : { results: [], debug: undefined };
+        input.signal?.throwIfAborted();
         trackedLexicalDebug = trackedLexical.debug;
         if (trackedLexical.results.length > 0) {
             if (candidateSurvival) {
@@ -1030,13 +1042,16 @@ export async function runSearchExecution(
             mustLaneSkippedByPrimaryLimit = true;
         }
         if (shouldRunMustLane) {
+            input.signal?.throwIfAborted();
             const mustLane = await runMustConstraintLane({
                 host,
                 effectiveRoot: input.effectiveRoot,
                 mustTokens,
                 candidateBudget: retrievalPolicy.maxCandidateLimit,
                 retrievalFilter: input.retrievalFilter,
+                signal: input.signal,
             });
+            input.signal?.throwIfAborted();
             const laneResults = mustLane.laneResults;
             if (mustLane.outcome.status === "unsupported") {
                 searchWarningsSet.add(WARNING_CODES.MUST_CONJUNCTIVE_RETRIEVAL_UNAVAILABLE);

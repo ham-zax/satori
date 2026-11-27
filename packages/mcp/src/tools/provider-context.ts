@@ -82,12 +82,17 @@ export async function resolveVectorBackedToolContext(
     ctx: ToolContext,
     failureInput: NavigationProviderFailureInput
 ): Promise<ProviderContextResolution> {
+    ctx.requestSignal?.throwIfAborted();
     if (!ctx.providerRuntime) {
         return { ok: true, context: ctx };
     }
 
     try {
-        const providerContext = await ctx.providerRuntime.requireToolContext("vector_only");
+        const providerContext = await ctx.providerRuntime.requireToolContext(
+            "vector_only",
+            { signal: ctx.requestSignal },
+        );
+        ctx.requestSignal?.throwIfAborted();
         if (isMissingProviderConfigIssue(providerContext)) {
             return {
                 ok: false,
@@ -101,6 +106,9 @@ export async function resolveVectorBackedToolContext(
         }
         return { ok: true, context: providerContext };
     } catch (error) {
+        if (ctx.requestSignal?.aborted) {
+            throw error;
+        }
         const diagnostic = classifyVectorBackendError(error);
         if (!diagnostic) {
             throw error;

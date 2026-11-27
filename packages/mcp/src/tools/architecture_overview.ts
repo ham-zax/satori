@@ -112,6 +112,6 @@ export const architectureOverviewTool: McpTool = {
             limit: parsed.data.limit ?? 8,
             ...(parsed.data.subtree ? { subtree: parsed.data.subtree } : {}),
             ...(parsed.data.excludePaths ? { excludePaths: parsed.data.excludePaths } : {}),
-        });
+        }, ctx.requestSignal);
     },
 };

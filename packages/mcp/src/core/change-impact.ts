@@ -173,7 +173,10 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         // declaration it precedes when that declaration starts right after it.
         const sourceLines = ranges.some(range => range.count > 0)
             ? (publishedSource?.toString("utf8")
-                ?? await readFile(path.join(input.codebaseRoot, file), "utf8").catch(() => "")).split(/\r?\n/)
+                ?? await readFile(path.join(input.codebaseRoot, file), { encoding: "utf8", signal }).catch((error) => {
+                    if (signal?.aborted) throw error;
+                    return "";
+                })).split(/\r?\n/)
             : [];
         const isLeadingTrivia = (line: number) => {
             const text = sourceLines[line - 1]?.trim();

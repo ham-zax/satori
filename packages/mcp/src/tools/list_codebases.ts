@@ -92,11 +92,17 @@ export const listCodebasesTool: McpTool = {
         lines.push('## Codebases');
         lines.push('');
 
+        const signal = ctx.requestSignal;
+        signal?.throwIfAborted();
         let proofContext = ctx;
         let providerIncomplete: { missingEnv: string[] } | null = null;
         if (ctx.providerRuntime) {
             try {
-                const providerContext = await ctx.providerRuntime.requireToolContext("vector_only");
+                const providerContext = await ctx.providerRuntime.requireToolContext(
+                    "vector_only",
+                    { signal },
+                );
+                signal?.throwIfAborted();
                 if (isMissingProviderConfigIssue(providerContext)) {
                     // Provider gaps beat readiness narratives that require provider-backed validation.
                     providerIncomplete = { missingEnv: providerContext.missingEnv };
@@ -104,6 +110,9 @@ export const listCodebasesTool: McpTool = {
                     proofContext = providerContext;
                 }
             } catch (error) {
+                if (signal?.aborted) {
+                    throw error;
+                }
                 if (classifyVectorBackendError(error)) {
                     proofContext = ctx;
                 } else {
@@ -134,13 +143,40 @@ export const listCodebasesTool: McpTool = {
                 failed.push({ path: entry.path, reason });
             }
         } else {
-            const completionProofChecks = await Promise.all(readyCandidates.map(async (entry) => ({
-                entry,
-                proof: await validateCompletionProof({
-                    codebasePath: entry.path,
-                    getCurrentPublication: getPublicationProofReader(proofContext.context)
-                })
-            })));
+            const proofReader = getPublicationProofReader(proofContext.context);
+            const completionProofChecks: Array<{
+                entry: (typeof readyCandidates)[number];
+                proof: Awaited<ReturnType<typeof validateCompletionProof>>;
+            }> = new Array(readyCandidates.length);
+            let nextProofIndex = 0;
+            let proofAborted = false;
+            const settledProofs = await Promise.allSettled(Array.from(
+                { length: Math.min(LIST_CODEBASES_QUALITY_READ_CONCURRENCY, readyCandidates.length) },
+                async () => {
+                    while (!proofAborted && nextProofIndex < readyCandidates.length) {
+                        if (signal?.aborted) {
+                            proofAborted = true;
+                            signal.throwIfAborted();
+                        }
+                        const index = nextProofIndex++;
+                        const entry = readyCandidates[index]!;
+                        try {
+                            const proof = await validateCompletionProof({
+                                codebasePath: entry.path,
+                                getCurrentPublication: proofReader,
+                                signal,
+                            });
+                            completionProofChecks[index] = { entry, proof };
+                        } catch (error) {
+                            proofAborted = true;
+                            throw error;
+                        }
+                    }
+                },
+            ));
+            const proofFailure = settledProofs.find((result) => result.status === 'rejected');
+            if (proofFailure) throw proofFailure.reason;
+            signal?.throwIfAborted();
 
             for (const { entry, proof } of completionProofChecks) {
                 if (proof.outcome === "valid") {
@@ -176,6 +212,7 @@ export const listCodebasesTool: McpTool = {
             // Publication-local JSON registry used by manage_index summary.
             const qualityByPath = new Map<string, string>();
             const readQuality = async (item: (typeof byStatus.indexed)[number]): Promise<void> => {
+                signal?.throwIfAborted();
                 if (item.navigationStatus !== 'valid' || !item.publication) {
                     qualityByPath.set(item.path, 'symbolQuality=unknown');
                     return;
@@ -187,6 +224,7 @@ export const listCodebasesTool: McpTool = {
                     return;
                 }
                 try {
+                    signal?.throwIfAborted();
                     const navigation = proofContext.context.getPublicationNavigationAddress(lease);
                     if (!navigation) {
                         qualityByPath.set(item.path, 'symbolQuality=unknown');
@@ -197,6 +235,7 @@ export const listCodebasesTool: McpTool = {
                         publicationId: navigation.publicationId,
                         navigationRoot: navigation.navigationRoot,
                     });
+                    signal?.throwIfAborted();
                     const summary = computeSymbolQualitySummaryFromSidecarRead(registryRead);
                     qualityByPath.set(item.path, formatSymbolQualityMarker(summary));
                 } finally {
@@ -213,6 +252,10 @@ export const listCodebasesTool: McpTool = {
                 { length: Math.min(LIST_CODEBASES_QUALITY_READ_CONCURRENCY, byStatus.indexed.length) },
                 async () => {
                     while (!qualityFailed && nextQualityIndex < byStatus.indexed.length) {
+                        if (signal?.aborted) {
+                            qualityFailed = true;
+                            signal.throwIfAborted();
+                        }
                         try {
                             await readQuality(byStatus.indexed[nextQualityIndex++]);
                         } catch (error) {
@@ -224,6 +267,7 @@ export const listCodebasesTool: McpTool = {
             ));
             const qualityFailure = settled.find((result) => result.status === 'rejected');
             if (qualityFailure) throw qualityFailure.reason;
+            signal?.throwIfAborted();
             for (const item of byStatus.indexed) {
                 const quality = qualityByPath.get(item.path) || "symbolQuality=unknown";
                 const probeSuffix = item.probeFailed
@@ -263,14 +307,19 @@ export const listCodebasesTool: McpTool = {
 
         lines.push(`Total tracked: ${all.length}`);
 
+        signal?.throwIfAborted();
         if (ctx.runtimeOwnerGate && typeof ctx.runtimeOwnerGate.getLiveOwnersSummary === "function") {
             try {
                 const ownersSummary = await ctx.runtimeOwnerGate.getLiveOwnersSummary();
+                signal?.throwIfAborted();
                 if (ownersSummary) {
                     lines.push('');
                     lines.push(formatRuntimeOwnersStatusLine(ownersSummary));
                 }
-            } catch {
+            } catch (error) {
+                if (signal?.aborted) {
+                    throw error;
+                }
                 // Diagnostic only.
             }
         }

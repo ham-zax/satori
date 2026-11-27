@@ -78,6 +78,48 @@ test("status distinguishes readable indexes from source parity while sync remain
     }
 });
 
+test("status releases its lease when the request aborts during publication admission", async () => {
+    const root = os.tmpdir();
+    const controller = new AbortController();
+    const reason = new Error("request disconnected");
+    let markAdmissionStarted!: () => void;
+    const admissionStarted = new Promise<void>((resolve) => { markAdmissionStarted = resolve; });
+    let settleAdmission!: (admitted: boolean) => void;
+    const finishAdmission = new Promise<boolean>((resolve) => { settleAdmission = resolve; });
+    let releases = 0;
+    let openedNavigation = false;
+    const handler = new ManageMaintenanceHandlers({
+        mutationRuntime: { getActiveMutation: () => undefined, getOperation: () => undefined },
+        prepareStatusTrackedRootRead: async () => ({
+            state: "ready", root: { path: root }, navigationStatus: "valid",
+            publication: {
+                id: "published-1",
+                publication: {
+                    status: "partial", createdAt: new Date(0).toISOString(),
+                    vector: { indexedFiles: 1, totalChunks: 2, collectionName: "collection" },
+                    policy: { policyHash: "policy" },
+                },
+            },
+        }),
+        acquirePublicationLease: () => ({ id: "published-1", release: () => { releases += 1; } }),
+        isPublicationAdmitted: async () => {
+            markAdmissionStarted();
+            return finishAdmission;
+        },
+        getPublicationNavigationAddress: () => { openedNavigation = true; return null; },
+        manageResponse: response,
+    } as never);
+
+    const result = handler.handleGetIndexingStatus({ path: root }, false, controller.signal);
+    const rejected = assert.rejects(result, (error) => error === reason);
+    await Promise.race([admissionStarted, result]);
+    controller.abort(reason);
+    settleAdmission(true);
+    await rejected;
+    assert.equal(releases, 1);
+    assert.equal(openedNavigation, false);
+});
+
 test("cancel accepts a supervised reindex executor and never force-unlocks", async () => {
     const cancellations: Array<{ operationId: string; reason?: string }> = [];
     const activeMutation = {

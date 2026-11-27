@@ -80,13 +80,16 @@ export function runSemanticSearchPasses(input: {
     retrievalFilter?: SemanticSearchRequest["filter"];
     candidateLimit: number;
     passDescriptors: SemanticSearchPassDescriptor[];
+    signal?: AbortSignal;
 }): Promise<SemanticSearchPassResults> {
+    input.signal?.throwIfAborted();
     const host = input.host;
     const diagnostics = input.diagnostics;
     diagnostics.searchPassCount += input.passDescriptors.length;
     return host.measureSearchPhase(
         "semanticSearch",
         () => Promise.allSettled(input.passDescriptors.map(async (pass) => {
+            input.signal?.throwIfAborted();
             if ((host.shouldForceSearchPassFailure ?? shouldForceSearchPassFailure)(pass.id)) {
                 throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${pass.id}`);
             }
@@ -125,7 +128,9 @@ export function runDirtyOverlayPass(input: {
     effectiveRoot: string;
     queryPlan: SearchQueryPlan;
     changedFiles: Set<string>;
+    signal?: AbortSignal;
 }): Promise<DirtyFileSearchResults> {
+    input.signal?.throwIfAborted();
     const host = input.host;
     return host.measureSearchPhase(
         "trackedLexical",
@@ -146,7 +151,9 @@ export function runTrackedLexicalPass(input: {
     scope: SearchScope;
     limit: number;
     exactRegistryFallback: boolean;
+    signal?: AbortSignal;
 }): Promise<Awaited<ReturnType<SearchQuerySupport["buildTrackedLexicalSearchResults"]>>> {
+    input.signal?.throwIfAborted();
     const host = input.host;
     return host.measureSearchPhase(
         "trackedLexical",
@@ -213,7 +220,9 @@ export async function runMustConstraintLane(input: {
     mustTokens: readonly string[];
     candidateBudget: number;
     retrievalFilter?: SemanticSearchRequest["filter"];
+    signal?: AbortSignal;
 }): Promise<MustConstraintLaneResult> {
+    input.signal?.throwIfAborted();
     const host = input.host;
     let laneResults: SearchResultLike[] = [];
     let laneFailed = false;
@@ -233,10 +242,14 @@ export async function runMustConstraintLane(input: {
                 ...(input.retrievalFilter ? { filter: input.retrievalFilter } : {}),
             }),
         );
+        input.signal?.throwIfAborted();
         laneResults = Array.isArray(laneResponse)
             ? laneResponse
             : laneResponse.results;
     } catch (error) {
+        if (input.signal?.aborted) {
+            throw error;
+        }
         if (error instanceof LexicalRetrievalModeUnsupportedError) {
             // The backend cannot guarantee conjunctive semantics; do not
             // silently run provider-defined sparse matching and never

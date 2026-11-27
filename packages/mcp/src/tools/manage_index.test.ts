@@ -806,3 +806,28 @@ test("manage_index passes authorizedRoot.canonicalPath to handlers when path is 
         fs.rmSync(base, { recursive: true, force: true });
     }
 });
+
+test("manage_index status forwards requestSignal and rethrows abort without swallowing it", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const controller = new AbortController();
+    controller.abort(new Error("status_aborted"));
+    let receivedSignal: AbortSignal | undefined;
+    const ctx = {
+        capabilities,
+        requestSignal: controller.signal,
+        workspacePolicy: buildWorkspacePolicy(["/repo"]),
+        toolHandlers: {
+            handleGetIndexingStatus: async (_input: unknown, signal?: AbortSignal) => {
+                receivedSignal = signal;
+                signal?.throwIfAborted();
+                return { content: [{ type: "text", text: "{}" }] };
+            },
+        },
+    } as unknown as ToolContext;
+
+    await assert.rejects(
+        manageIndexTool.execute({ action: "status", path: "/repo" }, ctx),
+        /status_aborted/,
+    );
+    assert.equal(receivedSignal, controller.signal);
+});

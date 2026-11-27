@@ -617,6 +617,28 @@ test("continuation uses borrowed reads for cursor, replay, and concurrent replay
     const continuationCoordinator = new SearchContinuationCoordinator();
     const owner = new SearchRequestCoordinator(collaborators, searchQuerySupport, null, continuationCoordinator);
     t.after(() => owner.releaseContinuationOwnership());
+    const cancelled = requireStored(continuationCoordinator.store(owner, {
+        value: snapshot, nextOffset: 0, reservedReplayBytes: 4_096, nowMs: 0,
+    }));
+    const controller = new AbortController();
+    const reason = new Error("request disconnected");
+    const admission = collaborators.preparedRead.isPublicationAdmitted;
+    let cancelledAdmissionChecks = 0;
+    collaborators.preparedRead.isPublicationAdmitted = async () => {
+        // Cancel at the last admission check, immediately before cursor advance.
+        if (++cancelledAdmissionChecks === 2) controller.abort(reason);
+        return true;
+    };
+    await assert.rejects(
+        owner.continueOwned({ handle: cancelled.handle, expectedOffset: 0 }, undefined, controller.signal),
+        (error) => error === reason,
+    );
+    const remaining = continuationCoordinator.lookupForInspection(cancelled.handle, 10);
+    assert.equal(remaining.status, "hit");
+    assert.equal(remaining.nextOffset, 0);
+    assert.equal(remaining.lastPage, null);
+    collaborators.preparedRead.isPublicationAdmitted = admission;
+
     const stored = requireStored(continuationCoordinator.store(owner, {
         value: snapshot,
         nextOffset: 0,
@@ -657,6 +679,106 @@ test("continuation uses borrowed reads for cursor, replay, and concurrent replay
         globalThis.structuredClone = originalStructuredClone;
     }
     assert.equal(fullSnapshotClones, 0, "valid, stale, replay, and concurrent replay reads borrow the frozen snapshot");
+});
+
+test("continueOwned aborts during publication admission without advancing the cursor", async (t) => {
+    const publication = {
+        id: "pub-abort",
+        publication: {
+            id: "pub-abort",
+            vector: { collectionName: "collection-abort" },
+            policy: { policyHash: "policy-abort" },
+        },
+    } as unknown as FrozenSearchResultSet["publication"];
+    const queryPolicyDigest = "d".repeat(64);
+    const orderedResults = [{
+        target: { file: "src/result.ts", span: { startLine: 1, endLine: 2 }, symbolId: "result-1" },
+        displayLabel: "src/result.ts",
+        language: "typescript",
+        symbolKind: "function",
+        quality: { owner: "high", semantic: "high" },
+        evidenceChunks: 1,
+        preview: "export function result() {}",
+    }] as unknown as FrozenSearchResultSet["orderedResults"];
+    const recommendedActions: FrozenSearchResultSet["recommendedActions"] = [null];
+    const rankedSetBinding = buildSearchRankedSetBinding({
+        queryPolicyDigest,
+        rankingPolicyIdentity: resolveSearchRankingPolicyIdentity({ orderAuthority: "retrieval_order" }),
+        disclosurePolicyVersion: SEARCH_DISCLOSURE_POLICY_VERSION,
+        publicationIdentity: {
+            publicationId: publication.id,
+            collectionName: publication.publication.vector.collectionName,
+            policyHash: publication.publication.policy.policyHash,
+            navigation: { status: "not_bound" },
+        },
+        rerankerIdentity: { kind: "deterministic_baseline", policy: "B" },
+        rerankerProjectionIdentity: "not_applicable",
+        rerankerRequestIdentity: null,
+        orderedResults,
+        recommendedActions,
+    });
+    const snapshot: FrozenSearchResultSet = {
+        canonicalRoot: "/repo",
+        publication,
+        queryPolicyDigest,
+        rankedSetBinding,
+        responseByteLimit: 32_000,
+        pageSize: 2,
+        baseEnvelope: {
+            query: "result",
+            scope: "repository",
+            rankedSetDigest: rankedSetBinding.rankedSetDigest,
+        } as unknown as FrozenSearchResultSet["baseEnvelope"],
+        orderedResults,
+        recommendedActions,
+    };
+
+    const controller = new AbortController();
+    let admissionCalls = 0;
+    const collaborators = {
+        readiness: {},
+        hints: {
+            stringifyToolJson: (payload: unknown) => JSON.stringify(payload),
+            buildGeneratedArtifactsVerificationHint: () => undefined,
+        },
+        preparedRead: {
+            isPublicationAdmitted: async () => {
+                admissionCalls += 1;
+                if (admissionCalls === 1) {
+                    controller.abort(new Error("continue_aborted"));
+                }
+                return true;
+            },
+        },
+        freshness: {},
+        environment: {
+            now: () => 10,
+            getCapabilities: () => ({ getMaxFrozenSearchResults: () => 100 }),
+        },
+    } as unknown as SearchRequestCoordinatorCollaborators;
+    const searchQuerySupport = {
+        parseSearchOperators: () => ({ path: [] }),
+        buildNoiseMitigationHint: () => undefined,
+    } as unknown as SearchQuerySupport;
+    const continuationCoordinator = new SearchContinuationCoordinator();
+    const owner = new SearchRequestCoordinator(collaborators, searchQuerySupport, null, continuationCoordinator);
+    t.after(() => owner.releaseContinuationOwnership());
+    const stored = requireStored(continuationCoordinator.store(owner, {
+        value: snapshot,
+        nextOffset: 0,
+        reservedReplayBytes: 4_096,
+        nowMs: 0,
+    }));
+
+    await assert.rejects(
+        owner.continueOwned({ handle: stored.handle, expectedOffset: 0 }, undefined, controller.signal),
+        /continue_aborted/,
+    );
+    assert.equal(admissionCalls, 1);
+
+    // Cursor was not advanced, so retrying expectedOffset=0 succeeds cleanly.
+    const next = await owner.continueOwned({ handle: stored.handle, expectedOffset: 0 });
+    assert.equal(next.isError, undefined);
 });
 
 test("inspection falls back to defensive copies for structured-clone exotic values", () => {

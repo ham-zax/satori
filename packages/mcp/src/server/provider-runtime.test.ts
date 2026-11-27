@@ -804,3 +804,28 @@ for (const survivorState of ["in-flight", "active"] as const) {
         assert.equal(events.filter(event => event === "backend").length, 1);
     });
 }
+
+test("ProviderRuntime.shutdown waits for an in-flight bootstrap and cleans up acquired resources", async (t) => {
+    const { runtime, events } = startupFixture(t);
+    const watching = deferred();
+    const finishWatcher = deferred();
+    t.mock.method(SyncManager.prototype, "startWatcherMode", async () => {
+        watching.resolve();
+        await finishWatcher.promise;
+    });
+
+    const pendingBootstrap = runtime.requireToolContext("embedding_vector");
+    await watching.promise;
+
+    let shutdownCompleted = false;
+    const shutdown = runtime.shutdown().then(() => { shutdownCompleted = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownCompleted, false, "shutdown must await pending bootstrap settlement");
+
+    finishWatcher.resolve();
+    await assert.rejects(pendingBootstrap, /shut down during bootstrap/);
+    await shutdown;
+    assert.equal(shutdownCompleted, true);
+    assert.equal(events.includes("backend"), true, "in-flight vector backend must be closed");
+    assert.equal(events.includes("embedding"), true, "in-flight embedding provider must be closed");
+});

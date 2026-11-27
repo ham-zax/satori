@@ -85,3 +85,24 @@ test('trace_path stays available when the vector provider is unavailable', async
     assert.equal(providerRequested, false);
     assert.equal(handled, true);
 });
+
+test('trace_path forwards requestSignal to handleTracePath', async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const ctx = {
+        requestSignal: controller.signal,
+        workspacePolicy: { authorizePath: () => ({ canonicalPath: '/repo/canonical' }) },
+        toolHandlers: {
+            handleTracePath: async (_input: Record<string, unknown>, signal?: AbortSignal) => {
+                receivedSignal = signal;
+                return { content: [{ type: 'text', text: '{"status":"ok"}' }] };
+            },
+        },
+    } as unknown as Parameters<typeof tracePathTool.execute>[1];
+
+    const response = await tracePathTool.execute({
+        path: '/repo/requested', sourceSymbolId: 'a', targetSymbolId: 'b',
+    }, ctx);
+    assert.equal(response.isError, undefined);
+    assert.equal(receivedSignal, controller.signal);
+});

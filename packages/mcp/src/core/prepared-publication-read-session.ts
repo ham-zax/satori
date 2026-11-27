@@ -39,19 +39,30 @@ export class PreparedPublicationReadSession<
 
     public async read<TResult>(
         execute: PreparedPublicationReadExecutor<TPrepared, TResult, TLease>,
+        options?: { signal?: AbortSignal },
     ): Promise<PreparedPublicationReadOutcome<TResult>> {
+        const signal = options?.signal;
+        signal?.throwIfAborted();
         const prepared = await this.deps.prepareReadiness();
+        signal?.throwIfAborted();
         const lease = await this.deps.acquirePublicationLease(prepared);
-        if (lease === undefined) return { status: "stale" };
-        if (lease === null) return { status: "completed", result: await execute(prepared, lease) };
-        try {
-            if (!(await this.deps.isLeaseAdmitted(prepared, lease))) {
-                return { status: "stale" };
-            }
+        if (lease === undefined || lease === null) {
+            signal?.throwIfAborted();
+            if (lease === undefined) return { status: "stale" };
             const result = await execute(prepared, lease);
-            if (!(await this.deps.isLeaseAdmitted(prepared, lease))) {
-                return { status: "stale" };
-            }
+            signal?.throwIfAborted();
+            return { status: "completed", result };
+        }
+        try {
+            signal?.throwIfAborted();
+            const admitted = await this.deps.isLeaseAdmitted(prepared, lease);
+            signal?.throwIfAborted();
+            if (!admitted) return { status: "stale" };
+            const result = await execute(prepared, lease);
+            signal?.throwIfAborted();
+            const stillAdmitted = await this.deps.isLeaseAdmitted(prepared, lease);
+            signal?.throwIfAborted();
+            if (!stillAdmitted) return { status: "stale" };
             return { status: "completed", result };
         } finally {
             lease.release();

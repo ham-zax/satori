@@ -375,3 +375,25 @@ test("readAuthorizedPublishedSource detects growth inside onAuthorized during re
     });
 });
 
+test("readAuthorizedPublishedSource stops on abort inside onAuthorized without reading content", async () => {
+    await withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, "src", "runtime.ts");
+        fs.writeFileSync(filePath, "export function run() { return true; }\n", "utf8");
+        const controller = new AbortController();
+
+        await assert.rejects(
+            () => readAuthorizedPublishedSource({
+                workspacePolicy: buildWorkspacePolicy(repoPath),
+                codebaseRoot: repoPath,
+                requestedPath: filePath,
+                publishedRelativePaths: PUBLISHED,
+                signal: controller.signal,
+                onAuthorized: () => {
+                    controller.abort(new Error("read_aborted"));
+                },
+            }),
+            /read_aborted/,
+        );
+    });
+});
+

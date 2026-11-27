@@ -1144,7 +1144,8 @@ export class ToolHandlers {
         relativeFile: string;
         symbolId?: string;
         symbolLabel?: string;
-    }): Promise<PrepareSymbolContextSnapshotResult> {
+    }, signal?: AbortSignal): Promise<PrepareSymbolContextSnapshotResult> {
+        signal?.throwIfAborted();
         const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
             // Keep the caller's root: resolving the absolute file could select a nested Publication.
             prepareReadiness: () => this.prepareNavigationRead(input.codebaseRoot),
@@ -1163,6 +1164,7 @@ export class ToolHandlers {
             preparedRead: TrackedRootReadinessState,
             lease: PublicationLease | null,
         ): Promise<PrepareSymbolContextSnapshotResult> => {
+            signal?.throwIfAborted();
             if (preparedRead.state !== 'ready' || lease === null || preparedRead.publication.id !== lease.id
                 || preparedRead.root.path !== input.codebaseRoot) {
                 return {
@@ -1183,6 +1185,7 @@ export class ToolHandlers {
                 preparedRead,
                 input.relativeFile,
             );
+            signal?.throwIfAborted();
             if (registryState.status !== 'ok') {
                 return {
                     status: 'unavailable',
@@ -1246,7 +1249,7 @@ export class ToolHandlers {
                 },
             };
         };
-        const outcome = await session.read(executeSymbolContextRead);
+        const outcome = await session.read(executeSymbolContextRead, { signal });
         return outcome.status === 'stale'
             ? { status: 'unavailable', reason: 'prepared_navigation_changed' }
             : outcome.result;
@@ -2075,8 +2078,8 @@ export class ToolHandlers {
         return this.searchRequestCoordinator.attempt(args, 0, signal);
     }
 
-    public async handleContinueSearch(args: ToolArgs) {
-        return this.searchRequestCoordinator.continueOwned(args);
+    public async handleContinueSearch(args: ToolArgs, signal?: AbortSignal) {
+        return this.searchRequestCoordinator.continueOwned(args, undefined, signal);
     }
 
     public releaseSearchContinuationOwnership(): void {
@@ -2086,18 +2089,21 @@ export class ToolHandlers {
     /** Internal Phase 4 entry point. MCP schema/transport wiring belongs to Phase 5. */
     public async composeSymbolContext(
         input: ComposeSymbolContextInput,
+        signal?: AbortSignal,
     ): Promise<ComposeSymbolContextResult> {
+        signal?.throwIfAborted();
         const normalizedInput: ComposeSymbolContextInput = {
             ...input,
             relativeFile: this.normalizeRelativeFilePath(input.relativeFile),
         };
         return composePreparedSymbolContext(normalizedInput, {
-            prepareSnapshot: (request) => this.prepareSymbolContextSnapshot(request),
+            signal,
+            prepareSnapshot: (request) => this.prepareSymbolContextSnapshot(request, signal),
         });
     }
 
-    public async handleArchitectureOverview(args: ToolArgs) {
-        return this.navigationHandlers.handleArchitectureOverview(args);
+    public async handleArchitectureOverview(args: ToolArgs, signal?: AbortSignal) {
+        return this.navigationHandlers.handleArchitectureOverview(args, signal);
     }
 
     public async handleFindReferences(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal) {
@@ -2121,16 +2127,16 @@ export class ToolHandlers {
         return this.navigationHandlers.resolveUnprojectedCallGraph(args, workspacePolicy, signal, sourceOptions);
     }
 
-    public async handleTracePath(args: ToolArgs) {
-        return this.navigationHandlers.handleTracePath(args);
+    public async handleTracePath(args: ToolArgs, signal?: AbortSignal) {
+        return this.navigationHandlers.handleTracePath(args, signal);
     }
 
     public async handleClearIndex(args: ToolArgs) {
         return this.manageMaintenanceHandlers.handleClearIndex(args);
     }
 
-    public async handleGetIndexingStatus(args: ToolArgs) {
-        return this.manageMaintenanceHandlers.handleGetIndexingStatus(args);
+    public async handleGetIndexingStatus(args: ToolArgs, signal?: AbortSignal) {
+        return this.manageMaintenanceHandlers.handleGetIndexingStatus(args, false, signal);
     }
 
     /**

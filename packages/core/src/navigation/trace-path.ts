@@ -20,6 +20,7 @@ export interface TraceRelationshipPathInput {
     maxVisitedNodes: number;
     maxTraversedEdges: number;
     navigationStore?: NavigationReader;
+    signal?: AbortSignal;
 }
 
 export interface TracePathDiagnostics {
@@ -100,6 +101,7 @@ function isCallAncestorInPredecessorChain(
 
 /** One shortest path over resolved, directed relationship facts from one Publication. */
 export async function traceRelationshipPath(input: TraceRelationshipPathInput): Promise<TraceRelationshipPathResult> {
+    input.signal?.throwIfAborted();
     if (input.allowedTypes.length === 0
         || input.allowedTypes.some((kind) => !TRACE_PATH_KIND_SET.has(kind))) {
         throw new RangeError('Unsupported relationship kind in trace path request.');
@@ -111,6 +113,7 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
         navigationRoot: input.navigationRoot,
     };
     const registryState = await store.getManifest(address);
+    input.signal?.throwIfAborted();
     if (registryState.status !== 'ok') {
         return { status: registryState.status, reason: registryState.reason };
     }
@@ -129,6 +132,7 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
         ...address,
         expectedSymbolRegistryManifestHash: registryState.manifestHash,
     });
+    input.signal?.throwIfAborted();
     if (relationshipState.status !== 'ok') {
         return { status: relationshipState.status, reason: relationshipState.reason };
     }
@@ -136,6 +140,7 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
     const allowedTypes: ReadonlySet<string> = new Set(input.allowedTypes);
     const outgoing = new Map<string, RelationshipRecord[]>();
     for (const record of relationshipState.records) {
+        input.signal?.throwIfAborted();
         if (!allowedTypes.has(record.type) || !record.sourceInstanceId || !record.targetInstanceId) continue;
         const from = symbols.get(record.sourceInstanceId);
         const to = symbols.get(record.targetInstanceId);
@@ -173,6 +178,7 @@ export async function traceRelationshipPath(input: TraceRelationshipPathInput): 
     let found = source.symbolInstanceId === target.symbolInstanceId;
 
     search: for (let index = 0; index < queue.length && !found; index += 1) {
+        input.signal?.throwIfAborted();
         const current = queue[index]!;
         const records = outgoing.get(current.id) ?? [];
         if (current.depth >= maxDepth) {

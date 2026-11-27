@@ -2073,6 +2073,7 @@ export class SearchRequestCoordinator {
                     return undefined;
                 }
                 if (finalized.kind === "ok" && envelope.resultMode === "grouped") {
+                    signal?.throwIfAborted();
                     envelope = attachSearchResultSet(
                         envelope,
                         finalized.resultSet,
@@ -2081,14 +2082,17 @@ export class SearchRequestCoordinator {
                     );
                 }
 
+                signal?.throwIfAborted();
                 await this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot);
+                signal?.throwIfAborted();
                 this.preparedRead.seedPreparedRead(preparedReadState, preservePreparedProofAge);
                 return {
                     content: [{ type: "text", text: this.hints.stringifyToolJson(envelope) }],
                     ...(initialPageTooLarge ? { isError: true } : {}),
                     meta: { searchDiagnostics }
                 };
-            });
+            }, { signal });
+            signal?.throwIfAborted();
             if (outcome.status === 'stale' || outcome.result === undefined) {
                 if (sourceDriftRetryCount === 0) {
                     return undefined;
@@ -2118,6 +2122,9 @@ export class SearchRequestCoordinator {
             }
             return outcome.result;
         } catch (error) {
+            if (signal?.aborted) {
+                throw error;
+            }
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
                 const payload = this.buildVectorBackendSearchPayload(vectorBackendDiagnostic, {
@@ -2187,10 +2194,12 @@ export class SearchRequestCoordinator {
     public async continueOwned(
         args: ToolArgs,
         routedLookup?: SearchContinuationLookup,
+        signal?: AbortSignal,
     ): Promise<{
         content: Array<{ type: "text"; text: string }>;
         isError?: boolean;
     }> {
+        signal?.throwIfAborted();
         const handle = typeof args.handle === "string" ? args.handle.trim() : "";
         const expectedOffset = typeof args.expectedOffset === "number"
             ? args.expectedOffset
@@ -2240,7 +2249,7 @@ export class SearchRequestCoordinator {
             return fail("SEARCH_RESULT_SET_STALE", "Search continuation runtime is no longer available. Run search_codebase again.");
         }
         if (lookup.owner !== this) {
-            return lookup.owner.continueOwned(args, lookup);
+            return lookup.owner.continueOwned(args, lookup, signal);
         }
 
         const entry = lookup.entry;
@@ -2289,7 +2298,10 @@ export class SearchRequestCoordinator {
                 "Search result-set identity changed. Run search_codebase again.",
             );
         }
-        if (!await this.preparedRead.isPublicationAdmitted(entry.publication)) {
+        signal?.throwIfAborted();
+        const admitted = await this.preparedRead.isPublicationAdmitted(entry.publication);
+        signal?.throwIfAborted();
+        if (!admitted) {
             this.continuationCoordinator.remove(handle);
             return fail("SEARCH_RESULT_SET_STALE", "Search Publication is no longer admitted by current selection controls. Run search_codebase again.");
         }
@@ -2386,7 +2398,10 @@ export class SearchRequestCoordinator {
         if (projection.status === "page_too_large") {
             return fail("SEARCH_RESULT_SET_PAGE_TOO_LARGE", "The next search result cannot fit within the response byte budget. Use read_file on an earlier target or run a narrower search.");
         }
-        if (!await this.preparedRead.isPublicationAdmitted(entry.publication)) {
+        signal?.throwIfAborted();
+        const stillAdmitted = await this.preparedRead.isPublicationAdmitted(entry.publication);
+        signal?.throwIfAborted();
+        if (!stillAdmitted) {
             this.continuationCoordinator.remove(handle);
             return fail(
                 "SEARCH_RESULT_SET_STALE",

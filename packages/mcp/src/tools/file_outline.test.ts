@@ -1160,3 +1160,35 @@ test('file_outline missing-registry branch disambiguates .cls by content: UDL an
     assert.equal(apexPayload.reason, 'missing_symbol_registry');
     assert.equal(apexPayload.outline, null);
 });
+
+test('file_outline forwards requestSignal through provider resolution and handler options', async () => {
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    let handlerSignal: AbortSignal | undefined;
+    const ctx = {
+        requestSignal: controller.signal,
+        workspacePolicy: buildWorkspacePolicy(['/repo']),
+        providerRuntime: {
+            requireToolContext: async (_op: string, req?: { signal?: AbortSignal }) => {
+                providerSignal = req?.signal;
+                return {
+                    toolHandlers: {
+                        handleFileOutline: async (
+                            _input: unknown,
+                            _policy: unknown,
+                            sourceOptions?: { signal?: AbortSignal },
+                        ) => {
+                            handlerSignal = sourceOptions?.signal;
+                            return { content: [{ type: 'text', text: '{"status":"ok"}' }] };
+                        },
+                    },
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    const res = await fileOutlineTool.execute({ path: '/repo', file: 'src/app.ts' }, ctx);
+    assert.equal(res.isError, undefined);
+    assert.equal(providerSignal, controller.signal);
+    assert.equal(handlerSignal, controller.signal);
+});

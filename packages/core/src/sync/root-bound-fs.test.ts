@@ -547,3 +547,55 @@ test('openDirectoryInsideRootSync keeps enumeration bound when its pathname beco
         fs.rmSync(outside, { recursive: true, force: true });
     }
 });
+
+test('readFileHandleExactly stops issuing 64 KiB read windows on abort and records partial outcome', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-read-abort-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filePath = path.join(root, 'big.ts');
+    const size = 200 * 1024;
+    fs.writeFileSync(filePath, 'a'.repeat(size), 'utf8');
+    const ledgerFile = path.join(root, 'source-ledger.jsonl');
+    const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+    t.after(() => handle.close().catch(() => undefined));
+
+    const controller = new AbortController();
+    let readCalls = 0;
+    const origRead = handle.read.bind(handle);
+    handle.read = (async (...args: Parameters<typeof handle.read>) => {
+        readCalls += 1;
+        const result = await origRead(...args);
+        if (readCalls === 1) {
+            controller.abort(new Error('client_disconnected'));
+        }
+        return result;
+    }) as typeof handle.read;
+
+    await withSourceMeasurementOperation({
+        operation: 'read_file',
+        ledgerFile,
+        rootDir: root,
+    }, async () => {
+        const observation = beginSourceMeasurementObservation({
+            owner: 'validation',
+            filePath,
+            logicalBytesRequested: size,
+            scanKind: 'complete',
+        });
+        await assert.rejects(
+            () => readFileHandleExactly(handle, size, observation, { signal: controller.signal }),
+            /client_disconnected/,
+        );
+    });
+
+    assert.equal(readCalls, 1, 'abort after the first 64 KiB window must stop further reads');
+    const records = fs.readFileSync(ledgerFile, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as SourceMeasurementLedgerRecord);
+    const outcome = records.find(
+        (record): record is Extract<SourceMeasurementLedgerRecord, { kind: 'source_observation_outcome' }> => (
+            record.kind === 'source_observation_outcome'
+        ),
+    );
+    assert.equal(outcome?.status, 'partial');
+});

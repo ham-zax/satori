@@ -49,6 +49,40 @@ function makeToolContext(
     } as unknown as ToolContext;
 }
 
+test("read_file skips unrelated publications before authorizing candidates", async (t) => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-rf-candidate-")));
+    t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+    const root = path.join(base, "workspace");
+    const outside = path.join(base, "external");
+    fs.mkdirSync(root);
+    fs.mkdirSync(outside);
+    const file = path.join(root, "published.ts");
+    fs.writeFileSync(file, "export const ok = 1;\n");
+    const ctx = makeToolContext(root, ["published.ts"]);
+    const original = ctx.workspacePolicy;
+    const authorized: string[] = [];
+    ctx.workspacePolicy = { ...original, authorizeRoot: (candidate) => {
+        authorized.push(candidate);
+        return original.authorizeRoot(candidate);
+    } };
+    ctx.context.listCurrentPublications = () => [
+        { publication: { canonicalRoot: outside } },
+        { publication: { canonicalRoot: root } },
+    ] as ReturnType<typeof ctx.context.listCurrentPublications>;
+    const result = await readFileTool.execute({ path: file }, ctx);
+    assert.equal(result.isError, undefined, result.content[0].text);
+    assert.match(result.content[0].text, /export const ok = 1/);
+    assert.ok(authorized.includes(root));
+    assert.ok(!authorized.includes(outside));
+
+    const externalFile = path.join(outside, "external.ts");
+    fs.writeFileSync(externalFile, "export const external = 2;\n");
+    const externalContext = makeToolContext(outside, ["external.ts"]);
+    const externalResult = await readFileTool.execute({ path: externalFile }, externalContext);
+    assert.equal(externalResult.isError, undefined, externalResult.content[0].text);
+    assert.match(externalResult.content[0].text, /export const external = 2/);
+});
+
 test("read_file gives identical FILE_NOT_PUBLISHED denial for missing, directory, and unpublished regular files (P1-2)", async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-rf-oracle-")));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -35,10 +35,8 @@ export class ContextMcpServer {
         this.host = new SharedRuntimeHost(config, runtimeFingerprint, runMode);
         // Direct stdio sessions bind the same environment-derived workspace
         // policy as the shared-runtime launcher: SATORI_SESSION_ROOTS_JSON
-        // when present, otherwise [process.cwd()]. Invalid roots reject
-        // startup with the policy's stable message; broad roots (filesystem
-        // root, home directory, state root) reject unless
-        // SATORI_ALLOW_BROAD_ROOTS=true opts in.
+        // when present, otherwise [process.cwd()] with per-request access to
+        // existing publications. Startup indexing uses only the session roots.
         this.session = this.host.createSession(
             createSessionWorkspacePolicyFromEnv(process.env),
         );

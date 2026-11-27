@@ -67,7 +67,8 @@ export const listCodebasesTool: McpTool = {
             // Missing/unbound policy fails closed to an empty listing.
             if (!ctx.workspacePolicy) return false;
             try {
-                ctx.workspacePolicy.authorizeRoot(entry.path);
+                const policy = ctx.workspacePolicy.createPublishedReadPolicy?.() ?? ctx.workspacePolicy;
+                policy.authorizeRoot(entry.path);
                 return true;
             } catch {
                 return false;

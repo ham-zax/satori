@@ -51,6 +51,11 @@ import { SHARED_RUNTIME_MAX_PENDING_REQUESTS } from "./shared-runtime-identity.j
 
 export type ServerRunMode = "mcp" | "cli" | "postflight" | "host";
 
+const PUBLISHED_READ_TOOLS = new Set([
+    "architecture_overview", "call_graph", "detect_changes", "file_outline",
+    "find_references", "read_file", "search_codebase", "trace_path",
+]);
+
 /**
  * Session workspace root rule: SATORI_SESSION_ROOTS_JSON when present,
  * otherwise [process.cwd()]. Returns the same roots for direct stdio sessions
@@ -126,6 +131,29 @@ function isMissingProviderConfigIssue(
     return "code" in value && value.code === "MISSING_PROVIDER_CONFIG";
 }
 
+function workspaceIndexRequests(
+    workspacePolicy: SessionWorkspacePolicy,
+    providerRuntime: ProviderRuntime,
+): Pick<ProviderRuntime, "requestAutomaticCreate" | "requestAutomaticReindex"> {
+    const indexRoot = (codebasePath: string): string | undefined => {
+        try {
+            return workspacePolicy.authorizeRoot(codebasePath).canonicalPath;
+        } catch {
+            return undefined;
+        }
+    };
+    return {
+        requestAutomaticCreate: (codebasePath) => {
+            const root = indexRoot(codebasePath);
+            return root !== undefined && providerRuntime.requestAutomaticCreate(root);
+        },
+        requestAutomaticReindex: async (codebasePath, reason) => {
+            const root = indexRoot(codebasePath);
+            return root === undefined ? { outcome: "unavailable" } : providerRuntime.requestAutomaticReindex(root, reason);
+        },
+    };
+}
+
 class SessionProviderRuntime {
     private readonly contexts = new Map<ToolContext, ToolContext>();
     private readonly handlers = new Set<ToolHandlers>();
@@ -169,17 +197,7 @@ class SessionProviderRuntime {
                 readFileMaxBytes: shared.readFileMaxBytes,
                 ownDetachedMutationCompletion: (completion) => this.providerRuntime.ownDetachedMutationCompletion(completion),
                 isAutomaticIndexing: (codebasePath) => this.providerRuntime.isAutomaticIndexing(codebasePath),
-                requestAutomaticCreate: (codebasePath) => {
-                    try {
-                        const authorized = this.workspacePolicy.authorizeRoot(codebasePath);
-                        return this.providerRuntime.requestAutomaticCreate(authorized.canonicalPath);
-                    } catch {
-                        return false;
-                    }
-                },
-                requestAutomaticReindex: (codebasePath, reason) => (
-                    this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
-                ),
+                ...workspaceIndexRequests(this.workspacePolicy, this.providerRuntime),
                 reclaimIdleMemoryForMutation: () => this.providerRuntime.reclaimIdleMemoryForMutation(),
             },
         );
@@ -476,17 +494,7 @@ export class SharedRuntimeHost {
                 },
                 ownDetachedMutationCompletion: (completion) => this.ownDetachedMutationCompletion(completion),
                 isAutomaticIndexing: (codebasePath) => this.providerRuntime.isAutomaticIndexing(codebasePath),
-                requestAutomaticCreate: (codebasePath) => {
-                    try {
-                        const authorized = workspacePolicy.authorizeRoot(codebasePath);
-                        return this.providerRuntime.requestAutomaticCreate(authorized.canonicalPath);
-                    } catch {
-                        return false;
-                    }
-                },
-                requestAutomaticReindex: (codebasePath, reason) => (
-                    this.providerRuntime.requestAutomaticReindex(codebasePath, reason)
-                ),
+                ...workspaceIndexRequests(workspacePolicy, this.providerRuntime),
                 reclaimIdleMemoryForMutation: () => this.providerRuntime.reclaimIdleMemoryForMutation(),
             },
         );
@@ -686,8 +694,13 @@ export class McpSession {
             this.activeToolCalls += 1;
             this.host.beginOperation();
             try {
+                // Mixed-action tools retain the launcher policy and opt in
+                // after validating their read operation.
+                const publishedReadPolicy = PUBLISHED_READ_TOOLS.has(name)
+                    ? this.workspacePolicy.createPublishedReadPolicy?.() : undefined;
                 const requestToolContext: ToolContext = {
                     ...this.resources.toolContext,
+                    workspacePolicy: publishedReadPolicy ?? this.workspacePolicy,
                     requestSignal: extra.signal,
                 };
                 return await withSourceMeasurementOperation(

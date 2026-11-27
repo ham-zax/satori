@@ -434,6 +434,91 @@ test("tool context receives the session policy", async (t) => {
     );
 });
 
+test("published reads retain request policy through session and provider resolution", async (t) => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-session-published-")));
+    const stateRoot = path.join(base, "state");
+    const workspace = path.join(base, "workspace");
+    const external = path.join(base, "external");
+    const sibling = path.join(base, "unindexed");
+    for (const dir of [workspace, external, sibling]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(external, "main.ts"), "export function run() {}\n");
+    const publicationRoot = path.join(stateRoot, "publications", crypto.createHash("sha256").update(external).digest("hex"));
+    const generation = path.join(publicationRoot, "generations", "pub");
+    fs.mkdirSync(generation, { recursive: true });
+    fs.writeFileSync(path.join(publicationRoot, "current.json"), JSON.stringify({ version: 1, publicationId: "pub" }));
+    fs.writeFileSync(path.join(generation, "publication.json"), JSON.stringify({
+        version: 2, id: "pub", canonicalRoot: external, createdAt: "2026-01-01T00:00:00.000Z",
+        status: "partial", navigation: null, packageOwnership: false,
+        policy: { profile: "default", customExtensions: [], customIgnorePatterns: [], effectiveIgnorePatterns: [], fileBasedIgnorePatterns: [], supportedExtensions: [".ts"], policyHash: "fixture", controlSignature: "fixture" },
+        format: { indexFormatVersion: "test", embeddingIdentity: "test", relationshipVersion: "test" },
+        vector: { collectionName: "fixture", indexedFiles: 0, totalChunks: 0 },
+    }));
+    const runtimeConfig = { ...config(), stateRoot };
+    const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, 1024), "cli");
+    const policy = createSessionWorkspacePolicy({ roots: [workspace], homeDirectory: base, stateRoot, allowImplicitBroadContainerRoot: true });
+    const session = host.createSession(policy, { autoIndexOnStart: false });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "published-policy", version: "1" });
+    await session.connect(serverTransport);
+    await client.connect(clientTransport);
+    t.after(async () => { await client.close(); await session.shutdown(); await host.shutdown(); fs.rmSync(base, { recursive: true, force: true }); });
+
+    const resources = (session as unknown as { resources: { toolContext: ToolContext } }).resources;
+    t.mock.method(resources.toolContext.context, "getPublicationSourceCheckpoint", () => ({
+        fileHashes: [["main.ts", "fixture"]],
+    }) as never);
+    const provider = host.getProviderRuntime();
+    const sharedProviderContext = {
+        context: resources.toolContext.context, syncManager: resources.toolContext.syncManager,
+        runtimeFingerprint: resources.toolContext.runtimeFingerprint, capabilities: resources.toolContext.capabilities,
+        reranker: null, runtimeOwnerGate: resources.toolContext.runtimeOwnerGate, readFileMaxBytes: resources.toolContext.readFileMaxBytes,
+    };
+    t.mock.method(provider, "requireToolContext", async () => sharedProviderContext);
+    const resolved = await resources.toolContext.providerRuntime!.requireToolContext("vector_only");
+    assert.ok("toolHandlers" in resolved);
+    const handlers = resolved.toolHandlers;
+    const receivedPolicies: Array<typeof policy> = [];
+    for (const method of ["handleCallGraph", "handleFileOutline"] as const) {
+        const original = handlers[method].bind(handlers);
+        t.mock.method(handlers, method, ((args: never, requestPolicy: typeof policy, ...rest: never[]) => {
+            receivedPolicies.push(requestPolicy);
+            return original(args, requestPolicy, ...rest);
+        }) as typeof handlers[typeof method]);
+    }
+    for (const [name, args] of [
+        ["call_graph", { path: external, symbolRef: { file: "main.ts", symbolLabel: "run" } }],
+        ["file_outline", { path: external, file: "main.ts" }],
+    ] as const) {
+        const response = await client.callTool({ name, arguments: args });
+        const payload = JSON.parse((response.content as Array<{ text: string }>)[0]!.text);
+        assert.equal(payload.status, "requires_reindex");
+        assert.equal(payload.path, external);
+        const received = receivedPolicies.shift();
+        assert.ok(received, `${name} reached its provider-backed handler: ${JSON.stringify(response)}`);
+        assert.equal(received.authorizePath(path.join(external, "main.ts")).workspaceRoot, external);
+        const denied = await client.callTool({ name, arguments: { ...args, path: sibling } });
+        assert.equal(JSON.parse((denied.content as Array<{ text: string }>)[0]!.text).code, "ROOT_NOT_AUTHORIZED");
+    }
+    const source = await client.callTool({ name: "read_file", arguments: { path: path.join(external, "main.ts") } });
+    assert.equal(source.isError, undefined, JSON.stringify(source));
+    assert.match((source.content as Array<{ text: string }>)[0]!.text, /export function run/);
+    const status = await client.callTool({ name: "manage_index", arguments: { action: "status", path: external } });
+    const statusPayload = JSON.parse((status.content as Array<{ text: string }>)[0]!.text);
+    assert.equal(statusPayload.status, "requires_reindex");
+    assert.equal(statusPayload.path, external);
+    for (const action of ["create", "sync", "reindex", "clear"]) {
+        const denied = await client.callTool({ name: "manage_index", arguments: { action, path: external } });
+        assert.equal(JSON.parse((denied.content as Array<{ text: string }>)[0]!.text).code, "ROOT_NOT_AUTHORIZED");
+    }
+    const requests: string[] = [];
+    t.mock.method(provider, "requestAutomaticReindex", async (root: string) => { requests.push(root); return { outcome: "unavailable" }; });
+    const readiness = (handlers as unknown as { trackedRootReadiness: { host: { requestAutomaticReindex(root: string, reason: "requires_reindex"): Promise<unknown> } } }).trackedRootReadiness;
+    assert.deepEqual(await readiness.host.requestAutomaticReindex(external, "requires_reindex"), { outcome: "unavailable" });
+    assert.deepEqual(requests, []);
+    await readiness.host.requestAutomaticReindex(workspace, "requires_reindex");
+    assert.deepEqual(requests, [workspace]);
+});
+
 test("two sessions may have different immutable workspace policies", async (t) => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-session-policies-"));
     const previousStateRoot = process.env.SATORI_STATE_ROOT;

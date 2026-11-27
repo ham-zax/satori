@@ -658,6 +658,8 @@ Environment Variables:
 
   Workspace Scope:
   SATORI_SESSION_ROOTS_JSON JSON array of 1-16 absolute workspace roots (default: [process.cwd()])
+                           Explicit roots restrict all tools to those workspaces. The default local session can also
+                           read existing publications by path. Those publications do not extend its indexing roots.
   SATORI_ALLOW_BROAD_ROOTS  Set to 'true' to authorize a broad workspace root (filesystem root, home directory, or state root). Broad roots stay rejected by default; indexing a home directory can be slow and expensive.
 
 Examples:

@@ -1,5 +1,6 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +49,48 @@ function expectCode(fn: () => unknown, code: WorkspaceAuthorizationCode): void {
 function makeTempDir(prefix: string): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+test("implicit local reads can bind one existing publication outside the workspace", (t) => {
+    const base = fs.realpathSync(makeTempDir("satori-published-read-"));
+    t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+    const workspace = path.join(base, "workspace");
+    const stateRoot = path.join(base, "state");
+    const roots = [path.join(base, "published"), path.join(base, "other-published")];
+    for (const canonicalRoot of roots) {
+        fs.mkdirSync(path.join(canonicalRoot, "src"), { recursive: true });
+        const publicationRoot = path.join(stateRoot, "publications", crypto.createHash("sha256").update(canonicalRoot).digest("hex"));
+        const generation = path.join(publicationRoot, "generations", "pub");
+        fs.mkdirSync(generation, { recursive: true });
+        fs.writeFileSync(path.join(publicationRoot, "current.json"), JSON.stringify({ version: 1, publicationId: "pub" }));
+        fs.writeFileSync(path.join(generation, "publication.json"), JSON.stringify({
+            version: 2, id: "pub", canonicalRoot, createdAt: "2026-01-01T00:00:00.000Z",
+            status: "partial", navigation: null, packageOwnership: false,
+            policy: {
+                profile: "default", customExtensions: [], customIgnorePatterns: [],
+                effectiveIgnorePatterns: [], fileBasedIgnorePatterns: [], supportedExtensions: [".ts"],
+                policyHash: "fixture", controlSignature: "fixture",
+            },
+            format: { indexFormatVersion: "test", embeddingIdentity: "test", relationshipVersion: "test" },
+            vector: { collectionName: "fixture", indexedFiles: 0, totalChunks: 0 },
+        }));
+    }
+    const config = { roots: [workspace], homeDirectory: base, stateRoot };
+    const local = createSessionWorkspacePolicy({ ...config, allowImplicitBroadContainerRoot: true });
+    const strict = createSessionWorkspacePolicy(config);
+    const [published, sibling] = roots as [string, string];
+    const unindexed = path.join(base, "unindexed");
+    assert.deepEqual(local.roots, [workspace]);
+    expectCode(() => local.authorizeRoot(published), "ROOT_NOT_AUTHORIZED");
+    assert.equal(strict.createPublishedReadPolicy, undefined);
+    const read = local.createPublishedReadPolicy?.();
+    assert.ok(read);
+    expectCode(() => read.authorizePath(unindexed), "ROOT_NOT_AUTHORIZED");
+    expectCode(() => read.authorizeRoot(base), "BROAD_ROOT_NOT_ALLOWED");
+    assert.equal(read.authorizePath(path.join(published, "src")).workspaceRoot, published);
+    assert.equal(read.authorizePath(path.join(published, "src", "main.ts")).relativePath, "src/main.ts");
+    expectCode(() => read.authorizeRoot(sibling), "ROOT_NOT_AUTHORIZED");
+    assert.equal(local.createPublishedReadPolicy?.().authorizeRoot(sibling).workspaceRoot, sibling);
+});
 
 test("rejects filesystem root by default", () => {
     const home = makeTempDir("satori-workspace-policy-home-");

@@ -154,6 +154,6 @@ export const fileOutlineTool: McpTool = {
             return executionContext.response;
         }
 
-        return executionContext.context.toolHandlers.handleFileOutline(input, executionContext.context.workspacePolicy);
+        return executionContext.context.toolHandlers.handleFileOutline(input, workspacePolicy);
     }
 };

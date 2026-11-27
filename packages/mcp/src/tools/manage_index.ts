@@ -101,7 +101,10 @@ export const manageIndexTool: McpTool = {
         }
         let authorizedRoot: AuthorizedWorkspacePath;
         try {
-            authorizedRoot = workspacePolicy.authorizeRoot(absolutePathResult.absolutePath);
+            const policy = parsed.data.action === "status"
+                ? workspacePolicy.createPublishedReadPolicy?.() ?? workspacePolicy
+                : workspacePolicy;
+            authorizedRoot = policy.authorizeRoot(absolutePathResult.absolutePath);
         } catch (error) {
             if (error instanceof WorkspaceAuthorizationError) {
                 return manageIndexWorkspaceDenial({

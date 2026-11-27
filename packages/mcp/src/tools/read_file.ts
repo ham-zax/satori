@@ -514,12 +514,12 @@ function collectCodebaseCandidatesForFile(
         const rootResult = requireAbsoluteFilesystemPath(rootPath, "codebase.path");
         if (!rootResult.ok) continue;
         const candidatePath = canonicalizeFilesystemPath(rootResult.absolutePath);
+        if (!isPathInsideRoot(absolutePath, candidatePath) || !allowedStatuses.has(status)) {
+            continue;
+        }
         try {
             ctx.workspacePolicy.authorizeRoot(candidatePath);
         } catch {
-            continue;
-        }
-        if (!isPathInsideRoot(absolutePath, candidatePath) || !allowedStatuses.has(status)) {
             continue;
         }
         candidates.push({ path: candidatePath, status });

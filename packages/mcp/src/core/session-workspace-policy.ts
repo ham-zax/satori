@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { probeCurrentPublicationForPath } from "@satori-code/core/integration";
 
 /**
  * Canonical workspace authorization for one MCP session.
  *
  * The policy is immutable: roots are fixed at construction from launcher
- * configuration and cannot be expanded by tool arguments or by mutating the
- * exposed `roots` array. Authorization is canonical separator-boundary
- * containment of real paths, never string-prefix containment.
+ * configuration. An implicit local session can bind an existing Publication
+ * for one read request while retaining its original startup and mutation roots.
+ * Authorization uses canonical separator-boundary containment of real paths.
  */
 
 export type WorkspaceAuthorizationCode =
@@ -36,6 +37,7 @@ export interface SessionWorkspacePolicy {
     readonly roots: readonly string[];
     authorizeRoot(candidateRoot: string): AuthorizedWorkspacePath;
     authorizePath(candidatePath: string): AuthorizedWorkspacePath;
+    createPublishedReadPolicy?(): SessionWorkspacePolicy;
 }
 
 /**
@@ -151,7 +153,8 @@ export function createSessionWorkspacePolicy(input: {
      * Cursor, VS Code, Windsurf, or Antigravity spawning MCP servers in `$HOME`
      * or `/`). Allows `$HOME` or `/` to act as a container only for descendant
      * Git project paths while rejecting `$HOME`, `/`, `stateRoot`, and any path
-     * outside a Git repository.
+     * outside a Git repository. Such local sessions can also read an existing
+     * Publication outside their startup roots when explicitly addressed.
      */
     allowImplicitBroadContainerRoot?: boolean;
 }): SessionWorkspacePolicy {
@@ -234,7 +237,15 @@ export function createSessionWorkspacePolicy(input: {
         }
     };
 
-    const authorize = (candidate: string): AuthorizedWorkspacePath => {
+    const authorizedPath = (workspaceRoot: string, canonicalPath: string): AuthorizedWorkspacePath => Object.freeze({
+        workspaceRoot,
+        canonicalPath,
+        relativePath: normalizeRelativePath(path.relative(workspaceRoot, canonicalPath)),
+    });
+    const authorize = (
+        candidate: string,
+        resolvePublishedRoot?: (canonicalPath: string) => string | undefined,
+    ): AuthorizedWorkspacePath => {
         if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
             throw new WorkspaceAuthorizationError(
                 "INVALID_WORKSPACE_ROOT",
@@ -253,33 +264,54 @@ export function createSessionWorkspacePolicy(input: {
         for (const root of roots) {
             if (implicitContainerRoots.has(root)) continue;
             if (isPathInsideRoot(canonicalPath, root)) {
-                return Object.freeze({
-                    workspaceRoot: root,
-                    canonicalPath,
-                    relativePath: normalizeRelativePath(path.relative(root, canonicalPath)),
-                });
+                return authorizedPath(root, canonicalPath);
             }
         }
         for (const containerRoot of implicitContainerRoots) {
             if (!isPathInsideRoot(canonicalPath, containerRoot)) continue;
             const projectRoot = resolveImplicitGitProjectRoot(canonicalPath, containerRoot);
             if (projectRoot) {
-                return Object.freeze({
-                    workspaceRoot: projectRoot,
-                    canonicalPath,
-                    relativePath: normalizeRelativePath(path.relative(projectRoot, canonicalPath)),
-                });
+                return authorizedPath(projectRoot, canonicalPath);
             }
         }
+        const publishedRoot = resolvePublishedRoot?.(canonicalPath);
+        if (publishedRoot) return authorizedPath(publishedRoot, canonicalPath);
         throw new WorkspaceAuthorizationError(
             "ROOT_NOT_AUTHORIZED",
             "Path is not inside any authorized workspace root.",
         );
     };
 
+    const createPublishedReadPolicy = (): SessionWorkspacePolicy => {
+        // A positive grant lives for one tool request. File-by-file readers
+        // reuse it inside the granted root and cannot switch to another index.
+        let publishedRoot: string | undefined;
+        const resolvePublishedRoot = (canonicalPath: string): string | undefined => {
+            if (isBroadPath(canonicalPath) || isPathInsideRoot(canonicalPath, canonicalStateRoot)) return undefined;
+            if (publishedRoot === undefined) {
+                try {
+                    const probe = probeCurrentPublicationForPath(canonicalPath, { stateRoot: canonicalStateRoot });
+                    if (probe.kind === "current"
+                        && !isBroadPath(probe.canonicalRoot)
+                        && !isPathInsideRoot(probe.canonicalRoot, canonicalStateRoot)
+                        && isPathInsideRoot(canonicalPath, probe.canonicalRoot)) {
+                        publishedRoot = probe.canonicalRoot;
+                    }
+                } catch {
+                    // Missing or unreadable publication evidence grants no scope.
+                    return undefined;
+                }
+            }
+            return publishedRoot && isPathInsideRoot(canonicalPath, publishedRoot) ? publishedRoot : undefined;
+        };
+        const authorizeRead = (candidate: string) => authorize(candidate, resolvePublishedRoot);
+        return Object.freeze({ roots, authorizeRoot: authorizeRead, authorizePath: authorizeRead });
+    };
+
     return Object.freeze({
         roots,
         authorizeRoot: (candidateRoot: string): AuthorizedWorkspacePath => authorize(candidateRoot),
         authorizePath: (candidatePath: string): AuthorizedWorkspacePath => authorize(candidatePath),
+        ...(allowImplicitBroadContainerRoot ? { createPublishedReadPolicy } : {}),
     });
 }

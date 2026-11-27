@@ -1,5 +1,5 @@
-import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { Client } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { CliError } from "./errors.js";
 
 export type ListToolsResult = Awaited<ReturnType<Client["listTools"]>>;
@@ -27,7 +27,7 @@ function sanitizeEnv(env: Record<string, string | undefined>): Record<string, st
 }
 
 function createTimeout<T>(promise: Promise<T>, timeoutMs: number, token: string, message: string): Promise<T> {
-    return new Promise((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
             reject(new CliError(token, message, 3));
         }, timeoutMs);
@@ -36,14 +36,18 @@ function createTimeout<T>(promise: Promise<T>, timeoutMs: number, token: string,
         promise.then((value) => {
             clearTimeout(timer);
             resolve(value);
-        }).catch((error) => {
+        }, (error) => {
             clearTimeout(timer);
-            if (error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout) {
-                reject(new CliError(token, message, 3));
-                return;
-            }
             reject(error);
         });
+    }).catch(async (error: unknown) => {
+        if (!(error instanceof CliError)) {
+            const { SdkError, SdkErrorCode } = await import("@modelcontextprotocol/client");
+            if (error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout) {
+                throw new CliError(token, message, 3);
+            }
+        }
+        throw error;
     });
 }
 
@@ -125,6 +129,10 @@ export class CliMcpSession {
 }
 
 export async function connectCliMcpSession(options: SessionOptions): Promise<CliMcpSession> {
+    const [{ Client }, { StdioClientTransport }] = await Promise.all([
+        import("@modelcontextprotocol/client"),
+        import("@modelcontextprotocol/client/stdio"),
+    ]);
     const transport = new StdioClientTransport({
         command: options.command,
         args: options.args,

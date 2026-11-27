@@ -9,7 +9,7 @@
     <title>Satori Docs | Semantic Code Search for Coding Agents: Setup and Tools</title>
     <meta
       name="description"
-      content="Learn Satori from natural-language repository questions to exact source: install the local-first runtime, understand Publications, use real coding workflows, and reference the 11 MCP tools and lifecycle operations."
+      content="Learn Satori from natural-language repository questions to exact source: install the local-first runtime, understand Publications, use real coding workflows, and reference the MCP tools and lifecycle operations."
     />
     <meta name="keywords" content="Satori docs, MCP install, AI coding agent documentation, semantic code search docs, repo indexing, call graph, code navigation" />
     <meta name="robots" content="index,follow" />
@@ -667,7 +667,7 @@
         <div class="section-kicker">Five-minute path</div>
         <h2>Install Satori and ask about your repository</h2>
         <p class="lede">
-          You do not need to learn the 11 MCP tools before Satori becomes useful. The normal
+          You do not need to learn the MCP tools before Satori becomes useful. The normal
           experience is an agent using those tools for you while you stay focused on the repository question.
         </p>
         <div class="docs-start-grid">
@@ -1476,14 +1476,21 @@ VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
       </section>
 
       <section class="section" id="tools">
-        <h2>Eleven Tools</h2>
+        <h2>MCP tools</h2>
         <p class="lede">
-          The live MCP registry exposes exactly 11 tools. Together they cover repository discovery,
+          The default registry exposes eleven repository tools and <code>run_script</code> for
+          chaining calls. The optional compact profile exposes seven direct tools and routes
+          specialists through <code>run_script</code>. See the <a href="https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md">reference</a> for setup.
+          Together they cover repository discovery,
           lifecycle, natural-language + lexical search and pagination, architecture, structural and
           relationship navigation, exact references, bounded source reads, and change orientation
           without adding source-code write commands.
         </p>
         <div class="tool-grid">
+          <div class="panel">
+            <h3>run_script</h3>
+            <p>Runs bounded JavaScript to combine Satori tool calls. Set <code>SATORI_CODEMODE=0</code> to disable it.</p>
+          </div>
           <div class="panel">
             <h3>list_codebases</h3>
             <p>

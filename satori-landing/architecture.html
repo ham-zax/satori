@@ -1153,7 +1153,7 @@
             <div class="arch-mobile-link"><span>request</span></div>
             <div class="arch-mobile-node">
               <strong>Tool Registry</strong>
-              <small>11 MCP tools</small>
+              <small>MCP tools and CodeMode</small>
             </div>
             <div class="arch-mobile-link"><span>dispatch</span></div>
             <div class="arch-mobile-node" data-tone="runtime">
@@ -1278,11 +1278,12 @@
       <section class="section">
         <h2>Agent-Safe Tool Surface</h2>
         <p class="intro">
-          Satori exposes exactly 11 public MCP tools. They cover repository discovery,
+          Satori exposes eleven repository tools and the optional <code>run_script</code> tool.
+          Its compact profile routes specialist calls through CodeMode. They cover repository discovery,
           lifecycle, natural-language + lexical search and pagination, architecture, structural and
           relationship navigation, exact references, bounded source reads, and change orientation.
-          Every tool is read-only with respect to source code; only Satori index state is mutable
-          through <code>manage_index</code>.
+          Satori's repository tools do not edit source code; <code>manage_index</code> changes
+          Satori index state. CodeMode may also call explicitly configured downstream tools.
         </p>
         <div class="grid-3">
           <article class="tool-group">

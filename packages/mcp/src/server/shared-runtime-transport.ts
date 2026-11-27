@@ -1,13 +1,10 @@
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type {
-    JSONRPCMessage,
-    MessageExtraInfo,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CancelledNotificationSchema, JSONRPCMessageSchema } from "@modelcontextprotocol/core";
 import {
-    CancelledNotificationSchema,
-    ErrorCode,
-    JSONRPCMessageSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+    ProtocolErrorCode,
+    type JSONRPCMessage,
+    type MessageExtraInfo,
+    type Transport,
+} from "@modelcontextprotocol/server";
 import type { Socket } from "node:net";
 import {
     SHARED_RUNTIME_MAX_PENDING_REQUESTS,
@@ -92,7 +89,7 @@ export class BoundedSocketTransport implements Transport {
                     jsonrpc: "2.0",
                     id: message.id,
                     error: {
-                        code: ErrorCode.InternalError,
+                        code: ProtocolErrorCode.InternalError,
                         message: "Response exceeds size limit.",
                     },
                 })}\n`;

@@ -1,5 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { CliError } from "./errors.js";
 
 export type ListToolsResult = Awaited<ReturnType<Client["listTools"]>>;
@@ -37,6 +37,10 @@ function createTimeout<T>(promise: Promise<T>, timeoutMs: number, token: string,
             resolve(value);
         }).catch((error) => {
             clearTimeout(timer);
+            if (error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout) {
+                reject(new CliError(token, message, 3));
+                return;
+            }
             reject(error);
         });
     });
@@ -68,7 +72,6 @@ export class CliMcpSession {
         return createTimeout(
             this.client.callTool(
                 { name, arguments: args },
-                undefined,
                 { timeout: this.callTimeoutMs },
             ),
             this.callTimeoutMs,

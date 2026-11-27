@@ -9,8 +9,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const mcpRequire = createRequire(path.join(workspaceRoot, 'packages/mcp/package.json'));
 
-async function sdk(subpath) {
-    return import(pathToFileURL(mcpRequire.resolve(`@modelcontextprotocol/sdk/${subpath}`)).href);
+function loadMcpClientSdk() {
+    const { Client } = mcpRequire('@modelcontextprotocol/client');
+    const { StdioClientTransport } = mcpRequire('@modelcontextprotocol/client/stdio');
+    return { Client, StdioClientTransport };
 }
 
 /** Non-secret runtime selection of the user's installed offline profile (models, embedding, reranker). */
@@ -65,8 +67,7 @@ export async function localOfflineEnvironment(home = os.homedir()) {
 }
 
 export async function openLocalSession({ stateRoot, roots, home = os.homedir() }) {
-    const { Client } = await sdk('client/index.js');
-    const { StdioClientTransport } = await sdk('client/stdio.js');
+    const { Client, StdioClientTransport } = loadMcpClientSdk();
     fs.mkdirSync(stateRoot, { recursive: true });
     const modelsLink = path.join(stateRoot, 'models');
     if (!fs.existsSync(modelsLink)) fs.symlinkSync(path.join(home, '.satori', 'models'), modelsLink);
@@ -106,11 +107,11 @@ export async function openLocalSession({ stateRoot, roots, home = os.homedir() }
         }
     });
     return {
-        processId: transport._process?.pid,
+        processId: transport.pid,
         stderr,
         protocolErrors,
         async call(name, args) {
-            const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 3_600_000 });
+            const result = await client.callTool({ name, arguments: args }, { timeout: 3_600_000 });
             const text = result.content?.find((c) => c.type === 'text')?.text ?? '';
             let json;
             try { json = JSON.parse(text); } catch { /* text-only response */ }

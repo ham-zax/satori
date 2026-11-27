@@ -130,12 +130,8 @@ export function parseArgs(argv, env = process.env) {
 }
 
 async function loadMcpSdk() {
-    const clientPath = MCP_REQUIRE.resolve("@modelcontextprotocol/sdk/client/index.js");
-    const transportPath = MCP_REQUIRE.resolve("@modelcontextprotocol/sdk/client/stdio.js");
-    const [{ Client }, { StdioClientTransport }] = await Promise.all([
-        import(clientPath),
-        import(transportPath),
-    ]);
+    const { Client } = MCP_REQUIRE("@modelcontextprotocol/client");
+    const { StdioClientTransport } = MCP_REQUIRE("@modelcontextprotocol/client/stdio");
     return { Client, StdioClientTransport };
 }
 

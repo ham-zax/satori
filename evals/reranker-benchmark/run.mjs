@@ -17,8 +17,8 @@ const INSTALLED_LAUNCHER = path.join(os.homedir(), '.satori', 'bin', 'satori-mcp
 const LOCAL_MCP_ENTRY = path.join(SATORI_REPO, 'packages/mcp/dist/index.js');
 
 const mcpRequire = createRequire(path.join(SATORI_REPO, 'packages/mcp/package.json'));
-const { Client } = await import(pathToFileURL(mcpRequire.resolve('@modelcontextprotocol/sdk/client/index.js')).href);
-const { StdioClientTransport } = await import(pathToFileURL(mcpRequire.resolve('@modelcontextprotocol/sdk/client/stdio.js')).href);
+const { Client } = mcpRequire('@modelcontextprotocol/client');
+const { StdioClientTransport } = mcpRequire('@modelcontextprotocol/client/stdio');
 const { scoreQuery, normalizeHit } = await import(pathToFileURL(path.join(SATORI_REPO, 'evals/real-repo-quality/score.mjs')).href);
 const { classifyPathCategory } = await import(pathToFileURL(path.join(SATORI_REPO, 'packages/mcp/dist/core/search-ranking-policy.js')).href);
 
@@ -125,7 +125,7 @@ async function openSession({ stateRoot, roots, armEnv, mcpEntry }) {
   await client.connect(transport);
   return {
     async call(name, args) {
-      const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 3_600_000 });
+      const result = await client.callTool({ name, arguments: args }, { timeout: 3_600_000 });
       const text = result.content?.find((c) => c.type === 'text')?.text ?? '';
       let json = null;
       try { json = JSON.parse(text); } catch { /* non-json */ }

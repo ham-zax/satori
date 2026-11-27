@@ -43,7 +43,9 @@
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
-    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "@satori-code/core": "workspace:*",
     "chokidar": "^6.0.0",
     "ignore": "^7.0.14",

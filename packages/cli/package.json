@@ -37,7 +37,7 @@
     "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/client": "2.4.0",
     "jsonc-parser": "^3.3.1",
     "toml-eslint-parser": "^1.0.3"
   },

@@ -1,7 +1,5 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Server, type CallToolResult, type Transport } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { Readable, Writable } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
@@ -44,7 +42,6 @@ import type {
     MissingProviderConfigIssue,
     ProviderBackedOperation,
     ToolContext,
-    ToolResponse,
 } from "../tools/types.js";
 import { createLocalOnlyContext, ProviderRuntime } from "./provider-runtime.js";
 import { SHARED_RUNTIME_MAX_PENDING_REQUESTS } from "./shared-runtime-identity.js";
@@ -665,11 +662,11 @@ export class McpSession {
     }
 
     private setupTools(): void {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+        this.server.setRequestHandler('tools/list', async () => ({
             tools: getMcpToolList(this.resources.toolContext),
         }));
 
-        this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+        this.server.setRequestHandler('tools/call', async (request, ctx): Promise<CallToolResult> => {
             const { name, arguments: args } = request.params;
             const tool = toolRegistry[name];
             if (!tool) {
@@ -701,12 +698,12 @@ export class McpSession {
                 const requestToolContext: ToolContext = {
                     ...this.resources.toolContext,
                     workspacePolicy: publishedReadPolicy ?? this.workspacePolicy,
-                    requestSignal: extra.signal,
+                    requestSignal: ctx.mcpReq.signal,
                 };
                 return await withSourceMeasurementOperation(
                     { operation: name },
                     () => tool.execute(args || {}, requestToolContext),
-                ) as ToolResponse;
+                ) as CallToolResult;
             } finally {
                 this.activeToolCalls -= 1;
                 this.host.endOperation();

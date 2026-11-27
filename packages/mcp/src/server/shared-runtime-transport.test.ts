@@ -2,14 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Duplex } from "node:stream";
 import type { Socket } from "node:net";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-    ErrorCode,
-    ListToolsRequestSchema,
-    McpError,
-    type JSONRPCMessage,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Client, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/client";
+import { Server, type JSONRPCMessage } from "@modelcontextprotocol/server";
 import { BoundedSocketTransport } from "./shared-runtime-transport.js";
 
 type WriteCallback = (error?: Error | null) => void;
@@ -107,7 +101,7 @@ function oversizedError(id: number | string): JSONRPCMessage {
     return {
         jsonrpc: "2.0",
         id,
-        error: { code: ErrorCode.InvalidParams, message: "x".repeat(512) },
+        error: { code: ProtocolErrorCode.InvalidParams, message: "x".repeat(512) },
     };
 }
 
@@ -115,7 +109,7 @@ function sizeLimitError(id: number | string): JSONRPCMessage {
     return {
         jsonrpc: "2.0",
         id,
-        error: { code: ErrorCode.InternalError, message: "Response exceeds size limit." },
+        error: { code: ProtocolErrorCode.InternalError, message: "Response exceeds size limit." },
     };
 }
 
@@ -355,7 +349,7 @@ test("the MCP SDK requester receives the replacement error and the session serve
         { capabilities: { tools: {} } },
     );
     let firstList = true;
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
+    server.setRequestHandler('tools/list', async () => {
         if (firstList) {
             firstList = false;
             return {
@@ -390,9 +384,9 @@ test("the MCP SDK requester receives the replacement error and the session serve
     await client.connect(clientTransport);
 
     await assert.rejects(client.listTools(), (error: unknown) => {
-        assert.ok(error instanceof McpError);
-        assert.equal(error.code, ErrorCode.InternalError);
-        assert.ok(error.message.endsWith("Response exceeds size limit."));
+        assert.ok(error instanceof ProtocolError);
+        assert.equal(error.code, ProtocolErrorCode.InternalError);
+        assert.equal(error.message, "Response exceeds size limit.");
         return true;
     });
     assert.deepEqual(await client.listTools(), { tools: [] });

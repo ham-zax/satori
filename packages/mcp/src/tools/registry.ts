@@ -1,3 +1,4 @@
+import type { ListToolsResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { architectureOverviewTool } from "./architecture_overview.js";
 import { manageIndexTool } from "./manage_index.js";
@@ -12,10 +13,7 @@ import { readFileTool } from "./read_file.js";
 import { listCodebasesTool } from "./list_codebases.js";
 import { McpTool, ToolContext } from "./types.js";
 
-type JsonSchemaObject = Record<string, unknown> & {
-    $schema?: unknown;
-    definitions?: unknown;
-};
+type ToolInputSchema = ListToolsResult["tools"][number]["inputSchema"];
 
 export const toolList: McpTool[] = [
     manageIndexTool,
@@ -35,20 +33,22 @@ export const toolRegistry: Record<string, McpTool> = Object.fromEntries(
     toolList.map((tool) => [tool.name, tool])
 );
 
-function toJsonSchema(schema: z.ZodType): JsonSchemaObject {
+function toJsonSchema(schema: z.ZodType): ToolInputSchema {
     const jsonSchema = z.toJSONSchema(schema, {
-        target: 'draft-7',
+        target: 'draft-2020-12',
         io: 'input',
         reused: 'inline',
-    }) as JsonSchemaObject;
+    }) as Record<string, unknown>;
 
-    // MCP doesn't need draft metadata in the tool schema payload.
+    // MCP 2025-11-25 defaults to JSON Schema 2020-12, so omit redundant $schema metadata.
     delete jsonSchema.$schema;
-    delete jsonSchema.definitions;
-    return jsonSchema;
+    if (jsonSchema.type !== 'object') {
+        throw new Error(`MCP tool inputSchema root must have type "object", got ${String(jsonSchema.type)}`);
+    }
+    return jsonSchema as ToolInputSchema;
 }
 
-export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: JsonSchemaObject }> {
+export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: ToolInputSchema }> {
     return toolList.map((tool) => ({
         name: tool.name,
         description: tool.description(ctx),

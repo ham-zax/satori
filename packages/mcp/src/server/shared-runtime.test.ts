@@ -4,8 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import {
     buildRuntimeIndexFingerprint,
     type ContextMcpConfig,
@@ -268,9 +267,16 @@ test("session shutdown waits for its active operation without stopping the host"
     const started = new Promise<void>((resolve) => {
         markStarted = resolve;
     });
+    let markAborted!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+        markAborted = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
     toolRegistry.manage_index = {
         ...originalTool,
-        execute: async () => {
+        execute: async (_args, ctx) => {
+            observedSignal = ctx.requestSignal;
+            ctx.requestSignal?.addEventListener("abort", () => markAborted(), { once: true });
             markStarted();
             await operationGate;
             return { content: [{ type: "text", text: "{}" }] };
@@ -296,6 +302,10 @@ test("session shutdown waits for its active operation without stopping the host"
     const shutdown = connected.session.shutdown().then(() => {
         shutdownCompleted = true;
     });
+    await aborted;
+    assert.equal(observedSignal?.aborted, true);
+    assert.ok(observedSignal?.reason instanceof SdkError);
+    assert.equal(observedSignal.reason.code, SdkErrorCode.ConnectionClosed);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(host.getActivity(), { sessions: 0, operations: 1 });
     assert.equal(shutdownCompleted, false);

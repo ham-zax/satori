@@ -1,0 +1,226 @@
+{
+  "schemaVersion": "satori_offline_shootout_fixture_v1",
+  "description": "Compact synthetic contract fixtures plus minimal pinned real differential records from the 2026-11-27 Ryzen 7 3800X shootout (no model weights or full corpora).",
+  "pinnedRealReceipts": {
+    "ettin17HeadValidation": {
+      "scope": "head_only",
+      "inputSource": "quantized_backbone_cls",
+      "modelSha256": "932b04015371f60cad2dc0cdc945829d20df7fa5b902a07d8630a4ada8b1b1af",
+      "headPresent": true,
+      "gelu": "exact_erf",
+      "layerNormEpsilon": 0.00001,
+      "maxAbsoluteError": 0.00000762939453125,
+      "referenceRows": [
+        {
+          "queryId": "th1",
+          "tokens": 117,
+          "onnx": 7.456365585327148,
+          "reference": 7.45636510848999
+        },
+        {
+          "queryId": "th2",
+          "tokens": 768,
+          "onnx": 8.508292198181152,
+          "reference": 8.508293151855469
+        },
+        {
+          "queryId": "ts1",
+          "tokens": 394,
+          "onnx": 5.927151679992676,
+          "reference": 5.927151679992676
+        }
+      ]
+    },
+    "ettin32HeadValidation": {
+      "scope": "head_only",
+      "inputSource": "quantized_backbone_cls",
+      "modelSha256": "8719ef4df2535aa20b920cf56ab73ddde3cfcea6478fdbbe4ddc22868d724e19",
+      "headPresent": true,
+      "gelu": "exact_erf",
+      "layerNormEpsilon": 0.00001,
+      "maxAbsoluteError": 0.00000286102294921875,
+      "referenceRows": [
+        {
+          "queryId": "th1",
+          "tokens": 117,
+          "onnx": 8.103343963623047,
+          "reference": 8.103344917297363
+        },
+        {
+          "queryId": "ts5",
+          "tokens": 645,
+          "onnx": 6.883426189422607,
+          "reference": 6.883426189422607
+        }
+      ]
+    },
+    "ettin17TokenizerValidation": {
+      "tokenizerSha256": "28c5e078e4c52aa37cf0e6de1a212878f3dbd58dd1c70466298efe0b6b86db35",
+      "samples": 32,
+      "allIdsExact": true,
+      "allMasksExact": true,
+      "terminalSepPreservedOnTruncation": true,
+      "separatorCountPerPair": 2,
+      "sampleRows": [
+        { "sample": 0, "tokens": 117, "sameIds": true, "sameMask": true, "endsWithSep": true, "sepCount": 2 },
+        { "sample": 1, "tokens": 768, "sameIds": true, "sameMask": true, "endsWithSep": true, "sepCount": 2 }
+      ]
+    },
+    "upstreamEdgeInt8Collapse": {
+      "platform": "linux-x64-avx2",
+      "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+      "modelSha256": "eac35bdaa862e2762e6455337f7a3e704b05dbc4259f00929fcc8e10207f11c7",
+      "allOutputsFinite": true,
+      "shapesValid": true,
+      "unrelatedQueryCosineMax": 0.99994,
+      "alignedTokenCosMean": 0.6953591363836631,
+      "scoreSpread": 0.010867215290544
+    },
+    "repairedEdgeU8U8Health": {
+      "platform": "linux-x64-avx2",
+      "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+      "modelSha256": "dae58a14374660311a3047eaddd393585780c82ab9302d6d40dfd8c25fa09ce3",
+      "allOutputsFinite": true,
+      "shapesValid": true,
+      "unrelatedQueryCosineMax": 0.6534,
+      "alignedTokenCosMean": 0.9606402628836604,
+      "scoreSpread": 0.780952940219477
+    }
+  },
+  "historicalSampleRecords": [
+    {
+      "id": "ts5",
+      "repo": "tessera",
+      "query": "where does tessera capture target revisions and issue single-use confirmation plans for Tier 2 actions",
+      "score": {
+        "rank": 2,
+        "strictRank": 2,
+        "granularity": "symbol",
+        "matched": { "path": "packages/server/src/trust.ts", "symbol": "createTrustManager" }
+      },
+      "warmCleanMs": 3252,
+      "elapsedMs": 694,
+      "rerankApplied": true,
+      "orderAuthority": "reranker_order",
+      "freshnessMode": "verified"
+    },
+    {
+      "id": "th3",
+      "repo": "trufflehog",
+      "query": "where does trufflehog use Aho-Corasick keyword matching to find candidate detectors for a chunk",
+      "score": {
+        "rank": 2,
+        "strictRank": 2,
+        "granularity": "symbol",
+        "matched": { "path": "pkg/engine/ahocorasick/ahocorasickcore.go", "symbol": "FindDetectorMatches" }
+      },
+      "warmCleanMs": 115,
+      "elapsedMs": 115,
+      "rerankApplied": false,
+      "orderAuthority": "retrieval_order",
+      "freshnessMode": "served_previous_generation"
+    }
+  ],
+  "defaultEvaluation": {
+    "modelId": "ettin-reranker-17m-v1-avx2-full-head",
+    "targetPlatform": "linux-x64-avx2",
+    "gates": {
+      "minHitAt1": 3,
+      "minStrictHitAt1": 3,
+      "minHitAt5": 3,
+      "minMrrAt10": 0.85,
+      "maxProtectedLosses": 0,
+      "maxWarmNovelP50Ms": 800,
+      "maxInferenceRssBytes": 500000000
+    },
+    "limitations": [
+      "Synthetic 3-case fixture demonstrating explicit no-go when protected strict@1 wins are lost."
+    ],
+    "baselineRun": {
+      "schemaVersion": "satori_offline_shootout_run_v1",
+      "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "corpusSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "configSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "command": "node evals/reranker-benchmark/run.mjs --freshness-mode production_watcher",
+      "host": { "platform": "linux", "arch": "x64", "cpu": "AMD Ryzen 7 3800X" },
+      "freshnessMode": "production_watcher",
+      "runtimeMode": "local",
+      "debugMode": "full",
+      "cacheState": "initially_empty_novel_query",
+      "expectedCaseCount": 3,
+      "timingScope": { "label": "instrumented_full_debug", "novelQueryClaim": true },
+      "latency": { "warmNovelP50Ms": 2482 },
+      "memory": {
+        "rssScope": "inference_child_and_service_tree",
+        "rssMethod": "proc_vmrss_peak",
+        "inferenceHostPeakRssBytes": 591400000,
+        "wholeServicePeakRssBytes": 2868800000
+      },
+      "indexCost": { "measurementTag": "not_applicable", "seconds": 0 },
+      "processLifecycle": { "ownedPids": [101], "exitedPids": [101], "remainingPids": [] },
+      "qualityCases": [
+        { "id": "ts14", "requestId": "req-b-1", "publicationId": "pub-1", "freshnessMode": "verified", "failed": false, "score": { "rank": 1, "strictRank": 1 } },
+        { "id": "cl4", "requestId": "req-b-2", "publicationId": "pub-1", "freshnessMode": "verified", "failed": false, "score": { "rank": 1, "strictRank": 1 } },
+        { "id": "th4", "requestId": "req-b-3", "publicationId": "pub-2", "freshnessMode": "verified", "failed": false, "score": { "rank": 2, "strictRank": 2 } }
+      ]
+    },
+    "candidateRun": {
+      "schemaVersion": "satori_offline_shootout_run_v1",
+      "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "corpusSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "configSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "command": "node evals/reranker-benchmark/run.mjs --freshness-mode production_watcher --arm ettin17",
+      "host": { "platform": "linux", "arch": "x64", "cpu": "AMD Ryzen 7 3800X" },
+      "freshnessMode": "production_watcher",
+      "runtimeMode": "local",
+      "debugMode": "full",
+      "cacheState": "initially_empty_novel_query",
+      "expectedCaseCount": 3,
+      "timingScope": { "label": "instrumented_full_debug", "novelQueryClaim": true },
+      "latency": { "warmNovelP50Ms": 454 },
+      "memory": {
+        "rssScope": "inference_child_and_service_tree",
+        "rssMethod": "proc_vmrss_peak",
+        "inferenceHostPeakRssBytes": 277348352,
+        "wholeServicePeakRssBytes": 2245427200
+      },
+      "indexCost": { "measurementTag": "not_applicable", "seconds": 0 },
+      "processLifecycle": { "ownedPids": [201], "exitedPids": [201], "remainingPids": [] },
+      "qualityCases": [
+        { "id": "ts14", "requestId": "req-c-1", "publicationId": "pub-1", "freshnessMode": "verified", "failed": false, "score": { "rank": 2, "strictRank": 2 } },
+        { "id": "cl4", "requestId": "req-c-2", "publicationId": "pub-1", "freshnessMode": "verified", "failed": false, "score": { "rank": 3, "strictRank": 3 } },
+        { "id": "th4", "requestId": "req-c-3", "publicationId": "pub-2", "freshnessMode": "verified", "failed": false, "score": { "rank": 1, "strictRank": 1 } }
+      ]
+    },
+    "receipts": {
+      "tokenizer": {
+        "tokenizerSha256": "28c5e078e4c52aa37cf0e6de1a212878f3dbd58dd1c70466298efe0b6b86db35",
+        "samples": 32,
+        "allIdsExact": true,
+        "allMasksExact": true,
+        "terminalSepPreservedOnTruncation": true,
+        "separatorCountPerPair": 2
+      },
+      "head": {
+        "scope": "head_only",
+        "inputSource": "quantized_backbone_cls",
+        "modelSha256": "932b04015371f60cad2dc0cdc945829d20df7fa5b902a07d8630a4ada8b1b1af",
+        "headPresent": true,
+        "gelu": "exact_erf",
+        "layerNormEpsilon": 0.00001,
+        "maxAbsoluteError": 0.00000762939453125,
+        "referenceRows": [
+          { "queryId": "th1", "tokens": 117, "onnx": 7.456365585327148, "reference": 7.45636510848999 }
+        ]
+      },
+      "numericalHealth": {
+        "platform": "linux-x64-avx2",
+        "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+        "modelSha256": "932b04015371f60cad2dc0cdc945829d20df7fa5b902a07d8630a4ada8b1b1af",
+        "allOutputsFinite": true,
+        "shapesValid": true,
+        "scoreSpread": 3.876
+      }
+    }
+  }
+}

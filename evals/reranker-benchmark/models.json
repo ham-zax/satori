@@ -1,0 +1,460 @@
+{
+  "schemaVersion": "satori_offline_shootout_manifest_v1",
+  "evaluationOnly": true,
+  "activationAllowed": false,
+  "notes": "Evaluation-only artifact registry for offline reranker and Stage-1 shootout qualification. Production runtime contracts remain exclusively owned by packages/core/src/runtime-contract.ts.",
+  "models": {
+    "potion-code-16m-v2": {
+      "role": "stage1_embedder",
+      "repository": "minishlab/potion-code-16M-v2",
+      "revision": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+      "license": "MIT",
+      "parameterCount": 16000000,
+      "artifacts": [
+        {
+          "path": "model.safetensors",
+          "bytes": 32490072,
+          "sha256": "75cf7a6c2171b230ad19b1e7d8e0b1aee86da5a02af8e7cacedd9921d227623c"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 1024340,
+          "sha256": "107bbdcbad4bff1d299b7a4c3a2fb17c52890688b7dd0e4c9deab79d3c4f3d45"
+        },
+        {
+          "path": "config.json",
+          "bytes": 59,
+          "sha256": "148e5691a6fcc553437156859701fba017a1ba5d340b170f17e0f3668fb861a7"
+        }
+      ],
+      "derivation": null,
+      "tokenizer": {
+        "template": "static_unigram_bpe",
+        "truncation": "none_retained_limit_4096",
+        "casing": "tokenizer_default"
+      },
+      "encoder": {
+        "inputNames": ["text"],
+        "outputName": "embedding",
+        "dimensions": 256,
+        "maxTokenCap": 4096,
+        "prefixes": { "query": "", "document": "" },
+        "maskPolicy": "drop_unk_token",
+        "normalization": "l2_unit"
+      },
+      "head": {
+        "kind": "mean_pool_static",
+        "output": "256d_unit_vector"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "baseline_retained",
+          "runtimeProvider": "satori-potion-rust",
+          "reason": "Retained Stage-1 baseline; 44/45 strict pool recall and 42/45 top-12 strict recall on 45-query shootout."
+        },
+        "linux-arm64": {
+          "status": "baseline_retained",
+          "runtimeProvider": "satori-potion-rust",
+          "reason": "Shipped Stage-1 baseline."
+        }
+      }
+    },
+    "blink-code-16m": {
+      "role": "stage1_embedder",
+      "repository": "minishlab/blink-code-16M",
+      "revision": "2ffade466e57c827b49480cdb20aa69569467f6d",
+      "license": "MIT",
+      "parameterCount": 16000000,
+      "artifacts": [
+        {
+          "path": "model.safetensors",
+          "bytes": 64000088,
+          "sha256": "0ed06d11fb406a1292d0d06841742dc67292879edc25154217e29e546c901248"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 1127262,
+          "sha256": "5116184a64255f886cc76724b2ef45bc060b690efe72c4e147ebec6380a7f383"
+        },
+        {
+          "path": "config.json",
+          "bytes": 89,
+          "sha256": "30f2c129cb088e5ab469813f08632e31f13443613ad87c11b5a7c1d2045ec47b"
+        }
+      ],
+      "derivation": null,
+      "tokenizer": {
+        "template": "static_uncased",
+        "truncation": "none_retained_limit_4096",
+        "casing": "uncased_tokenizer"
+      },
+      "encoder": {
+        "inputNames": ["text"],
+        "outputName": "embedding",
+        "dimensions": 256,
+        "maxTokenCap": 4096,
+        "prefixes": { "query": "", "document": "" },
+        "maskPolicy": "drop_unk_token",
+        "normalization": "l2_unit"
+      },
+      "head": {
+        "kind": "mean_pool_static",
+        "output": "256d_unit_vector"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "experimental_unqualified",
+          "runtimeProvider": "satori-potion-rust",
+          "reason": "Tied Potion at 19/45 strict Stage-1 Hit@1 and 44/45 strict pool recall (improved ts1/ts8/cl14/th15, regressed th1/ts12/ts14)."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "satori-potion-rust",
+          "reason": "Not measured on ARM64."
+        }
+      }
+    },
+    "lateon-code-edge-fp32": {
+      "role": "stage2_reranker",
+      "repository": "lightonai/LateOn-Code-edge",
+      "revision": "07ef20f406c86badca122464808f4cac2f6e4b25",
+      "license": "Apache-2.0",
+      "parameterCount": 16953600,
+      "artifacts": [
+        {
+          "path": "model.onnx",
+          "bytes": 67970609,
+          "sha256": "ac5a92a685512b163c3c591438f518379309d2a98c4818a9c6e2986f789dc8ef"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583847,
+          "sha256": "a388b94942e98e5c661c6c23f919842285738bfd123a0d148dea0c56287505d0"
+        },
+        {
+          "path": "onnx_config.json",
+          "bytes": 792,
+          "sha256": "fa4fef89820dcdc33c5504c62c1d5efc19603cfbfebf02368a70d51a4dbe6651"
+        }
+      ],
+      "derivation": null,
+      "tokenizer": {
+        "template": "single_sequence_colbert_prefix",
+        "truncation": "right",
+        "casing": "lowercase_before_tokenize"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "output",
+        "dimensions": 48,
+        "maxTokenCap": 2048,
+        "prefixes": { "query": "[Q] ", "document": "[D] " },
+        "maskPolicy": "attention_mask_nonzero_and_document_skiplist",
+        "normalization": "l2_per_token"
+      },
+      "head": {
+        "kind": "colbert_maxsim",
+        "output": "maxsim_scalar"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "baseline_retained",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Retained offline default; 30/45 strict Hit@1 and 43/45 Hit@5 with shipped policy."
+        },
+        "linux-arm64": {
+          "status": "baseline_retained",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Shipped baseline; independent ARM64 shootout pending."
+        }
+      }
+    },
+    "lateon-code-edge-int8-upstream": {
+      "role": "stage2_reranker",
+      "repository": "lightonai/LateOn-Code-edge",
+      "revision": "07ef20f406c86badca122464808f4cac2f6e4b25",
+      "license": "Apache-2.0",
+      "parameterCount": 16953600,
+      "artifacts": [
+        {
+          "path": "model_int8.onnx",
+          "bytes": 17228399,
+          "sha256": "eac35bdaa862e2762e6455337f7a3e704b05dbc4259f00929fcc8e10207f11c7"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583847,
+          "sha256": "a388b94942e98e5c661c6c23f919842285738bfd123a0d148dea0c56287505d0"
+        },
+        {
+          "path": "onnx_config.json",
+          "bytes": 792,
+          "sha256": "fa4fef89820dcdc33c5504c62c1d5efc19603cfbfebf02368a70d51a4dbe6651"
+        }
+      ],
+      "derivation": null,
+      "tokenizer": {
+        "template": "single_sequence_colbert_prefix",
+        "truncation": "right",
+        "casing": "lowercase_before_tokenize"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "output",
+        "dimensions": 48,
+        "maxTokenCap": 768,
+        "prefixes": { "query": "[Q] ", "document": "[D] " },
+        "maskPolicy": "attention_mask_nonzero_and_document_skiplist",
+        "normalization": "l2_per_token"
+      },
+      "head": {
+        "kind": "colbert_maxsim",
+        "output": "maxsim_scalar"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "rejected",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Numerical collapse on Ryzen AVX2 (0/45 Hit@1, unrelated query cosine > 0.9999 under U8S8 signed MatMulInteger)."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Not measured on ARM64."
+        }
+      }
+    },
+    "lateon-code-edge-int8-u8u8": {
+      "role": "stage2_reranker",
+      "repository": "lightonai/LateOn-Code-edge",
+      "revision": "07ef20f406c86badca122464808f4cac2f6e4b25",
+      "license": "Apache-2.0",
+      "parameterCount": 16953600,
+      "artifacts": [
+        {
+          "path": "model_int8.onnx",
+          "bytes": 17228399,
+          "sha256": "dae58a14374660311a3047eaddd393585780c82ab9302d6d40dfd8c25fa09ce3"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583847,
+          "sha256": "a388b94942e98e5c661c6c23f919842285738bfd123a0d148dea0c56287505d0"
+        },
+        {
+          "path": "onnx_config.json",
+          "bytes": 792,
+          "sha256": "fa4fef89820dcdc33c5504c62c1d5efc19603cfbfebf02368a70d51a4dbe6651"
+        }
+      ],
+      "derivation": {
+        "recipe": "Shift 30 signed MatMulInteger weight tensors and zero points by +128 to UINT8; preserve scales and graph nodes.",
+        "parentSha256": "eac35bdaa862e2762e6455337f7a3e704b05dbc4259f00929fcc8e10207f11c7",
+        "outputSha256": "dae58a14374660311a3047eaddd393585780c82ab9302d6d40dfd8c25fa09ce3"
+      },
+      "tokenizer": {
+        "template": "single_sequence_colbert_prefix",
+        "truncation": "right",
+        "casing": "lowercase_before_tokenize"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "output",
+        "dimensions": 48,
+        "maxTokenCap": 768,
+        "prefixes": { "query": "[Q] ", "document": "[D] " },
+        "maskPolicy": "attention_mask_nonzero_and_document_skiplist",
+        "normalization": "l2_per_token"
+      },
+      "head": {
+        "kind": "colbert_maxsim",
+        "output": "maxsim_scalar"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "rejected",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Recovered geometry from U8S8 collapse but failed accuracy gates (15-17/45 raw Hit@1; 0/15 on Tessera whole-owner packet)."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Not measured on ARM64."
+        }
+      }
+    },
+    "lateon-code-149m-int8": {
+      "role": "stage2_reranker",
+      "repository": "lightonai/LateOn-Code",
+      "revision": "ace431824f35db231178fc602e33296784762a2e",
+      "license": "Apache-2.0",
+      "parameterCount": 149114112,
+      "artifacts": [
+        {
+          "path": "model_int8.onnx",
+          "bytes": 150008364,
+          "sha256": "a62a88b4e3ebb76e8bc5f0263d17b773c667d27bc73c5120e3131048dd1554ef"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583847,
+          "sha256": "a388b94942e98e5c661c6c23f919842285738bfd123a0d148dea0c56287505d0"
+        },
+        {
+          "path": "onnx_config.json",
+          "bytes": 789,
+          "sha256": "eedf90bb3b71b7500a973e140b72a736c4c5ca4b6746c1f69fcc64b29924a8d5"
+        }
+      ],
+      "derivation": null,
+      "tokenizer": {
+        "template": "single_sequence_colbert_prefix",
+        "truncation": "right",
+        "casing": "lowercase_before_tokenize"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "output",
+        "dimensions": 128,
+        "maxTokenCap": 768,
+        "prefixes": { "query": "[Q] ", "document": "[D] " },
+        "maskPolicy": "attention_mask_nonzero_and_document_skiplist",
+        "normalization": "l2_per_token"
+      },
+      "head": {
+        "kind": "colbert_maxsim",
+        "output": "maxsim_scalar"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "rejected",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Failed latency (3,845 ms p50 at top-16) and memory (639.6 MiB peak RSS) gates; top-32 killed early."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Not measured on ARM64."
+        }
+      }
+    },
+    "ettin-reranker-32m-v1-avx2-full-head": {
+      "role": "stage2_cross_encoder",
+      "repository": "cross-encoder/ettin-reranker-32m-v1",
+      "revision": "b33e5ceb5110773ea9cf5e00c9bedc83a8c2afdd",
+      "license": "Apache-2.0",
+      "parameterCount": 32031745,
+      "artifacts": [
+        {
+          "path": "onnx/model_quint8_avx2_full_head.onnx",
+          "bytes": 33011697,
+          "sha256": "8719ef4df2535aa20b920cf56ab73ddde3cfcea6478fdbbe4ddc22868d724e19"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583327,
+          "sha256": "28c5e078e4c52aa37cf0e6de1a212878f3dbd58dd1c70466298efe0b6b86db35"
+        }
+      ],
+      "derivation": {
+        "recipe": "Fuse CLS pooling + 2_Dense (384x384, bias=false, exact erf GELU) + 3_LayerNorm (eps=1e-5) + 4_Dense (384x1, bias=true) onto official onnx/model_quint8_avx2.onnx backbone.",
+        "parentSha256": "7ca231b98dc591122774127865a293aae90b9a2ccb148afe8c2587d03703f8d0",
+        "outputSha256": "8719ef4df2535aa20b920cf56ab73ddde3cfcea6478fdbbe4ddc22868d724e19"
+      },
+      "tokenizer": {
+        "template": "[CLS] A [SEP] B [SEP]",
+        "truncation": "longest_first_before_template",
+        "casing": "preserve_case"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "scores",
+        "dimensions": 384,
+        "maxTokenCap": 512,
+        "prefixes": { "query": "", "document": "" },
+        "maskPolicy": "all_ones_pair_mask",
+        "normalization": "raw_logit"
+      },
+      "head": {
+        "kind": "cls_dense_gelu_layernorm_linear",
+        "hiddenSize": 384,
+        "dense1Bias": false,
+        "gelu": "exact_erf",
+        "layerNormEpsilon": 0.00001,
+        "dense2Bias": true,
+        "output": "raw_linear_score"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "rejected",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Head parity passed (max abs error 2.86e-6) but failed latency and accuracy gates at cap 768."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Requires ARM64 ONNX export and independent ARM64 qualification."
+        }
+      }
+    },
+    "ettin-reranker-17m-v1-avx2-full-head": {
+      "role": "stage2_cross_encoder",
+      "repository": "cross-encoder/ettin-reranker-17m-v1",
+      "revision": "9e4aa35321a6dd1a43ca313f500c4b4f7cfb5cc6",
+      "license": "Apache-2.0",
+      "parameterCount": 16863745,
+      "artifacts": [
+        {
+          "path": "onnx/model_quint8_avx2_full_head.onnx",
+          "bytes": 17394101,
+          "sha256": "932b04015371f60cad2dc0cdc945829d20df7fa5b902a07d8630a4ada8b1b1af"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 3583327,
+          "sha256": "28c5e078e4c52aa37cf0e6de1a212878f3dbd58dd1c70466298efe0b6b86db35"
+        }
+      ],
+      "derivation": {
+        "recipe": "Fuse CLS pooling + 2_Dense (256x256, bias=false, exact erf GELU) + 3_LayerNorm (eps=1e-5) + 4_Dense (256x1, bias=true) onto official onnx/model_quint8_avx2.onnx backbone.",
+        "parentSha256": "3f567dda364320baa51b274a41ec8cbbdf34f685c86d398f6b3b4df60fe0cc02",
+        "outputSha256": "932b04015371f60cad2dc0cdc945829d20df7fa5b902a07d8630a4ada8b1b1af"
+      },
+      "tokenizer": {
+        "template": "[CLS] A [SEP] B [SEP]",
+        "truncation": "longest_first_before_template",
+        "casing": "preserve_case"
+      },
+      "encoder": {
+        "inputNames": ["input_ids", "attention_mask"],
+        "outputName": "scores",
+        "dimensions": 256,
+        "maxTokenCap": 512,
+        "prefixes": { "query": "", "document": "" },
+        "maskPolicy": "all_ones_pair_mask",
+        "normalization": "raw_logit"
+      },
+      "head": {
+        "kind": "cls_dense_gelu_layernorm_linear",
+        "hiddenSize": 256,
+        "dense1Bias": false,
+        "gelu": "exact_erf",
+        "layerNormEpsilon": 0.00001,
+        "dense2Bias": true,
+        "output": "raw_linear_score"
+      },
+      "platformQualifications": {
+        "linux-x64-avx2": {
+          "status": "experimental_unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Head parity passed (max abs error 7.63e-6). Live cap-768 top-12 chunk arm hit 454 ms p50 and 30/45 strict Hit@1 but lost 3 protected wins and dropped Hit@5 (43->40); cap-512 v5 replay reached 31/45 strict Hit@1 and warrants held-out live verification."
+        },
+        "linux-arm64": {
+          "status": "unqualified",
+          "runtimeProvider": "onnxruntime-node@1.30.0-cpu",
+          "reason": "Requires ARM64 ONNX export and independent ARM64 qualification."
+        }
+      }
+    }
+  }
+}

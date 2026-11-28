@@ -375,3 +375,25 @@ test("reranker call requires at least two projected candidates", () => {
     assert.equal(shouldCallRerankerForProjectedCandidateCount(1), false);
     assert.equal(shouldCallRerankerForProjectedCandidateCount(2), true);
 });
+
+test("preferred reservation prioritizes distinct preferred families before duplicate chunks of the same owner", () => {
+    const base = Array.from({ length: 6 }, (_, index) => candidate({ id: `base-${index}`, ownerInstanceId: `base-${index}` }));
+    const dupPreferred = [
+        candidate({ id: "pref-a-1", ownerInstanceId: "pref-a", startLine: 1 }),
+        candidate({ id: "pref-a-2", ownerInstanceId: "pref-a", startLine: 20 }),
+        candidate({ id: "pref-a-3", ownerInstanceId: "pref-a", startLine: 40 }),
+        candidate({ id: "pref-b-1", ownerInstanceId: "pref-b", startLine: 1 }),
+        candidate({ id: "pref-c-1", ownerInstanceId: "pref-c", startLine: 1 }),
+    ];
+    const selection = selectRerankCandidates({
+        candidates: [...base, ...dupPreferred],
+        preferredCandidates: dupPreferred,
+        providerMaximumDocuments: 6,
+    });
+    const ids = selection.selected.map(({ id }) => id);
+    assert.equal(selection.selected.length, 6);
+    assert.ok(ids.includes("pref-a-1"));
+    assert.ok(ids.includes("pref-b-1"));
+    assert.ok(ids.includes("pref-c-1"));
+    assert.equal(ids.includes("pref-a-2"), false);
+});

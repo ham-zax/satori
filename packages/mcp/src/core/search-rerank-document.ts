@@ -1,9 +1,10 @@
 /**
- * Canonical rerank document projection (Phase 9.2B).
+ * Canonical rerank document projection (`search_rerank_document_v6`).
  *
- * One production projector (`search_rerank_document_v5`) plus the raw fallback
- * identity (`semantic_document_raw_v1`). Retired v1/v2/v3 identities fail closed
- * before any provider call.
+ * One production projector (`search_rerank_document_v6`: identity-first,
+ * 3,200-byte plain-text view) plus the raw fallback identity
+ * (`semantic_document_raw_v1`). Retired v1–v5 identities fail closed before
+ * any provider call.
  */
 import { compareContractStrings } from "@satori-code/core";
 import { serializeCanonicalJson } from "./canonical-json.js";
@@ -42,9 +43,16 @@ import {
 
 export const SEARCH_RERANK_DOCUMENT_RAW_IDENTITY = "semantic_document_raw_v1" as const;
 
+/**
+ * Identity-first, token-budgeted plain-text projection for rerankers.
+ * Places path, role, kind, canonical symbol label, declaration, and bounded
+ * structural context ahead of the source excerpt so right-truncation can never
+ * drop candidate identity or declaration metadata, without JSON escaping overhead.
+ */
 export const SEARCH_RERANK_DOCUMENT_POLICY = Object.freeze({
-    id: "search_rerank_document_v5",
-    maximumUtf8Bytes: 4_000,
+    id: "search_rerank_document_v6",
+    maximumUtf8Bytes: 3_200,
+    structuralHeaderMaximumUtf8Bytes: 320,
     sourceReferenceLimit: SEARCH_RERANK_SOURCE_REFERENCE_LIMIT,
     sourceReferenceExcerptMaximumBytes: SEARCH_RERANK_SOURCE_REFERENCE_MAX_BYTES,
     directCallerLimit: 3,
@@ -94,21 +102,6 @@ export interface SearchRerankDocumentResult {
     readonly selectionAttemptCount: number;
     readonly structuralContextTruncated: boolean;
     readonly sourceReferencesTruncated: boolean;
-}
-
-interface SearchRerankDocumentProjection {
-    readonly repository_relative_path: string;
-    readonly candidate_role: SearchCandidateRole;
-    readonly symbol_kind: string;
-    readonly canonical_symbol_label: string;
-    readonly signature_or_declaration: string;
-    readonly query_relevant_source_excerpt: string;
-    readonly structural_context: {
-        readonly direct_callers: readonly SearchRerankStructuralReference[];
-        readonly direct_callees: readonly SearchRerankStructuralReference[];
-        readonly supporting_tests: readonly SearchRerankStructuralReference[];
-    };
-    readonly source_references: readonly SearchRerankSourceReference[];
 }
 
 function normalizeSourceReferences(value: unknown): SearchRerankSourceReference[] {
@@ -241,50 +234,30 @@ function normalizeStructuralContext(
     };
 }
 
-/**
- * Structural references are optional supporting context. Source selection runs
- * against the base answer packet first; references then consume only the
- * remaining bytes and are dropped in deterministic priority order. Thus no
- * reference can displace an otherwise valid primary source excerpt.
- */
-function truncateStructuralContextToBudget(input: {
-    context: SearchRerankStructuralContext;
-    queryRelevantSourceExcerpt: string;
-    buildProjectionText: (
-        context: SearchRerankStructuralContext,
-        queryRelevantSourceExcerpt: string,
-    ) => string;
-}): { context: SearchRerankStructuralContext; truncated: boolean } {
-    let directCallers = [...input.context.directCallers];
-    let directCallees = [...input.context.directCallees];
-    let supportingTests = [...input.context.supportingTests];
-    let truncated = false;
-    for (;;) {
-        const context: SearchRerankStructuralContext = {
-            directCallers,
-            directCallees,
-            supportingTests,
-        };
-        const text = input.buildProjectionText(context, input.queryRelevantSourceExcerpt);
-        if (Buffer.byteLength(text, "utf8") <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes) {
-            return { context, truncated };
-        }
-        if (supportingTests.length > 0) {
-            supportingTests = supportingTests.slice(0, -1);
-        } else if (directCallees.length > 0) {
-            directCallees = directCallees.slice(0, -1);
-        } else if (directCallers.length > 0) {
-            directCallers = directCallers.slice(0, -1);
-        } else {
-            throw new RangeError(
-                `Projection v4 base projection exceeds ${SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes} UTF-8 bytes.`,
-            );
-        }
-        truncated = true;
+function formatStructuralLines(context: SearchRerankStructuralContext): string[] {
+    const lines: string[] = [];
+    const formatRef = (entry: SearchRerankStructuralReference): string => (
+        `${entry.repository_relative_path}:${entry.canonical_symbol_label}`
+    );
+    if (context.directCallers.length > 0) {
+        lines.push(`callers: ${context.directCallers.map(formatRef).join("; ")}`);
     }
+    if (context.directCallees.length > 0) {
+        lines.push(`callees: ${context.directCallees.map(formatRef).join("; ")}`);
+    }
+    if (context.supportingTests.length > 0) {
+        lines.push(`tests: ${context.supportingTests.map(formatRef).join("; ")}`);
+    }
+    return lines;
 }
 
-export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocumentResult {
+function parseValidatedDocumentInput(rawInput: unknown): Readonly<{
+    candidateRole: SearchCandidateRole;
+    normalized: NormalizedProjectionInput;
+    structural: StructuralContextNormalization;
+    sourceReferences: readonly SearchRerankSourceReference[];
+    rawSourceReferenceCount: number;
+}> {
     if (!isRecord(rawInput)) throw new TypeError("Projection input must be an object.");
     requireOnlyKeys(rawInput, "Projection input", [
         "relativePath",
@@ -350,53 +323,121 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
         symbolSpan,
         evidenceSpans: normalizeEvidenceSpans(rawInput.evidenceSpans, symbolSpan, lines.length),
     };
+    return {
+        candidateRole,
+        normalized,
+        structural,
+        sourceReferences,
+        rawSourceReferenceCount: Array.isArray(rawInput.sourceReferences)
+            ? rawInput.sourceReferences.length
+            : 0,
+    };
+}
+
+export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocumentResult {
+    const {
+        candidateRole,
+        normalized,
+        structural,
+        sourceReferences,
+        rawSourceReferenceCount,
+    } = parseValidatedDocumentInput(rawInput);
+    const {
+        relativePath,
+        symbolKind,
+        canonicalSymbolLabel,
+        signatureOrDeclaration,
+    } = normalized;
+    const maxBytes = SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes;
+    const maxStructuralBytes = SEARCH_RERANK_DOCUMENT_POLICY.structuralHeaderMaximumUtf8Bytes;
 
     const buildProjectionText = (
         context: SearchRerankStructuralContext,
         queryRelevantSourceExcerpt: string,
         references: readonly SearchRerankSourceReference[] = [],
     ): string => {
-        const projection: SearchRerankDocumentProjection = {
-            repository_relative_path: relativePath,
-            candidate_role: candidateRole,
-            symbol_kind: symbolKind,
-            canonical_symbol_label: canonicalSymbolLabel,
-            signature_or_declaration: signatureOrDeclaration,
-            query_relevant_source_excerpt: queryRelevantSourceExcerpt,
-            structural_context: {
-                direct_callers: context.directCallers,
-                direct_callees: context.directCallees,
-                supporting_tests: context.supportingTests,
-            },
-            source_references: references,
-        };
-        return serializeCanonicalJson(projection);
+        const lines: string[] = [
+            `path: ${relativePath}`,
+            `role: ${candidateRole} | kind: ${symbolKind} | symbol: ${canonicalSymbolLabel}`,
+            `declaration: ${signatureOrDeclaration}`,
+            ...formatStructuralLines(context),
+            "source:",
+        ];
+        if (queryRelevantSourceExcerpt.length > 0) {
+            lines.push(queryRelevantSourceExcerpt);
+        }
+        if (references.length > 0) {
+            lines.push("references:");
+            for (const entry of references) {
+                lines.push(
+                    `${entry.repository_relative_path}:${entry.source_line} (${entry.containing_symbol_label}): ${entry.reference_source_excerpt}`,
+                );
+            }
+        }
+        return lines.join("\n");
     };
 
-    const emptyContext: SearchRerankStructuralContext = {
-        directCallers: [],
-        directCallees: [],
-        supportingTests: [],
+    // Bound optional structural context into a compact header ahead of source
+    // so identity and direct graph links stay ahead of right-truncation without
+    // starving the source excerpt budget.
+    let directCallers = [...structural.context.directCallers];
+    let directCallees = [...structural.context.directCallees];
+    let supportingTests = [...structural.context.supportingTests];
+    let structuralTruncated = structural.truncated;
+    for (;;) {
+        const candidateContext: SearchRerankStructuralContext = {
+            directCallers,
+            directCallees,
+            supportingTests,
+        };
+        const structuralBytes = Buffer.byteLength(
+            formatStructuralLines(candidateContext).join("\n"),
+            "utf8",
+        );
+        const headerBytes = Buffer.byteLength(buildProjectionText(candidateContext, ""), "utf8");
+        if (structuralBytes <= maxStructuralBytes && headerBytes <= maxBytes) {
+            break;
+        }
+        if (supportingTests.length > 0) {
+            supportingTests = supportingTests.slice(0, -1);
+        } else if (directCallees.length > 0) {
+            directCallees = directCallees.slice(0, -1);
+        } else if (directCallers.length > 0) {
+            directCallers = directCallers.slice(0, -1);
+        } else {
+            throw new RangeError(
+                `Projection base projection exceeds ${maxBytes} UTF-8 bytes.`,
+            );
+        }
+        structuralTruncated = true;
+    }
+
+    const boundedContext: SearchRerankStructuralContext = {
+        directCallers,
+        directCallees,
+        supportingTests,
     };
     const sourceSelection = selectRerankSourceWithinBudget({
         normalized,
-        minimumText: buildProjectionText(emptyContext, ""),
-        buildProjectionText: (excerpt) => buildProjectionText(emptyContext, excerpt),
+        minimumText: buildProjectionText(boundedContext, ""),
+        buildProjectionText: (excerpt) => buildProjectionText(boundedContext, excerpt),
         selectionPolicyVersion: BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
+        maximumUtf8Bytes: maxBytes,
     });
     const queryRelevantSourceExcerpt = sourceSelection.selectedSource
         ? selectedExcerptText(sourceSelection.selectedSource)
         : "";
-    const bounded = truncateStructuralContextToBudget({
-        context: structural.context,
-        queryRelevantSourceExcerpt,
-        buildProjectionText,
-    });
     const admittedReferences = [...sourceReferences];
-    while (admittedReferences.length > 0 && Buffer.byteLength(
-        buildProjectionText(bounded.context, queryRelevantSourceExcerpt, admittedReferences), "utf8",
-    ) > SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes) admittedReferences.pop();
-    const text = buildProjectionText(bounded.context, queryRelevantSourceExcerpt, admittedReferences);
+    while (
+        admittedReferences.length > 0
+        && Buffer.byteLength(
+            buildProjectionText(boundedContext, queryRelevantSourceExcerpt, admittedReferences),
+            "utf8",
+        ) > maxBytes
+    ) {
+        admittedReferences.pop();
+    }
+    const text = buildProjectionText(boundedContext, queryRelevantSourceExcerpt, admittedReferences);
 
     return {
         version: SEARCH_RERANK_DOCUMENT_POLICY.id,
@@ -404,10 +445,10 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
         utf8Bytes: Buffer.byteLength(text, "utf8"),
         selectedSourceLineCount: sourceSelection.selectedSource?.returnedLines ?? 0,
         selectedSourceExcerptCount: sourceSelection.selectedSource?.excerptCount ?? 0,
-        sourceTruncated: sourceSelection.selectedSource?.truncated ?? content.length > 0,
+        sourceTruncated: sourceSelection.selectedSource?.truncated ?? normalized.content.length > 0,
         selectionAttemptCount: sourceSelection.selectionAttemptCount,
-        structuralContextTruncated: structural.truncated || bounded.truncated,
+        structuralContextTruncated: structuralTruncated,
         sourceReferencesTruncated: admittedReferences.length < sourceReferences.length
-            || (Array.isArray(rawInput.sourceReferences) && rawInput.sourceReferences.length > sourceReferences.length),
+            || rawSourceReferenceCount > sourceReferences.length,
     };
 }

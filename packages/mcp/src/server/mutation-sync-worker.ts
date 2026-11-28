@@ -63,14 +63,12 @@ function phaseForTiming(phase: string): MutationOperationPhase {
 }
 
 type WorkerProvider = Readonly<{
-    bootstrapKey: string;
     providerRuntime: ProviderRuntime;
     toolContext: ToolContext;
 }>;
 
 async function createWorkerProvider(mutationRuntime: RootMutationRuntime): Promise<WorkerProvider> {
     const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(createMcpConfig());
-    const bootstrapKey = JSON.stringify({ config, runtimeFingerprint });
     const providerRuntime = new ProviderRuntime({
         config,
         runtimeFingerprint,
@@ -87,7 +85,6 @@ async function createWorkerProvider(mutationRuntime: RootMutationRuntime): Promi
             throw new Error(toolContext.message);
         }
         return {
-            bootstrapKey,
             providerRuntime,
             toolContext,
         };
@@ -97,46 +94,24 @@ async function createWorkerProvider(mutationRuntime: RootMutationRuntime): Promi
     }
 }
 
-// Identity of the resolved runtime inputs. A pre-started worker compares it
-// at start and rebuilds its provider when configuration changed meanwhile.
-async function resolveBootstrapKey(): Promise<string> {
-    const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(createMcpConfig());
-    return JSON.stringify({ config, runtimeFingerprint });
-}
-
 async function main(): Promise<void> {
     // Time from process start to main(): module loading in a fresh worker process.
     perfTrace("sync.worker.module_load", performance.now(), { operationId: workerRuntime.operationId });
     const input = parseInput(process.argv[2]);
     assertNotCancelled();
 
-    // Bootstrap and the navigation preload run before `started`, so a worker
-    // the parent starts ahead of time is warm when its sync arrives. Neither
-    // takes the root mutation lease or writes a Publication.
+    // Defer heavy provider, embedding pool, and navigation state initialization
+    // until an actual sync starts so an idle standby process never duplicates
+    // hundreds of megabytes of search-side memory.
+    await workerRuntime.started;
+    assertNotCancelled();
+
     const mutationRuntime = new RootMutationRuntime();
     const bootstrapStartedAt = performance.now();
-    let provider = await createWorkerProvider(mutationRuntime);
+    const provider = await createWorkerProvider(mutationRuntime);
     let result: Readonly<Record<string, unknown>> | undefined;
     try {
         perfTrace("sync.worker.bootstrap", performance.now() - bootstrapStartedAt, { operationId: workerRuntime.operationId });
-        const prewarmStartedAt = performance.now();
-        const preparation = new AbortController();
-        void workerRuntime.started.then(() => preparation.abort(), () => preparation.abort());
-        const prewarmed = await provider.toolContext.context.prewarmSyncNavigationState(input.path, preparation.signal).catch((error: unknown) => {
-            console.warn(`[SYNC-WORKER] Navigation preload failed; the sync reads the sidecars: ${error instanceof Error ? error.message : String(error)}`);
-            return false;
-        });
-        perfTrace("sync.worker.prewarm", performance.now() - prewarmStartedAt, { operationId: workerRuntime.operationId, prewarmed });
-
-        await workerRuntime.started;
-        assertNotCancelled();
-        const startedAt = performance.now();
-        if (await resolveBootstrapKey() !== provider.bootstrapKey) {
-            await provider.providerRuntime.shutdown();
-            provider = await createWorkerProvider(mutationRuntime);
-            perfTrace("sync.worker.rebootstrap", performance.now() - startedAt, { operationId: workerRuntime.operationId });
-        }
-        perfTrace("sync.worker.start_to_bound", performance.now() - startedAt, { operationId: workerRuntime.operationId });
         const { toolContext } = provider;
 
         await mutationRuntime.runBoundExecutor(

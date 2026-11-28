@@ -29,6 +29,11 @@ import {
     SEARCH_RERANK_DOCUMENT_POLICY,
 } from "./search-rerank-document.js";
 import {
+    firstStructuralDeclaration,
+    MAXIMUM_DECLARATION_UTF8_BYTES,
+    sourceLines as splitSourceLines,
+} from "./search-rerank-projection-primitives.js";
+import {
     buildSearchRerankStructuralContext,
     type PreparedSearchRerankStructuralRelationships,
 } from "./search-rerank-structural-context.js";
@@ -272,6 +277,7 @@ interface PublicationBoundSourceEvidence {
     readonly sourceLines?: readonly string[];
     readonly observedHash: string;
     readonly sourceStartLine: number;
+    readonly owner?: SymbolRecord;
 }
 
 export function searchRerankCandidateId(result: SearchResultLike): string {
@@ -390,6 +396,7 @@ async function resolvePublicationBoundEvidence(input: {
             ...(cachedSourceLines ? { sourceLines: cachedSourceLines } : {}),
             observedHash: currentSourceEvidence.observedHash,
             sourceStartLine: 1,
+            ...(owner ? { owner } : {}),
         };
     } else if (input.readSourceEvidence) {
         return { ok: false, reason: "source_unavailable" };
@@ -421,6 +428,7 @@ async function resolvePublicationBoundEvidence(input: {
                 source: window.utf8Window,
                 observedHash: window.rawByteSha256,
                 sourceStartLine: originalLineRange.startLine,
+                ...(owner ? { owner } : {}),
             };
         } catch (error) {
             return {
@@ -467,6 +475,48 @@ function success(
     };
 }
 
+const OWNER_DECLARATION_HEADER_SCAN_LINES = 16;
+
+function resolveCanonicalOwnerDeclaration(input: {
+    owner: SymbolRecord | undefined;
+    result: SearchResultLike;
+    evidence: PublicationBoundSourceEvidence;
+    symbolKind: string;
+}): string | undefined {
+    const { owner, result, evidence, symbolKind } = input;
+    if (!owner || owner.kind === "file") return undefined;
+    if (
+        !Number.isSafeInteger(result.startLine)
+        || owner.span.startLine >= (result.startLine as number)
+    ) {
+        return undefined;
+    }
+    if (owner.span.startLine < evidence.sourceStartLine) return undefined;
+    const lines = evidence.sourceLines ?? splitSourceLines(evidence.source);
+    const localStartIndex = owner.span.startLine - evidence.sourceStartLine;
+    if (localStartIndex < 0 || localStartIndex >= lines.length) return undefined;
+    const ownerEndLocalIndex = Math.min(
+        lines.length - 1,
+        owner.span.endLine - evidence.sourceStartLine,
+        localStartIndex + OWNER_DECLARATION_HEADER_SCAN_LINES - 1,
+    );
+    if (ownerEndLocalIndex < localStartIndex) return undefined;
+    const declaration = firstStructuralDeclaration(
+        lines.slice(localStartIndex, ownerEndLocalIndex + 1),
+        result.language ?? owner.language,
+        symbolKind,
+        result.relativePath,
+    ).trim();
+    if (
+        !declaration
+        || /[\r\n]/.test(declaration)
+        || Buffer.byteLength(declaration, "utf8") > MAXIMUM_DECLARATION_UTF8_BYTES
+    ) {
+        return undefined;
+    }
+    return declaration;
+}
+
 export async function projectPublicationBoundSearchRerankDocument(input: {
     candidateId: string;
     codebaseRoot: string;
@@ -484,13 +534,20 @@ export async function projectPublicationBoundSearchRerankDocument(input: {
     const resolved = await resolvePublicationBoundEvidence(input);
     if (!resolved.ok) return failure(candidateId, resolved.reason);
 
+    // Canonical identity invariant: the reranker must score the same verified
+    // registry symbol kind, label, and declaration that grouping publishes.
+    const owner = resolved.evidence.owner;
+    const symbolKind = owner?.kind ?? input.result.symbolKind ?? "file";
+    const canonicalSymbolLabel = owner && owner.kind !== "file" && owner.label.trim().length > 0
+        ? owner.label
+        : (input.result.symbolLabel ?? path.posix.basename(input.result.relativePath));
     const candidateRole = resolveSearchCandidateRole({
         relativePath: input.result.relativePath,
         ...(typeof input.result.language === "string"
             ? { language: input.result.language }
             : {}),
-        ...(typeof input.result.symbolKind === "string"
-            ? { symbolKind: input.result.symbolKind }
+        ...(typeof symbolKind === "string"
+            ? { symbolKind }
             : {}),
     });
     const structuralContext = buildSearchRerankStructuralContext({
@@ -500,21 +557,27 @@ export async function projectPublicationBoundSearchRerankDocument(input: {
             ? { preparedRelationships: input.preparedStructuralRelationships }
             : { relationships: input.relationships ?? [] }),
     });
+    const ownerDeclaration = resolveCanonicalOwnerDeclaration({
+        owner,
+        result: input.result,
+        evidence: resolved.evidence,
+        symbolKind,
+    });
     let document: string;
     try {
         document = buildSearchRerankDocument({
             relativePath: input.result.relativePath,
             language: input.result.language,
             candidateRole,
-            symbolKind: input.result.symbolKind ?? "file",
-            canonicalSymbolLabel:
-                input.result.symbolLabel ?? path.posix.basename(input.result.relativePath),
+            symbolKind,
+            canonicalSymbolLabel,
             content: resolved.evidence.source,
             symbolSpan: localCandidateSpan({ result: input.result, evidence: resolved.evidence }),
+            ...(ownerDeclaration ? { signatureOrDeclaration: ownerDeclaration } : {}),
             query: input.semanticQuery,
             structuralContext,
             sourceReferences: buildSearchRerankSourceReferences({
-                owner: resolveCanonicalOwner(input.result, input.registry),
+                owner,
                 registry: input.registry,
                 source: resolved.evidence.source,
                 ...(resolved.evidence.sourceLines

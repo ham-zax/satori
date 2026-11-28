@@ -4,14 +4,14 @@ import {
 } from "@satori-code/core/runtime-contract";
 
 export const LATEON_RUNTIME_PROFILE_IDS = Object.freeze({
-    contextV6D128: LATEON_PROFILE_ID,
+    contextV7D24: LATEON_PROFILE_ID,
 } as const);
 
 export type LateOnRuntimeProfileId =
     typeof LATEON_RUNTIME_PROFILE_IDS[keyof typeof LATEON_RUNTIME_PROFILE_IDS];
 
 export const LATEON_ACTIVATION_POLICY_IDS = Object.freeze({
-    ownerDefaultContextV6: LATEON_ACTIVATION_POLICY,
+    ownerDefaultContextV7: LATEON_ACTIVATION_POLICY,
 } as const);
 
 export type LateOnActivationPolicyId =
@@ -27,7 +27,7 @@ type LateOnRuntimeProfileBase = Readonly<{
         repository: string;
         revision: string;
         license: "Apache-2.0";
-        projectionVersion: "search_rerank_document_v5";
+        projectionVersion: "search_rerank_document_v6";
         projectionSha256?: string;
     }>;
     artifacts: readonly LateOnArtifactContract[];
@@ -55,12 +55,12 @@ type LateOnRuntimeProfileBase = Readonly<{
     }>;
 }>;
 
-export type LateOnRuntimeProfileV6 = LateOnRuntimeProfileBase & Readonly<{
-    schemaVersion: "satori_lateon_runtime_profile_v6";
-    profileId: typeof LATEON_RUNTIME_PROFILE_IDS.contextV6D128;
+export type LateOnRuntimeProfileV7 = LateOnRuntimeProfileBase & Readonly<{
+    schemaVersion: "satori_lateon_runtime_profile_v7";
+    profileId: typeof LATEON_RUNTIME_PROFILE_IDS.contextV7D24;
     qualificationStatus: "owner_activated_not_held_out";
     identity: LateOnRuntimeProfileBase["identity"] & Readonly<{
-        projectionVersion: "search_rerank_document_v5";
+        projectionVersion: "search_rerank_document_v6";
         projectionSha256: string;
         queryProjectionVersion: "search_rerank_query_v2";
     }>;
@@ -80,7 +80,7 @@ export type LateOnRuntimeProfileV6 = LateOnRuntimeProfileBase & Readonly<{
     }>;
 }>;
 
-export type LateOnRuntimeProfile = LateOnRuntimeProfileV6;
+export type LateOnRuntimeProfile = LateOnRuntimeProfileV7;
 
 export type LateOnWorkerRequest =
     | Readonly<{
@@ -96,6 +96,10 @@ export type LateOnWorkerRequest =
         query: string;
         documents: readonly string[];
         identities: readonly string[];
+    }>
+    | Readonly<{
+        type: "cancel";
+        requestId: number;
     }>;
 
 export type LateOnWorkerResponse =
@@ -112,6 +116,10 @@ export type LateOnWorkerResponse =
             index: number;
             relevanceScore: number;
         }>;
+    }>
+    | Readonly<{
+        type: "cancelled";
+        requestId: number;
     }>
     | Readonly<{
         type: "error";

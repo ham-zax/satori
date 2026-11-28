@@ -399,8 +399,8 @@ function assertPackedLateOnAcquisitionAuthority(packedMcpRoot: string, packedCli
         ? fs.readdirSync(assetsRoot).sort()
         : [];
     for (const requiredFile of [
-        "runtime-profile-v6-d128.json",
-        "runtime-profile-v6-d128.acquisition.json",
+        "runtime-profile-v7-d24.json",
+        "runtime-profile-v7-d24.acquisition.json",
     ]) {
         if (!shippedFiles.includes(requiredFile)) {
             throw new Error(
@@ -461,7 +461,7 @@ function assertPackedCliLateOnAcquisition(packedCliRoot: string): void {
     const resolutionMissing = !installSource.includes("resolveVerifiedLateOnModel");
     if (policyMissing || resolutionMissing) {
         throw new Error(
-            "Packed CLI acquisition flow must carry the frozen D128 identity "
+            "Packed CLI acquisition flow must carry the frozen D24 identity "
             + `(policy=${!policyMissing}, resolver=${!resolutionMissing}).`,
         );
     }
@@ -1166,7 +1166,7 @@ async function main(): Promise<void> {
             baseEnv,
             onCleanupUncertain: (reason) => { smokeStatePreservationReason = reason; },
         });
-        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, D128 acquisition authority, packed native projections, and default/explicit-none offline journeys passed.");
+        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, D24 acquisition authority, packed native projections, and default/explicit-none offline journeys passed.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

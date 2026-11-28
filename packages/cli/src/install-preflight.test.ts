@@ -736,7 +736,7 @@ test("offline install defaults to the integrity- and capability-verified bundled
     }
 });
 
-test("offline install plan composes Potion embeddings with LateOn D128 reranking", async () => {
+test("offline install plan composes Potion embeddings with LateOn D24 reranking", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-preflight-"));
     const lateOnModelPath = path.join(homeDir, ".satori", "models", "lateon", "model");
     try {
@@ -992,7 +992,7 @@ test("Potion asset roots from another host target are rejected", async () => {
     );
 });
 
-test("new offline install persists Potion embeddings and LateOn D128 in the managed launcher", async () => {
+test("new offline install persists Potion embeddings and LateOn D24 in the managed launcher", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-install-"));
     const fixture = fixtureLateOnRuntime(homeDir);
     try {
@@ -1494,7 +1494,7 @@ test("managed D16 + env provider none without a CLI flag rejects with reinstall 
     }
 });
 
-test("managed D16 + CLI --reranker lateon migrates to D128", async () => {
+test("managed D16 + CLI --reranker lateon migrates to D24", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-d16-cli-migrate-"));
     const launcherPath = writeHistoricalD16Launcher(homeDir);
     writeLateOnModelDirectory(path.join(homeDir, "lateon-d16-model"));
@@ -1591,7 +1591,7 @@ test("managed D16 without CLI or environment rejects with reinstall guidance", a
     }
 });
 
-test("Linux x64 with implicit Potion defaults to LateOn D128", async () => {
+test("Linux x64 with implicit Potion defaults to LateOn D24", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-potion-d32-"));
     try {
         const result = await executeInstallCommand({
@@ -1615,7 +1615,7 @@ test("Linux x64 with implicit Potion defaults to LateOn D128", async () => {
     }
 });
 
-test("Linux x64 managed Potion keeps its LateOn D128 selection", async () => {
+test("Linux x64 managed Potion keeps its LateOn D24 selection", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-potion-managed-d32-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
@@ -1669,7 +1669,7 @@ test("non-Linux-x64 with explicit lateon rejects", async () => {
             env: {},
             platform: "darwin",
             architecture: "arm64",
-        }), /LateOn D128 is supported only on Linux x64\/WSL2 and Linux arm64 glibc; received darwin arm64/);
+        }), /LateOn D24 is supported only on Linux x64\/WSL2 and Linux arm64 glibc; received darwin arm64/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1707,7 +1707,7 @@ test("existing managed none stays none", async () => {
     }
 });
 
-test("existing managed D128 stays D128", async () => {
+test("existing managed D24 stays D24", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-d32-stays-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
@@ -2110,7 +2110,7 @@ function failingOfflineLateOnReinstall(
                 fixture.mcpRoot,
                 "assets",
                 "lateon",
-                "runtime-profile-v6-d128.acquisition.json",
+                "runtime-profile-v7-d24.acquisition.json",
             ),
             { force: true },
         );
@@ -2141,7 +2141,7 @@ test("acquisition network failure leaves the managed installation byte-identical
                     throw new Error("network down");
                 }) as typeof fetch,
             }),
-            /LateOn D128 model preflight failed: .*network down/,
+            /LateOn D24 model preflight failed: .*network down/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2173,7 +2173,7 @@ test("LateOn model acquisition runs while the managed-runtime mutation lock is h
         await started;
         assert.equal(fs.existsSync(mutationLockPath), true);
         releaseAcquisition();
-        await assert.rejects(reinstall, /LateOn D128 model preflight failed: .*network down/);
+        await assert.rejects(reinstall, /LateOn D24 model preflight failed: .*network down/);
         assert.equal(fs.existsSync(mutationLockPath), false);
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2219,7 +2219,7 @@ test("missing runtime profile leaves the managed installation byte-identical", a
         const snapshot = seedManagedLateOnInstallation(homeDir);
         await assert.rejects(
             failingOfflineLateOnReinstall(homeDir, { removeAssets: "all" }),
-            /must contain the frozen LateOn D128 profile and acquisition manifest/,
+            /must contain the frozen LateOn D24 profile and acquisition manifest/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2233,7 +2233,7 @@ test("missing acquisition manifest leaves the managed installation byte-identica
         const snapshot = seedManagedLateOnInstallation(homeDir);
         await assert.rejects(
             failingOfflineLateOnReinstall(homeDir, { removeAssets: "acquisition" }),
-            /must contain the frozen LateOn D128 profile and acquisition manifest/,
+            /must contain the frozen LateOn D24 profile and acquisition manifest/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2385,7 +2385,7 @@ test("unsupported reranker targets keep the none default and reject explicit lat
             () => resolveOfflineReranker({ ...command, reranker: "lateon" }, {}, {}, platform, architecture),
             (error: unknown) => error instanceof CliError
                 && error.token === "E_USAGE"
-                && /LateOn D128 is supported only on Linux x64\/WSL2 and Linux arm64 glibc/.test(error.message)
+                && /LateOn D24 is supported only on Linux x64\/WSL2 and Linux arm64 glibc/.test(error.message)
                 && error.message.includes(`received ${platform} ${architecture}`),
         );
     }

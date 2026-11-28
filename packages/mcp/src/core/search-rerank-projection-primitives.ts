@@ -266,14 +266,16 @@ export function selectRerankSourceWithinBudget(input: {
     minimumText: string;
     buildProjectionText: (queryRelevantSourceExcerpt: string) => string;
     selectionPolicyVersion?: BoundedSourceSelectionPolicyVersion;
+    maximumUtf8Bytes?: number;
 }): {
     text: string;
     selectedSource?: SelectedSourceProjection;
     selectionAttemptCount: number;
 } {
+    const maximumUtf8Bytes = input.maximumUtf8Bytes ?? MAXIMUM_UTF8_BYTES;
     const minimumBytes = Buffer.byteLength(input.minimumText, "utf8");
     let lowerBudget = 1;
-    let upperBudget = Math.max(1, MAXIMUM_UTF8_BYTES - minimumBytes);
+    let upperBudget = Math.max(1, maximumUtf8Bytes - minimumBytes);
     let selectedSource: SelectedSourceProjection | undefined;
     let text = input.minimumText;
     let selectionAttemptCount = 0;
@@ -285,7 +287,7 @@ export function selectRerankSourceWithinBudget(input: {
     // completeProjection is independent of sourceBudget and its serialized JSON
     // size strictly dominates any bounded excerpt's serialized size (extra
     // excerpt metadata far exceeds the "\n...\n" joiner). When upperBudget
-    // already returns the complete symbol within MAXIMUM_UTF8_BYTES, the binary
+    // already returns the complete symbol within maximumUtf8Bytes, the binary
     // search moves monotonically upward to upperBudget and emits the exact same
     // projection and text. Any incomplete or over-budget probe falls through to
     // the exact binary search with unchanged bounds.
@@ -302,7 +304,7 @@ export function selectRerankSourceWithinBudget(input: {
         const probeBytes = Buffer.byteLength(probeText, "utf8");
         if (
             probeSelection.source.completeSymbolReturned === true
-            && probeBytes <= MAXIMUM_UTF8_BYTES
+            && probeBytes <= maximumUtf8Bytes
         ) {
             return {
                 text: probeText,
@@ -331,7 +333,7 @@ export function selectRerankSourceWithinBudget(input: {
         const excerpt = selectedExcerptText(selection.source);
         const candidateText = input.buildProjectionText(excerpt);
         const candidateBytes = Buffer.byteLength(candidateText, "utf8");
-        if (candidateBytes <= MAXIMUM_UTF8_BYTES) {
+        if (candidateBytes <= maximumUtf8Bytes) {
             selectedSource = selection.source;
             text = candidateText;
             lowerBudget = sourceBudget + 1;

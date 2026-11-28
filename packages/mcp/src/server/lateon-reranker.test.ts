@@ -20,6 +20,7 @@ import {
     DOCUMENT_CACHE_ENTRY_OVERHEAD_BYTES,
     DOCUMENT_CACHE_MAX_BYTES,
     estimateDocumentEncodingBytes,
+    LateOnWorkerCancelledError,
     QUERY_CACHE_LIMIT,
     SCORE_CACHE_LIMIT,
     scoreDocuments,
@@ -57,8 +58,13 @@ function createFakeWorker(t: { after(fn: () => void): void }, options: FakeWorke
     fs.writeFileSync(workerPath, `
 const fs = require("node:fs");
 const options = ${JSON.stringify({ ...options, attemptLogPath })};
+const pendingCancellable = new Map();
 function sendResults(message) {
     if (message.query === "hang") return;
+    if (message.query === "cancellable") {
+        pendingCancellable.set(message.requestId, true);
+        return;
+    }
     if (message.query === "malformed") {
         process.send({
             type: "result",
@@ -87,6 +93,12 @@ function sendResults(message) {
     setTimeout(respond, delay);
 }
 process.on("message", (message) => {
+    if (message.type === "cancel") {
+        if (pendingCancellable.delete(message.requestId)) {
+            process.send({ type: "cancelled", requestId: message.requestId });
+        }
+        return;
+    }
     if (message.type === "initialize") {
         const previousAttempts = fs.existsSync(options.attemptLogPath)
             ? fs.readFileSync(options.attemptLogPath, "utf8").trim().split("\\n").filter(Boolean).length
@@ -548,10 +560,10 @@ test("LateOn documentCache reproduces uncached scores bit-for-bit across queries
 test("LateOn runtime profile loading defaults to the V6 D128 context profile and rejects any other profile id", () => {
     const defaultProfile = loadLateOnRuntimeProfile();
 
-    assert.equal(defaultProfile.schemaVersion, "satori_lateon_runtime_profile_v6");
-    assert.equal(defaultProfile.identity.projectionVersion, "search_rerank_document_v5");
+    assert.equal(defaultProfile.schemaVersion, "satori_lateon_runtime_profile_v7");
+    assert.equal(defaultProfile.identity.projectionVersion, "search_rerank_document_v6");
     assert.equal(defaultProfile.identity.queryProjectionVersion, "search_rerank_query_v2");
-    assert.equal(defaultProfile.inference.candidateDepth, 128);
+    assert.equal(defaultProfile.inference.candidateDepth, 24);
 
     assert.throws(
         () => loadLateOnRuntimeProfile("lateon_offline_quality_projection_v4_d32_v1"),
@@ -559,31 +571,31 @@ test("LateOn runtime profile loading defaults to the V6 D128 context profile and
     );
 });
 
-test("LateOn native request scores all 128 candidates and rejects overflow before execution", async (t) => {
+test("LateOn native request scores all 24 candidates and rejects overflow before execution", async (t) => {
     const reranker = new LateOnReranker({ modelDirectory: "/unused", workerPath: createFakeWorker(t) });
     t.after(async () => reranker.close());
-    const documents = Array.from({ length: 128 }, (_, index) => "x".repeat(index + 1));
+    const documents = Array.from({ length: 24 }, (_, index) => "x".repeat(index + 1));
     const diagnostics: RerankExecutionDiagnostics[] = [];
     const results = await reranker.rerank("capacity", documents, {
         onExecutionDiagnostics: (value) => diagnostics.push(value),
     });
-    assert.deepEqual(results.map((row) => row.index), Array.from({ length: 128 }, (_, index) => 127 - index));
-    assert.deepEqual(results.map((row) => row.relevanceScore), Array.from({ length: 128 }, (_, index) => 128 - index));
+    assert.deepEqual(results.map((row) => row.index), Array.from({ length: 24 }, (_, index) => 23 - index));
+    assert.deepEqual(results.map((row) => row.relevanceScore), Array.from({ length: 24 }, (_, index) => 24 - index));
     assert.equal(diagnostics.length, 1, "one native execution owns the complete candidate set");
-    await assert.rejects(reranker.rerank("overflow", [...documents, "extra"]), /at most 128 documents/);
+    await assert.rejects(reranker.rerank("overflow", [...documents, "extra"]), /at most 24 documents/);
     assert.equal(reranker.getOperationalSnapshot().pendingWorkerRequests, 0);
 });
 
 test("LateOn context-v6 profile keeps query-v2 and document-v5 semantic projections", () => {
-    const v5 = loadLateOnRuntimeProfile(LATEON_RUNTIME_PROFILE_IDS.contextV6D128);
-    assert.equal(v5.schemaVersion, "satori_lateon_runtime_profile_v6");
+    const v5 = loadLateOnRuntimeProfile(LATEON_RUNTIME_PROFILE_IDS.contextV7D24);
+    assert.equal(v5.schemaVersion, "satori_lateon_runtime_profile_v7");
     assert.equal(v5.profileId, LATEON_PROFILE_ID);
     assert.equal(v5.qualificationStatus, "owner_activated_not_held_out");
-    assert.equal(v5.identity.projectionVersion, "search_rerank_document_v5");
+    assert.equal(v5.identity.projectionVersion, "search_rerank_document_v6");
     assert.equal(v5.identity.queryProjectionVersion, "search_rerank_query_v2");
     assert.equal(
         v5.identity.projectionSha256,
-        "b9131931424dae9430e0f954af1f79dec1b12fed76dc785bb9b73351fff7f712",
+        "1df869d104dafeef17b7ad20c58310d2e4510fdfd4922a192b96ca3bb9347ee4",
     );
 });
 
@@ -592,7 +604,7 @@ test("LateOn reranker defaults to the V5 profile and reports semantic projection
     const defaulted = new LateOnReranker({ modelDirectory: "/unused", workerPath });
     const contextV4 = new LateOnReranker({
         modelDirectory: "/unused",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath,
     });
     t.after(async () => Promise.all([
@@ -600,13 +612,13 @@ test("LateOn reranker defaults to the V5 profile and reports semantic projection
         contextV4.close(),
     ]).then(() => undefined));
 
-    assert.equal(defaulted.getProfileId(), LATEON_RUNTIME_PROFILE_IDS.contextV6D128);
-    assert.equal(defaulted.getMaxDocuments(), 128);
-    assert.equal(defaulted.getDocumentProjectionVersion(), "search_rerank_document_v5");
+    assert.equal(defaulted.getProfileId(), LATEON_RUNTIME_PROFILE_IDS.contextV7D24);
+    assert.equal(defaulted.getMaxDocuments(), 24);
+    assert.equal(defaulted.getDocumentProjectionVersion(), "search_rerank_document_v6");
     assert.equal(defaulted.getQueryProjectionVersion(), "search_rerank_query_v2");
-    assert.equal(contextV4.getProfileId(), LATEON_RUNTIME_PROFILE_IDS.contextV6D128);
-    assert.equal(contextV4.getMaxDocuments(), 128);
-    assert.equal(contextV4.getDocumentProjectionVersion(), "search_rerank_document_v5");
+    assert.equal(contextV4.getProfileId(), LATEON_RUNTIME_PROFILE_IDS.contextV7D24);
+    assert.equal(contextV4.getMaxDocuments(), 24);
+    assert.equal(contextV4.getDocumentProjectionVersion(), "search_rerank_document_v6");
     assert.equal(contextV4.getQueryProjectionVersion(), "search_rerank_query_v2");
 });
 
@@ -649,12 +661,12 @@ test("LateOn identity binds the semantic profile rather than machine-speed setti
     const workerPath = createFakeWorker(t);
     const first = new LateOnReranker({
         modelDirectory: "/unused",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath,
     });
     const second = new LateOnReranker({
         modelDirectory: "/other",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath,
     });
     t.after(async () => Promise.all([
@@ -662,8 +674,8 @@ test("LateOn identity binds the semantic profile rather than machine-speed setti
         second.close(),
     ]).then(() => undefined));
 
-    assert.equal(first.getMaxDocuments(), 128);
-    assert.equal(first.getDocumentProjectionVersion(), "search_rerank_document_v5");
+    assert.equal(first.getMaxDocuments(), 24);
+    assert.equal(first.getDocumentProjectionVersion(), "search_rerank_document_v6");
     assert.equal(first.getQueryProjectionVersion(), "search_rerank_query_v2");
     assert.equal(first.getIdentity().profile, second.getIdentity().profile);
 });
@@ -671,7 +683,7 @@ test("LateOn identity binds the semantic profile rather than machine-speed setti
 test("the first rerank starts the worker and waits for readiness", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { readyDelayMilliseconds: 100 }),
     });
     t.after(() => reranker.close());
@@ -689,7 +701,7 @@ test("LateOn waits through one pre-ready worker retry", async (t) => {
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["exit", "ready"],
             pidLogPath,
@@ -715,7 +727,7 @@ test("LateOn retries one worker-reported initialization failure", async (t) => {
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["initialization_error", "ready"],
             pidLogPath,
@@ -734,7 +746,7 @@ test("LateOn stops after two retryable bootstrap failures and retains the final 
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["initialization_error", "exit"],
             pidLogPath,
@@ -772,7 +784,7 @@ test("LateOn fails closed when worker readiness identity mismatches the selected
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { readinessMismatch: true, pidLogPath }),
     });
     t.after(() => reranker.close());
@@ -793,7 +805,7 @@ test("LateOn treats malformed bootstrap protocol as terminal without retry", asy
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["malformed", "ready"],
             pidLogPath,
@@ -816,7 +828,7 @@ test("LateOn close prevents a loading worker from spawning a bootstrap retry", a
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["timeout", "ready"],
             pidLogPath,
@@ -838,7 +850,7 @@ test("LateOn a readiness waiter waits for replacement termination before reporti
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["ready", "ready"],
             pidLogPath,
@@ -884,7 +896,7 @@ test("LateOn recovers on demand after a replacement worker fails during loading"
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["ready", "exit", "ready"],
             pidLogPath,
@@ -919,7 +931,7 @@ test("LateOn close during a replacement window rejects the waiting readiness cal
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, {
             bootstrapAttempts: ["ready", "ready"],
             pidLogPath,
@@ -952,7 +964,7 @@ test("LateOn starts its worker on first use, releases it when idle, and restarts
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { pidLogPath }),
         idleShutdownMs: 50,
     });
@@ -977,7 +989,7 @@ test("LateOn starts its worker on first use, releases it when idle, and restarts
 test("LateOn serializes overlapping reranks through one FIFO queue", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -994,7 +1006,7 @@ test("LateOn serializes overlapping reranks through one FIFO queue", async (t) =
 test("LateOn rejects requests beyond the bounded wait queue", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1010,7 +1022,7 @@ test("LateOn rejects requests beyond the bounded wait queue", async (t) => {
 test("LateOn queued work waits for the active rerank instead of falling back", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1025,7 +1037,7 @@ test("LateOn queued work waits for the active rerank instead of falling back", a
 test("LateOn invalid output is rejected transactionally and restarts the worker", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1045,7 +1057,7 @@ test("LateOn invalid output is rejected transactionally and restarts the worker"
 test("LateOn cancellation removes queued work and terminates executing work", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1066,10 +1078,116 @@ test("LateOn cancellation removes queued work and terminates executing work", as
     await reranker.waitUntilReady();
 });
 
+test("LateOn cooperative cancellation preserves the warm worker and immediately serves queued work", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-coop-cancel-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
+        workerPath: createFakeWorker(t, { pidLogPath }),
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+    assert.equal(readWorkerPids(pidLogPath).length, 1);
+
+    const activeController = new AbortController();
+    const active = reranker.rerank("cancellable", ["active"], {
+        signal: activeController.signal,
+    } as Parameters<LateOnReranker["rerank"]>[2]);
+    const queued = reranker.rerank("after-cancel", ["document"]);
+    await waitForOperationalSnapshot(
+        reranker,
+        (snapshot) => snapshot.activeRequest && snapshot.pendingWorkerRequests === 1,
+    );
+    activeController.abort();
+    await assertOperationalReason(active, "lateon_cancelled");
+    assert.deepEqual(await queued, [{ index: 0, relevanceScore: 8 }]);
+    assert.equal(readWorkerPids(pidLogPath).length, 1, "cooperative cancel must keep the same warm worker alive");
+});
+
+test("LateOn falls back to worker recycle when a hung worker ignores cooperative cancel", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-hung-cancel-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
+        workerPath: createFakeWorker(t, { pidLogPath }),
+        cooperativeCancelGraceMs: 40,
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+
+    const activeController = new AbortController();
+    const active = reranker.rerank("hang", ["active"], {
+        signal: activeController.signal,
+    } as Parameters<LateOnReranker["rerank"]>[2]);
+    const queued = reranker.rerank("after-hung-cancel", ["document"]);
+    await waitForOperationalSnapshot(
+        reranker,
+        (snapshot) => snapshot.activeRequest && snapshot.pendingWorkerRequests === 1,
+    );
+    activeController.abort();
+    await assertOperationalReason(active, "lateon_cancelled");
+    assert.deepEqual(await queued, [{ index: 0, relevanceScore: 8 }]);
+    assert.equal(readWorkerPids(pidLogPath).length, 2, "hung worker must recycle after grace ceiling");
+});
+
+test("scoreDocuments stops before pending documents on cancellation while retaining completed cache entries", async () => {
+    const scoredTexts: string[] = [];
+    let cancelled = false;
+    const fakeEncoder: LateOnEncoderHandle = {
+        async request(message: LateOnEncoderRequest): Promise<LateOnEncoderResponse> {
+            if (message.type === "set_query") return { type: "query_set" };
+            if (message.type === "score_document") {
+                scoredTexts.push(message.text);
+                cancelled = true;
+                return {
+                    type: "scored",
+                    relevanceScore: message.text.length,
+                    vectors: new Float64Array([1, 0]),
+                    dimensions: 2,
+                    tokenCount: 5,
+                };
+            }
+            throw new Error(`Unexpected encoder message: ${message.type}`);
+        },
+        async terminate(): Promise<number> {
+            return 0;
+        },
+    };
+    const documentCache = new ByteBoundedCache<DocumentEncoding>(
+        DOCUMENT_CACHE_MAX_BYTES,
+        estimateDocumentEncodingBytes,
+    );
+    const scoreCache = new BoundedCache<DocumentScore>(SCORE_CACHE_LIMIT);
+    const queryEncoding: QueryEncoding = {
+        vectors: new Float64Array([1, 0]),
+        dimensions: 2,
+        tokenCount: 3,
+    };
+
+    await assert.rejects(
+        () => scoreDocuments(
+            { encoders: [fakeEncoder], documentCache, scoreCache },
+            "find owner",
+            ["longest document first", "short", "mid"],
+            queryEncoding,
+            createDocumentCacheKey,
+            () => cancelled,
+        ),
+        (error: unknown) => error instanceof LateOnWorkerCancelledError,
+    );
+    assert.deepEqual(scoredTexts, ["longest document first"]);
+    assert.equal(documentCache.size, 1, "already-computed document encoding must stay cached");
+    assert.equal(scoreCache.size, 1, "already-computed document score must stay cached");
+});
+
 test("LateOn cancellation during worker startup rejects before readiness without failing other waiters", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { readyDelayMilliseconds: 500 }),
     });
     t.after(() => reranker.close());
@@ -1089,7 +1207,7 @@ test("LateOn cancellation during worker startup rejects before readiness without
 test("LateOn close rejects active and queued work and joins its worker", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     await reranker.waitUntilReady();
@@ -1121,7 +1239,7 @@ test("LateOn close rejects active and queued work and joins its worker", async (
 test("LateOn successful execution reports queue wait and a hard safety ceiling", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1152,7 +1270,7 @@ test("LateOn successful execution reports queue wait and a hard safety ceiling",
 test("LateOn queued execution reports the actual queue wait without a queue timeout", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1178,7 +1296,7 @@ test("LateOn queued execution reports the actual queue wait without a queue time
 test("LateOn diagnostics callback failure never changes rerank behavior", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t),
     });
     t.after(() => reranker.close());
@@ -1197,7 +1315,7 @@ test("LateOn warmUp starts the worker asynchronously when idle, is idempotent, a
     const pidLogPath = path.join(directory, "warmup-pids.log");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { pidLogPath }),
         idleShutdownMs: 60,
     });
@@ -1229,7 +1347,7 @@ test("LateOn warmUp skips when mutations are active or reranker is closed, and c
     let activeMutations = 1;
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { pidLogPath, readyDelayMilliseconds: 120 }),
         getActiveMutationCount: () => activeMutations,
     });
@@ -1257,7 +1375,7 @@ test("LateOn v6 accepts query-v2 and the canonical document projection through t
 }, async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: realLateOnModelDirectory as string,
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
     });
     t.after(async () => reranker.close());
     await reranker.waitUntilReady();
@@ -1326,7 +1444,7 @@ test("LateOn encoder pools return the single-session ranking and scores exactly"
     const rankWith = async (encoderSessions: number, intraOpThreads: number) => {
         const reranker = new LateOnReranker({
             modelDirectory: realLateOnModelDirectory as string,
-            profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+            profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
             executionPlan: { encoderSessions, intraOpThreads },
         });
         t.after(async () => reranker.close());
@@ -1343,7 +1461,7 @@ test("LateOn rerank serves repeated query and document pairs from cache without 
 }, async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: realLateOnModelDirectory as string,
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
     });
     t.after(async () => reranker.close());
     const semanticQuery = "where are effect cleanups run when a component unmounts";
@@ -1405,7 +1523,7 @@ test("LateOn releaseIdleWorker terminates an idle worker, respawns on next reran
     const pidLogPath = path.join(directory, "worker-pids.txt");
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
-        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         workerPath: createFakeWorker(t, { pidLogPath }),
         idleShutdownMs: 60_000,
     });

@@ -218,6 +218,7 @@ export async function buildRerankInput(args: {
     const implPartition = partitionImplementationCandidates({
         candidates: selection.selected,
         relativePath: (candidate) => candidate.result.relativePath,
+        symbolKind: (candidate) => candidate.result.symbolKind,
         answerFocus: input.answerFocus,
         queryPlan: input.queryPlan,
         hasPathConstraint,
@@ -662,6 +663,7 @@ export function applyRerankOrder(args: {
         const effectiveRerankItems = preferImplementationCandidates({
             candidates: itemsForPolicy,
             relativePath: (item) => rerankSlice[item.originalIndex]!.result.relativePath,
+            symbolKind: (item) => rerankSlice[item.originalIndex]!.result.symbolKind,
             answerFocus: input.answerFocus,
             queryPlan: input.queryPlan,
             hasPathConstraint,
@@ -679,6 +681,7 @@ export function applyRerankOrder(args: {
         const reordered = preferImplementationCandidates({
             candidates: slotReordered,
             relativePath: (candidate) => candidate.result.relativePath,
+            symbolKind: (candidate) => candidate.result.symbolKind,
             answerFocus: input.answerFocus,
             queryPlan: input.queryPlan,
             hasPathConstraint,
@@ -875,6 +878,9 @@ export async function rerankSearchCandidates(
         });
         const hasPathConstraint = input.parsedOperators.path.length > 0
             || input.requestedSubdirectory != null;
+        // Keep unreranked fallback strictly path-role based (without symbolKind
+        // demotion) so first-stage type/struct anchors remain intact for
+        // grouped same-file executable action promotion.
         const reordered = preferImplementationCandidates({
             candidates: scored,
             relativePath: (candidate) => candidate.result.relativePath,

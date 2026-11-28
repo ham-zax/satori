@@ -1730,7 +1730,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
                     runtimeEnvironment: Object.freeze({}),
                 }),
             }),
-            /LateOn D128 model preflight failed: .*network down/,
+            /LateOn D24 model preflight failed: .*network down/,
         );
 
         assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
@@ -1746,7 +1746,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
     });
 });
 
-test("legacy no-provider upgrade defaults to LateOn D128", async () => {
+test("legacy no-provider upgrade defaults to LateOn D24", async () => {
     await withTempHome(async (homeDir) => {
         await installUpgradeSourceRuntime(homeDir, {
             SATORI_RUNTIME_PROFILE: "offline",
@@ -2455,8 +2455,8 @@ test("managed connected Voyage launcher preserves the direct runtime lifecycle",
         const profileAssetDirectory = path.join(root, "assets", "lateon");
         fs.mkdirSync(profileAssetDirectory, { recursive: true });
         fs.copyFileSync(
-            path.resolve(PACKAGE_ROOT, "..", "mcp", "assets", "lateon", "runtime-profile-v6-d128.json"),
-            path.join(profileAssetDirectory, "runtime-profile-v6-d128.json"),
+            path.resolve(PACKAGE_ROOT, "..", "mcp", "assets", "lateon", "runtime-profile-v7-d24.json"),
+            path.join(profileAssetDirectory, "runtime-profile-v7-d24.json"),
         );
         fs.writeFileSync(
             runtimeEntry,

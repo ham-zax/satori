@@ -6,9 +6,8 @@ export type SearchFlags = {
     /**
      * Widens the implementation-question cue from
      * `where is ... implemented` to any `where is|does|do|are ...`.
-     * Off by default: the widened cue reclassifies ordinary reference and
-     * conceptual questions as implementation questions, which changes the
-     * answer focus the reranker sees.
+     * On by default for agent-oriented behavioral code localization; explicit
+     * reference, test, documentation, and configuration routes still win first.
      */
     focus_cue_wide?: boolean;
     path_demotion?: boolean;
@@ -24,10 +23,9 @@ export type SearchFlags = {
     /**
      * Applies the implementation role preference (implementation, then
      * adapters, then tests/docs/fixtures) to reranked results when the answer
-     * focus is neutral, which is the default for descriptive discovery
-     * queries. Explicit test, documentation, configuration, reference and
-     * path-constrained requests keep their own ordering. Off by default until
-     * it is compared against the current ordering on the same publication.
+     * focus is neutral. On by default for agent-oriented code discovery;
+     * explicit test, documentation, configuration, reference, declaration, and
+     * path-constrained requests keep their own ordering.
      */
     neutral_owner_preference?: boolean;
     /** Adds a bounded published-symbol metadata BM25 arm before reranking. Experimental; off by default. */
@@ -63,10 +61,10 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     compound_join: true,
     path_demotion: true,
     dealias: false,
-    focus_cue_wide: false,
+    focus_cue_wide: true,
     prf: false,
     rerank_blend: false,
-    neutral_owner_preference: false,
+    neutral_owner_preference: true,
     symbol_metadata_bm25: false,
     definition_discovery: true,
     definition_alt_terms: true,

@@ -79,8 +79,8 @@ const CANONICAL_RUNTIME_CONTRACT = [
   "export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v2' as const;",
   "export const POTION_MODEL_ID = 'minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b';",
   'export const POTION_DIMENSION = 256;',
-  "export const LATEON_PROFILE_ID = 'lateon_offline_quality_projection_v6_d128_v1' as const;",
-  "export const LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1' as const;",
+  "export const LATEON_PROFILE_ID = 'lateon_offline_quality_projection_v7_d24' as const;",
+  "export const LATEON_ACTIVATION_POLICY = 'lateon_context_v7_d24_owner_default' as const;",
 ].join('\n');
 
 function writeSharedContractLayout(cwd, overrides = {}) {
@@ -111,8 +111,8 @@ function writeSharedContractLayout(cwd, overrides = {}) {
     ].join('\n'),
     'packages/mcp/src/server/lateon-reranker-protocol.ts': [
       'import { LATEON_ACTIVATION_POLICY, LATEON_PROFILE_ID } from "@satori-code/core/runtime-contract";',
-      'export const LATEON_RUNTIME_PROFILE_IDS = { contextV6D128: LATEON_PROFILE_ID };',
-      'export const LATEON_ACTIVATION_POLICY_IDS = { ownerDefaultContextV6: LATEON_ACTIVATION_POLICY };',
+      'export const LATEON_RUNTIME_PROFILE_IDS = { contextV7D24: LATEON_PROFILE_ID };',
+      'export const LATEON_ACTIVATION_POLICY_IDS = { ownerDefaultContextV7: LATEON_ACTIVATION_POLICY };',
     ].join('\n'),
     ...overrides,
   };
@@ -145,8 +145,8 @@ test('checkSharedContractOwnership rejects duplicate authoritative declarations 
       'packages/core/src/core/search-projections.ts': "export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v2' as const;",
       'packages/core/src/embedding/potion-embedding.ts': "export const POTION_MODEL_ID = 'minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b';",
       'packages/cli/src/local-runtime-contract.ts': 'export const POTION_DIMENSION = 256;',
-      'packages/cli/src/lateon-model-store.ts': 'export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v6_d128_v1";',
-      'packages/mcp/src/server/lateon-reranker-protocol.ts': 'export const LATEON_ACTIVATION_POLICY_IDS = { ownerDefaultContextV6: "lateon_context_v6_d128_owner_default_v1" };',
+      'packages/cli/src/lateon-model-store.ts': 'export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v7_d24";',
+      'packages/mcp/src/server/lateon-reranker-protocol.ts': 'export const LATEON_ACTIVATION_POLICY_IDS = { ownerDefaultContextV7: "lateon_context_v7_d24_owner_default" };',
     });
 
     assert.deepEqual(checkSharedContractOwnership({ cwd }), [

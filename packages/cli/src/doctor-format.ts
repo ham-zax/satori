@@ -73,7 +73,7 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
         configuration.embeddingDimension ?? "—",
         configuration.rerankerProvider === "lateon"
             ? configuration.rerankerProfile === LATEON_PROFILE_ID
-                ? "LateOn · Code-edge D128"
+                ? "LateOn · Code-edge D24"
                 : "LateOn · profile unknown"
             : configuration.rerankerProvider === "voyage"
                 ? `Voyage / ${modelLabel(configuration.rerankerModel ?? null) ?? "—"}`

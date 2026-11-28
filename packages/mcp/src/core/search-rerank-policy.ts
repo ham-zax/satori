@@ -138,7 +138,23 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
 
     let selected = candidatePool.slice(0, budget);
     if (preferred.length > 0) {
-        const selectedSet = new Set(preferred.slice(0, Math.floor(budget / 2)));
+        // Prioritize distinct preferred families first so multiple chunks from
+        // one owner cannot consume the preferred reservation and crowd out
+        // distinct owners from the rerank window.
+        const preferredPrimary: T[] = [];
+        const preferredOverflow: T[] = [];
+        const seenPreferredFamilies = new Set<string>();
+        for (const candidate of preferred) {
+            const familyKey = resolveRerankFamilyKey(candidate);
+            if (!seenPreferredFamilies.has(familyKey)) {
+                seenPreferredFamilies.add(familyKey);
+                preferredPrimary.push(candidate);
+            } else {
+                preferredOverflow.push(candidate);
+            }
+        }
+        const orderedPreferred = [...preferredPrimary, ...preferredOverflow];
+        const selectedSet = new Set(orderedPreferred.slice(0, Math.floor(budget / 2)));
         for (const candidate of candidatePool) {
             if (selectedSet.size >= budget) break;
             selectedSet.add(candidate);

@@ -2242,7 +2242,7 @@ exports[`golden: dirty_overlay 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false}
@@ -2641,7 +2641,7 @@ exports[`golden: fallback_lexical_files_pass 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false}
@@ -3306,7 +3306,7 @@ exports[`golden: must_lane_failed 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false},
@@ -3445,7 +3445,7 @@ exports[`golden: must_lane_results 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false},
@@ -3680,7 +3680,7 @@ exports[`golden: must_lane_unsupported 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false},
@@ -3819,7 +3819,7 @@ exports[`golden: must_owner_visible_at_full_candidate_budget 1`] = `
   "altTerms": null,
   "flags": null,
   "reservationPolicy": null,
-  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nthe most direct answer to the question",
+  "rerankQuery": "Question:\\nwhere is naive utc handling\\n\\nRequested answer type:\\nproduction implementation, control flow, and integration path",
   "semanticCalls": [
     {"n":1,"pass":"primary","query":"where is naive utc handling","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["handling","naive","utc"],"hasFilter":false},
     {"n":2,"pass":"expanded","query":"where is naive utc handling\\nimplementation runtime source entrypoint","topK":80,"retrievalMode":"hybrid","lexicalFallbackTerms":["implementation","entrypoint","handling","runtime","source","naive","utc"],"hasFilter":false},

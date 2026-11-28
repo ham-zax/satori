@@ -49,8 +49,61 @@ function ref(relation: SearchRerankStructuralReference["relation"], index: numbe
     };
 }
 
-test("canonical policy carries the frozen v5 contract identity", () => {
-    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v5");
+function parsePlainProjection(text: string): {
+    path: string;
+    role: string;
+    kind: string;
+    symbol: string;
+    declaration: string;
+    callers: string[];
+    callees: string[];
+    tests: string[];
+    source: string;
+    references: string[];
+} {
+    const sourceMarker = "\nsource:\n";
+    const sourceIdx = text.indexOf(sourceMarker);
+    assert.ok(sourceIdx >= 0, `projection must contain source marker: ${text}`);
+    const headerLines = text.slice(0, sourceIdx).split("\n");
+    let body = text.slice(sourceIdx + sourceMarker.length);
+    let references: string[] = [];
+    const refMarker = "\nreferences:\n";
+    const refIdx = body.indexOf(refMarker);
+    if (refIdx >= 0) {
+        references = body.slice(refIdx + refMarker.length).split("\n").filter(Boolean);
+        body = body.slice(0, refIdx);
+    } else if (body.startsWith("references:\n")) {
+        references = body.slice("references:\n".length).split("\n").filter(Boolean);
+        body = "";
+    }
+    const headerValue = (prefix: string) => {
+        const line = headerLines.find((entry) => entry.startsWith(prefix));
+        return line ? line.slice(prefix.length) : "";
+    };
+    const roleLine = headerValue("role: ");
+    const roleMatch = roleLine.match(/^([^|]+) \| kind: ([^|]+) \| symbol: (.*)$/);
+    assert.ok(roleMatch, `malformed role header line: ${roleLine}`);
+    const splitRefs = (prefix: string) => {
+        const raw = headerValue(prefix);
+        return raw ? raw.split("; ") : [];
+    };
+    return {
+        path: headerValue("path: "),
+        role: roleMatch[1],
+        kind: roleMatch[2],
+        symbol: roleMatch[3],
+        declaration: headerValue("declaration: "),
+        callers: splitRefs("callers: "),
+        callees: splitRefs("callees: "),
+        tests: splitRefs("tests: "),
+        source: body,
+        references,
+    };
+}
+
+test("canonical policy carries the v6 identity-first contract identity", () => {
+    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v6");
+    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes, 3_200);
 });
 
 test("Swift attributes do not replace the callable declaration in the rerank signature", () => {
@@ -70,10 +123,10 @@ test("Swift attributes do not replace the callable declaration in the rerank sig
         symbolSpan: { startLine: 1, endLine: 5 },
         query: "in the Swift library where does the builder add a string",
     }));
-    const parsed = JSON.parse(result.text);
-    assert.equal(parsed.signature_or_declaration, declaration);
-    assert.ok(parsed.query_relevant_source_excerpt.includes("@inline(__always)"));
-    assert.ok(parsed.query_relevant_source_excerpt.includes(declaration));
+    const parsed = parsePlainProjection(result.text);
+    assert.equal(parsed.declaration, declaration);
+    assert.ok(parsed.source.includes("@inline(__always)"));
+    assert.ok(parsed.source.includes(declaration));
     assert.equal(result.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes, true);
 });
 
@@ -92,7 +145,7 @@ test("Swift declaration selection handles stacked attributes and preserves uncer
             content: fixture.lines.join("\n"),
             symbolSpan: { startLine: 1, endLine: fixture.lines.length },
         }));
-        assert.equal(JSON.parse(result.text).signature_or_declaration, fixture.expected);
+        assert.equal(parsePlainProjection(result.text).declaration, fixture.expected);
     }
     assert.throws(() => buildSearchRerankDocument(baseInput({
         language: "swift", content: "@MainActor\n@inline(__always)", symbolSpan: { startLine: 1, endLine: 2 },
@@ -293,13 +346,15 @@ test("selectRerankSourceWithinBudget fast path is bit-identical to reference bin
     assert.ok(actualExpanding.selectionAttemptCount > 1);
 });
 
-test("v5 keeps textual source references distinct from trusted structural relationships", () => {
+test("v6 keeps textual source references distinct from trusted structural relationships", () => {
     const sourceReference = { repository_relative_path: "src/veto.ts", containing_symbol_label: "function useEffect",
         source_line: 7, reference_source_excerpt: "return validate_order(order);" };
     const result = buildSearchRerankDocument(baseInput({ sourceReferences: [sourceReference] }));
-    const parsed = JSON.parse(result.text);
-    assert.deepEqual(parsed.source_references, [sourceReference]);
-    assert.deepEqual(parsed.structural_context.direct_callers, []);
+    const parsed = parsePlainProjection(result.text);
+    assert.deepEqual(parsed.references, [
+        "src/veto.ts:7 (function useEffect): return validate_order(order);",
+    ]);
+    assert.deepEqual(parsed.callers, []);
     assert.equal(result.sourceReferencesTruncated, false);
     assert.throws(() => buildSearchRerankDocument(baseInput({ sourceReferences: [{ ...sourceReference,
         reference_source_excerpt: "x".repeat(401) }] })), /reference_source_excerpt/);
@@ -311,14 +366,14 @@ test("textual references never displace primary source when the document budget 
         repository_relative_path: "src/veto.ts", containing_symbol_label: "x".repeat(4_000),
         source_line: line, reference_source_excerpt: "validate_order(order);",
     })) }));
-    const parsed = JSON.parse(result.text);
-    assert.equal(parsed.query_relevant_source_excerpt, JSON.parse(baseline.text).query_relevant_source_excerpt);
-    assert.deepEqual(parsed.source_references, []);
+    const parsed = parsePlainProjection(result.text);
+    assert.equal(parsed.source, parsePlainProjection(baseline.text).source);
+    assert.deepEqual(parsed.references, []);
     assert.equal(result.sourceReferencesTruncated, true);
-    assert.ok(result.utf8Bytes <= 4_000);
+    assert.ok(result.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes);
 });
 
-test("canonical projection carries the answer-packet shape with bounded structural context", () => {
+test("canonical projection carries identity-first plain-text shape with bounded structural context", () => {
     const result = buildSearchRerankDocument(baseInput({
         structuralContext: {
             directCallers: [ref("caller", 1), ref("caller", 2)],
@@ -326,50 +381,44 @@ test("canonical projection carries the answer-packet shape with bounded structur
             supportingTests: [ref("test_support", 4)],
         },
     }));
-    assert.equal(result.version, "search_rerank_document_v5");
-    assert.equal(result.utf8Bytes <= 4_000, true);
-    const parsed = JSON.parse(result.text);
-    assert.equal(parsed.repository_relative_path, "src/veto.ts");
-    assert.equal(parsed.candidate_role, "implementation");
-    assert.equal(parsed.symbol_kind, "function");
-    assert.equal(parsed.canonical_symbol_label, "validate_order");
-    assert.ok(parsed.signature_or_declaration.includes("function validate_order(order)"));
-    assert.deepEqual(parsed.structural_context.direct_callers, [
-        { repository_relative_path: "src/ref-1.ts", canonical_symbol_label: "ref_symbol_1", relation: "caller" },
-        { repository_relative_path: "src/ref-2.ts", canonical_symbol_label: "ref_symbol_2", relation: "caller" },
-    ]);
-    assert.deepEqual(parsed.structural_context.direct_callees, [
-        { repository_relative_path: "src/ref-3.ts", canonical_symbol_label: "ref_symbol_3", relation: "callee" },
-    ]);
-    assert.deepEqual(parsed.structural_context.supporting_tests, [
-        { repository_relative_path: "src/ref-4.ts", canonical_symbol_label: "ref_symbol_4", relation: "test_support" },
-    ]);
-    assert.ok(parsed.query_relevant_source_excerpt.includes("check_shariah_compliance"));
+    assert.equal(result.version, "search_rerank_document_v6");
+    assert.equal(result.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes, true);
+    const parsed = parsePlainProjection(result.text);
+    assert.equal(parsed.path, "src/veto.ts");
+    assert.equal(parsed.role, "implementation");
+    assert.equal(parsed.kind, "function");
+    assert.equal(parsed.symbol, "validate_order");
+    assert.ok(parsed.declaration.includes("function validate_order(order)"));
+    assert.deepEqual(parsed.callers, ["src/ref-1.ts:ref_symbol_1", "src/ref-2.ts:ref_symbol_2"]);
+    assert.deepEqual(parsed.callees, ["src/ref-3.ts:ref_symbol_3"]);
+    assert.deepEqual(parsed.tests, ["src/ref-4.ts:ref_symbol_4"]);
+    assert.ok(parsed.source.includes("check_shariah_compliance"));
+    const pathIdx = result.text.indexOf("path: src/veto.ts");
+    const roleIdx = result.text.indexOf("role: implementation | kind: function | symbol: validate_order");
+    const declIdx = result.text.indexOf("declaration: function validate_order(order) {");
+    const callersIdx = result.text.indexOf("callers: ");
+    const sourceIdx = result.text.indexOf("\nsource:\n");
+    assert.ok(pathIdx === 0 && roleIdx > pathIdx && declIdx > roleIdx && callersIdx > declIdx && sourceIdx > callersIdx);
 });
 
 test("canonical projection with empty structural context keeps declaration and primary source selection", () => {
     const result = buildSearchRerankDocument(baseInput());
     assert.equal(result.version, SEARCH_RERANK_DOCUMENT_POLICY.id);
-    const parsed = JSON.parse(result.text);
+    const parsed = parsePlainProjection(result.text);
     assert.ok(
-        parsed.signature_or_declaration.includes("function validate_order(order)"),
+        parsed.declaration.includes("function validate_order(order)"),
         "declaration selection must survive an empty structural context",
     );
     assert.ok(
-        parsed.query_relevant_source_excerpt.length > 0,
+        parsed.source.length > 0,
         "primary source selection must still run when structural context is empty",
     );
-    assert.deepEqual(parsed.structural_context, {
-        direct_callers: [],
-        direct_callees: [],
-        supporting_tests: [],
-    });
-    assert.equal("language" in parsed, false);
-    assert.equal("documentation_excerpt" in parsed, false);
-    assert.equal("required_owner_siblings" in parsed, false);
+    assert.deepEqual(parsed.callers, []);
+    assert.deepEqual(parsed.callees, []);
+    assert.deepEqual(parsed.tests, []);
 });
 
-test("canonical projection stays within 4,000 UTF-8 bytes under a full structural context and truncates references before source", () => {
+test("canonical projection stays within 3,200 UTF-8 bytes under a full structural context and truncates references before source", () => {
     const longLabel = "very_long_qualified_symbol_name_for_trade_veto_validation_flow_".repeat(8);
     const structuralContext = {
         directCallers: [1, 2, 3].map((index) => ({
@@ -395,16 +444,11 @@ test("canonical projection stays within 4,000 UTF-8 bytes under a full structura
         canonicalSymbolLabel: "worker",
         query: "worker dispatch routing",
     }));
-    assert.equal(result.utf8Bytes <= 4_000, true, `projection exceeded 4000 bytes: ${result.utf8Bytes}`);
-    const parsed = JSON.parse(result.text);
-    assert.ok(parsed.signature_or_declaration.length > 0, "mandatory declaration must survive truncation");
-    const totalReferences = parsed.structural_context.direct_callers.length
-        + parsed.structural_context.direct_callees.length
-        + parsed.structural_context.supporting_tests.length;
-    assert.ok(
-        totalReferences <= 8,
-        `reference lists must be truncatable (kept ${totalReferences} of 8)`,
-    );
+    assert.equal(result.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes, true, `projection exceeded budget: ${result.utf8Bytes}`);
+    const parsed = parsePlainProjection(result.text);
+    assert.ok(parsed.declaration.length > 0, "mandatory declaration must survive truncation");
+    const totalReferences = parsed.callers.length + parsed.callees.length + parsed.tests.length;
+    assert.ok(totalReferences <= 8, `reference lists must be truncatable (kept ${totalReferences} of 8)`);
     assert.ok(
         result.structuralContextTruncated === true,
         "the stress fixture must have forced reference truncation",
@@ -420,7 +464,7 @@ test("canonical projection rejects a mandatory projection that exceeds the byte 
     );
 });
 
-test("canonical projection keeps the same primary source excerpt when optional structural references fit beside it", () => {
+test("canonical projection bounds optional structural header so oversized references never starve source", () => {
     const content = Array.from(
         { length: 120 },
         (_, index) => `line ${index}: dispatch_trade_for_exact_question(${index});`,
@@ -431,9 +475,8 @@ test("canonical projection keeps the same primary source excerpt when optional s
         canonicalSymbolLabel: "dispatch_trade_for_exact_question",
         query: "dispatch trade exact question",
     });
-    const withoutReferences = JSON.parse(buildSearchRerankDocument(input).text);
     const longLabel = "proof_backed_call_path_".repeat(10);
-    const withReferences = JSON.parse(buildSearchRerankDocument({
+    const withReferences = buildSearchRerankDocument({
         ...input,
         structuralContext: {
             directCallers: [1, 2, 3].map((index) => ({
@@ -452,11 +495,14 @@ test("canonical projection keeps the same primary source excerpt when optional s
                 relation: "test_support" as const,
             })),
         },
-    }).text);
-    assert.equal(
-        withReferences.query_relevant_source_excerpt,
-        withoutReferences.query_relevant_source_excerpt,
-        "optional references must never shrink a valid source-first excerpt",
+    });
+    const parsed = parsePlainProjection(withReferences.text);
+    assert.ok(withReferences.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes);
+    assert.equal(withReferences.structuralContextTruncated, true);
+    assert.ok(
+        parsed.source.includes("dispatch_trade_for_exact_question")
+        && withReferences.selectedSourceLineCount >= 12,
+        "bounded structural header must leave ample source budget",
     );
 });
 
@@ -477,14 +523,14 @@ test("canonical projection normalizes only role-valid, relation-aligned, bounded
         () => buildSearchRerankDocument(baseInput({ unexpected: true })),
         /unknown key unexpected/,
     );
-    const parsed = JSON.parse(buildSearchRerankDocument(baseInput({
+    const parsed = parsePlainProjection(buildSearchRerankDocument(baseInput({
         structuralContext: {
             directCallers: [4, 1, 2, 3].map((index) => ref("caller", index)),
         },
     })).text);
     assert.deepEqual(
-        parsed.structural_context.direct_callers.map((entry: { repository_relative_path: string }) => entry.repository_relative_path),
-        ["src/ref-1.ts", "src/ref-2.ts", "src/ref-3.ts"],
+        parsed.callers,
+        ["src/ref-1.ts:ref_symbol_1", "src/ref-2.ts:ref_symbol_2", "src/ref-3.ts:ref_symbol_3"],
         "direct callers are sorted and capped by the projection contract",
     );
 });
@@ -529,16 +575,15 @@ test("missing or blank projection identity resolves to raw native document ident
     );
 });
 
-test("retired search_rerank_document_v1 identity is rejected", () => {
-    assert.throws(
-        () => resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v1"),
-        /search_rerank_document_projection_identity_unknown:search_rerank_document_v1/,
-    );
-});
-
-test("search_rerank_document_v5 identity resolves to canonical projector identity", () => {
+test("retired search_rerank_document_v1 through v5 identities are rejected", () => {
+    for (const retired of ["search_rerank_document_v1", "search_rerank_document_v5"]) {
+        assert.throws(
+            () => resolveSearchRerankDocumentProjectionIdentity(retired),
+            new RegExp(`search_rerank_document_projection_identity_unknown:${retired}`),
+        );
+    }
     assert.equal(
-        resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v5"),
-        "search_rerank_document_v5",
+        resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v6"),
+        "search_rerank_document_v6",
     );
 });

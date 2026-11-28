@@ -68,7 +68,7 @@ export function resolveOfflineReranker(
     const rejectUnsupportedLateOn = (): never => {
         throw new CliError(
             "E_USAGE",
-            `LateOn D128 is supported only on Linux x64/WSL2 and Linux arm64 glibc; received ${targetPlatform} ${targetArchitecture}. Use --reranker none or a supported platform.`,
+            `LateOn D24 is supported only on Linux x64/WSL2 and Linux arm64 glibc; received ${targetPlatform} ${targetArchitecture}. Use --reranker none or a supported platform.`,
             2,
         );
     };
@@ -224,7 +224,7 @@ export async function resolveVerifiedLateOnModel(
     if (!runtimePackageRoot) {
         throw new CliError(
             "E_INSTALL_PREFLIGHT",
-            "Managed LateOn D128 activation requires a resolvable @satori-code/mcp package root containing the frozen profile and acquisition manifest; refusing to use a predicted model path.",
+            "Managed LateOn D24 activation requires a resolvable @satori-code/mcp package root containing the frozen profile and acquisition manifest; refusing to use a predicted model path.",
             1,
         );
     }
@@ -249,7 +249,7 @@ export async function resolveVerifiedLateOnModel(
         if (error instanceof CliError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         const retry = retryCommand ? `\nRetry: ${retryCommand}` : "";
-        throw new CliError("E_INSTALL_PREFLIGHT", `LateOn D128 model preflight failed: ${message}${retry}`, 1);
+        throw new CliError("E_INSTALL_PREFLIGHT", `LateOn D24 model preflight failed: ${message}${retry}`, 1);
     }
 }
 

@@ -41,13 +41,13 @@ function input(): SearchRankedSetBindingInput {
             model: "lightonai/LateOn-Code-edge@revision-1",
             profile: "e".repeat(64),
         },
-        rerankerProjectionIdentity: "search_rerank_document_v5",
+        rerankerProjectionIdentity: "search_rerank_document_v6",
         rerankerRequestIdentity: {
             provider: "lateon",
             model: "lightonai/LateOn-Code-edge@revision-1",
             profile: "e".repeat(64),
             queryProjectionIdentity: "search_rerank_query_v1",
-            documentProjectionIdentity: "search_rerank_document_v5",
+            documentProjectionIdentity: "search_rerank_document_v6",
         },
         orderedResults: [{
             target: {
@@ -308,14 +308,14 @@ test("ranked-set binding rejects contradictory duplicated reranker identities", 
 test("resolveSearchRerankRequestIdentity binds provider projections, profile, and raw fallback", () => {
     const identity = resolveSearchRerankRequestIdentity(fakeReranker({
         getQueryProjectionVersion: () => "search_rerank_query_v2",
-        getDocumentProjectionVersion: () => "search_rerank_document_v5",
+        getDocumentProjectionVersion: () => "search_rerank_document_v6",
     }));
     assert.deepEqual(identity, {
         provider: "lateon",
         model: "LateOn-Code-edge",
         profile: "e".repeat(64),
         queryProjectionIdentity: "search_rerank_query_v2",
-        documentProjectionIdentity: "search_rerank_document_v5",
+        documentProjectionIdentity: "search_rerank_document_v6",
     });
 
     const raw = resolveSearchRerankRequestIdentity(fakeReranker());
@@ -324,9 +324,9 @@ test("resolveSearchRerankRequestIdentity binds provider projections, profile, an
 
     assert.throws(
         () => resolveSearchRerankRequestIdentity(fakeReranker({
-            getDocumentProjectionVersion: () => "search_rerank_document_v3",
+            getDocumentProjectionVersion: () => "search_rerank_document_v5",
         })),
-        /search_rerank_document_projection_identity_unknown:search_rerank_document_v3/,
+        /search_rerank_document_projection_identity_unknown:search_rerank_document_v5/,
     );
 });
 

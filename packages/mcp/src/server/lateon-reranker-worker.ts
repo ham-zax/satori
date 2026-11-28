@@ -316,13 +316,22 @@ async function encodeQuery(state: RuntimeState, query: string): Promise<QueryEnc
     return encoding;
 }
 
+export class LateOnWorkerCancelledError extends Error {
+    constructor() {
+        super("LateOn rerank was cancelled.");
+        this.name = "LateOnWorkerCancelledError";
+    }
+}
+
 export async function scoreDocuments(
     state: ScoreDocumentsState,
     query: string,
     documents: readonly string[],
     queryEncoding: QueryEncoding,
     documentCacheKey: (documentText: string) => string = createDocumentCacheKey,
+    isCancelled?: () => boolean,
 ): Promise<Readonly<{ scores: readonly number[]; tokenCount: number }>> {
+    if (isCancelled?.()) throw new LateOnWorkerCancelledError();
     const scores = new Array<number>(documents.length);
     const scoreKeys = documents.map((document) => createScoreCacheKey(query, document));
     // Cached documents still contribute their token count, so the aggregate
@@ -390,12 +399,14 @@ export async function scoreDocuments(
             throw new Error("LateOn encoder emitted an unexpected response.");
         }
     }
+    if (isCancelled?.()) throw new LateOnWorkerCancelledError();
     let next = 0;
     let failure: { error: unknown } | null = null;
     // Each encoder takes the next unique document when it finishes one. After a
-    // failure no new jobs start, and every lane settles before this returns or throws.
+    // failure or cancellation no new jobs start, completed in-flight encodings
+    // are retained in the warm caches, and every lane settles before returning.
     await Promise.all(activeEncoders.map(async (encoder) => {
-        while (!failure && next < pendingGroups.length) {
+        while (!failure && !isCancelled?.() && next < pendingGroups.length) {
             const group = pendingGroups[next++];
             try {
                 const response = await encoder.request({
@@ -429,13 +440,19 @@ export async function scoreDocuments(
         }
     }));
     if (failure) throw (failure as { error: unknown }).error;
+    if (isCancelled?.()) throw new LateOnWorkerCancelledError();
     return { scores, tokenCount };
 }
 
 async function rerank(
     request: Extract<LateOnWorkerRequest, { type: "rerank" }>,
+    isCancelled: () => boolean,
 ): Promise<void> {
     if (!runtime) throw new Error("LateOn worker is not initialized.");
+    if (isCancelled()) {
+        send({ type: "cancelled", requestId: request.requestId });
+        return;
+    }
     if (
         request.documents.length !== request.identities.length
         || request.documents.length > runtime.profile.inference.candidateDepth
@@ -443,12 +460,31 @@ async function rerank(
         throw new Error("LateOn rerank request violates the candidate contract.");
     }
     const queryEncoding = await encodeQuery(runtime, request.query);
-    const documentScores = await scoreDocuments(
-        runtime,
-        request.query,
-        request.documents,
-        queryEncoding,
-    );
+    if (isCancelled()) {
+        send({ type: "cancelled", requestId: request.requestId });
+        return;
+    }
+    let documentScores: Readonly<{ scores: readonly number[]; tokenCount: number }>;
+    try {
+        documentScores = await scoreDocuments(
+            runtime,
+            request.query,
+            request.documents,
+            queryEncoding,
+            createDocumentCacheKey,
+            isCancelled,
+        );
+    } catch (error) {
+        if (error instanceof LateOnWorkerCancelledError) {
+            send({ type: "cancelled", requestId: request.requestId });
+            return;
+        }
+        throw error;
+    }
+    if (isCancelled()) {
+        send({ type: "cancelled", requestId: request.requestId });
+        return;
+    }
     if (
         queryEncoding.tokenCount + documentScores.tokenCount
         > runtime.profile.execution.aggregateRequestTokenLimit
@@ -474,13 +510,27 @@ async function rerank(
 // The worker is only ever forked with an IPC channel, so `process.send` is
 // present in production. Guarding it keeps the cache helpers importable.
 if (process.send) {
+    const queuedOrActiveRequestIds = new Set<number>();
+    const cancelledRequestIds = new Set<number>();
+
     process.on("message", (message: LateOnWorkerRequest) => {
+        // Handle cancellation out-of-band so an active rerank loop observes it
+        // between document dispatches without waiting for the serialized queue.
+        if (message.type === "cancel") {
+            if (queuedOrActiveRequestIds.has(message.requestId)) {
+                cancelledRequestIds.add(message.requestId);
+            }
+            return;
+        }
+        if (message.type === "rerank") {
+            queuedOrActiveRequestIds.add(message.requestId);
+        }
         operation = operation.then(async () => {
             try {
                 if (message.type === "initialize") {
                     await initialize(message);
                 } else {
-                    await rerank(message);
+                    await rerank(message, () => cancelledRequestIds.has(message.requestId));
                 }
             } catch (error) {
                 send({
@@ -488,6 +538,11 @@ if (process.send) {
                     ...(message.type === "rerank" ? { requestId: message.requestId } : {}),
                     message: error instanceof Error ? error.message : String(error),
                 });
+            } finally {
+                if (message.type === "rerank") {
+                    queuedOrActiveRequestIds.delete(message.requestId);
+                    cancelledRequestIds.delete(message.requestId);
+                }
             }
         });
     });

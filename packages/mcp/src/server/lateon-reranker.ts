@@ -48,8 +48,8 @@ export class LateOnOperationalError extends Error {
 }
 
 const PROFILE_PATHS: Readonly<Partial<Record<LateOnRuntimeProfileId, string>>> = Object.freeze({
-    [LATEON_RUNTIME_PROFILE_IDS.contextV6D128]: fileURLToPath(
-        new URL("../../assets/lateon/runtime-profile-v6-d128.json", import.meta.url),
+    [LATEON_RUNTIME_PROFILE_IDS.contextV7D24]: fileURLToPath(
+        new URL("../../assets/lateon/runtime-profile-v7-d24.json", import.meta.url),
     ),
 });
 
@@ -68,6 +68,8 @@ type QueuedRerank = {
     signal?: AbortSignal;
     abortListener?: () => void;
     executionStartedAt?: number;
+    workerRequestId?: number;
+    cancelGraceTimer?: NodeJS.Timeout;
     onExecutionDiagnostics?: (diagnostics: RerankExecutionDiagnostics) => void;
 };
 
@@ -76,6 +78,7 @@ type WorkerState = "idle" | "loading" | "ready" | "unhealthy" | "closed";
 
 const MAXIMUM_BOOTSTRAP_ATTEMPTS = 2;
 const LATEON_HARD_OPERATION_TIMEOUT_MS = 300_000;
+const LATEON_DEFAULT_COOPERATIVE_CANCEL_GRACE_MS = 5_000;
 // The model worker holds 0.5-1.7 GB depending on the host's execution plan
 // (lateon-execution-plan.ts). It starts on first use and is
 // released after this long without rerank activity.
@@ -90,6 +93,8 @@ export type LateOnRerankerConfig = Readonly<{
     workerPath?: string;
     /** Idle window before the worker process is released. 0 keeps it resident. */
     idleShutdownMs?: number;
+    /** Bounded grace window for cooperative worker cancellation before fallback termination. */
+    cooperativeCancelGraceMs?: number;
     /** Fixed pool layout; by default each worker start sizes the pool to this host. */
     executionPlan?: LateOnExecutionPlan;
     /** Optional probe for active index/sync mutations to cap concurrent ONNX sessions. */
@@ -122,7 +127,7 @@ function validateCommonProfile(profile: Partial<LateOnRuntimeProfile>): void {
 }
 
 export function loadLateOnRuntimeProfile(
-    profileIdOrPath: LateOnRuntimeProfileId | string = LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+    profileIdOrPath: LateOnRuntimeProfileId | string = LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
 ): LateOnRuntimeProfile {
     const profilePath = PROFILE_PATHS[profileIdOrPath as LateOnRuntimeProfileId]
         ?? (path.isAbsolute(profileIdOrPath) ? profileIdOrPath : undefined);
@@ -133,21 +138,21 @@ export function loadLateOnRuntimeProfile(
     }
     const parsed = JSON.parse(fs.readFileSync(profilePath, "utf8")) as Partial<LateOnRuntimeProfile>;
     validateCommonProfile(parsed);
-    if (parsed.schemaVersion !== "satori_lateon_runtime_profile_v6") {
+    if (parsed.schemaVersion !== "satori_lateon_runtime_profile_v7") {
         throw new Error("LateOn runtime profile schema is retired or unsupported.");
     }
     if (
-        parsed.profileId !== LATEON_RUNTIME_PROFILE_IDS.contextV6D128
-        || parsed.identity?.projectionVersion !== "search_rerank_document_v5"
+        parsed.profileId !== LATEON_RUNTIME_PROFILE_IDS.contextV7D24
+        || parsed.identity?.projectionVersion !== "search_rerank_document_v6"
         || !/^[a-f0-9]{64}$/.test(parsed.identity?.projectionSha256 ?? "")
         || parsed.identity?.queryProjectionVersion !== "search_rerank_query_v2"
         || parsed.qualificationStatus !== "owner_activated_not_held_out"
     ) {
-        throw new Error("LateOn v6 runtime profile is malformed or unsupported.");
+        throw new Error("LateOn v7 runtime profile is malformed or unsupported.");
     }
     validateExecutionContract(parsed);
-    if (parsed.inference?.candidateDepth !== 128) {
-        throw new Error(`LateOn ${parsed.profileId} must use candidate depth 128.`);
+    if (parsed.inference?.candidateDepth !== 24) {
+        throw new Error(`LateOn ${parsed.profileId} must use candidate depth 24.`);
     }
     return parsed as LateOnRuntimeProfile;
 }
@@ -195,6 +200,7 @@ export class LateOnReranker implements Reranker {
     private readonly resolveExecutionPlan: () => LateOnExecutionPlan;
     private readonly workerPath: string;
     private readonly idleShutdownMs: number;
+    private readonly cooperativeCancelGraceMs: number;
     private idleShutdownTimer?: NodeJS.Timeout;
     private worker: ChildProcess | null = null;
     private workerState: WorkerState = "idle";
@@ -219,7 +225,7 @@ export class LateOnReranker implements Reranker {
 
     constructor(config: LateOnRerankerConfig) {
         this.profile = loadLateOnRuntimeProfile(
-            config.profileId ?? LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+            config.profileId ?? LATEON_RUNTIME_PROFILE_IDS.contextV7D24,
         );
         this.rawProfileDigest = profileDigest(this.profile);
         this.modelDirectory = path.resolve(config.modelDirectory);
@@ -240,6 +246,10 @@ export class LateOnReranker implements Reranker {
             ? path.resolve(config.workerPath)
             : fileURLToPath(new URL("./lateon-reranker-worker.js", import.meta.url));
         this.idleShutdownMs = Math.max(0, config.idleShutdownMs ?? LATEON_DEFAULT_IDLE_SHUTDOWN_MS);
+        this.cooperativeCancelGraceMs = Math.max(
+            1,
+            config.cooperativeCancelGraceMs ?? LATEON_DEFAULT_COOPERATIVE_CANCEL_GRACE_MS,
+        );
         this.readinessPromise = this.createReadinessPromise();
     }
 
@@ -583,6 +593,7 @@ export class LateOnReranker implements Reranker {
         if (
             response.type !== "ready"
             && response.type !== "result"
+            && response.type !== "cancelled"
             && response.type !== "error"
         ) {
             this.failWorker(operationalError(
@@ -631,7 +642,12 @@ export class LateOnReranker implements Reranker {
         const pending = this.pending.get(requestId as number);
         if (!pending) return;
         this.pending.delete(requestId as number);
-        if (response.type === "error") {
+        if (response.type === "cancelled") {
+            pending.reject(operationalError(
+                "lateon_cancelled",
+                "LateOn rerank was cancelled.",
+            ));
+        } else if (response.type === "error") {
             pending.reject(operationalError(
                 "lateon_worker_failure",
                 typeof response.message === "string"
@@ -650,9 +666,14 @@ export class LateOnReranker implements Reranker {
         let task!: Promise<void>;
         task = (async () => {
             try {
-                request.resolve(await this.rerankOnce(request));
+                const results = await this.rerankOnce(request);
+                if (!request.signal?.aborted) {
+                    request.resolve(results);
+                }
             } catch (error) {
-                request.reject(error instanceof Error ? error : new Error(String(error)));
+                if (!request.signal?.aborted) {
+                    request.reject(error instanceof Error ? error : new Error(String(error)));
+                }
             } finally {
                 this.active = false;
                 if (this.activeRequest === request) this.activeRequest = null;
@@ -677,7 +698,31 @@ export class LateOnReranker implements Reranker {
             return;
         }
         if (this.activeRequest === request) {
-            void this.stopWorker(cancellation, true);
+            // Cooperative cancellation: reject the caller immediately and ask
+            // the worker to stop before the next document while keeping warm
+            // caches alive. If the worker does not settle within the grace
+            // ceiling, fall back to worker termination so queued callers never wedge.
+            request.reject(cancellation);
+            if (request.workerRequestId !== undefined && this.worker?.connected) {
+                try {
+                    this.worker.send({
+                        type: "cancel",
+                        requestId: request.workerRequestId,
+                    } satisfies LateOnWorkerRequest);
+                } catch {
+                    // If IPC is already broken, the grace timer or worker exit cleans up.
+                }
+            }
+            if (!request.cancelGraceTimer) {
+                const graceMs = this.cooperativeCancelGraceMs;
+                request.cancelGraceTimer = setTimeout(() => {
+                    request.cancelGraceTimer = undefined;
+                    if (this.activeRequest === request) {
+                        void this.stopWorker(cancellation, true);
+                    }
+                }, graceMs);
+                request.cancelGraceTimer.unref();
+            }
         }
     }
 
@@ -723,6 +768,9 @@ export class LateOnReranker implements Reranker {
     }
 
     private async rerankOnce(request: QueuedRerank): Promise<RerankResult[]> {
+        if (request.signal?.aborted) {
+            throw operationalError("lateon_cancelled", "LateOn rerank was cancelled.");
+        }
         const worker = this.worker;
         if (!worker || this.workerState !== "ready") {
             throw operationalError("lateon_not_ready", "LateOn worker is not ready.");
@@ -735,6 +783,7 @@ export class LateOnReranker implements Reranker {
             `LateOn scoring exceeded the ${timeoutMilliseconds} ms hard safety ceiling.`,
         );
         const requestId = this.nextRequestId++;
+        request.workerRequestId = requestId;
         let timeout: NodeJS.Timeout | undefined;
         let terminationAfterTimeout: Promise<void> | undefined;
         const operation = new Promise<LateOnWorkerResponse>((resolve, reject) => {
@@ -813,6 +862,11 @@ export class LateOnReranker implements Reranker {
             throw classified;
         } finally {
             if (timeout) clearTimeout(timeout);
+            if (request.cancelGraceTimer) {
+                clearTimeout(request.cancelGraceTimer);
+                request.cancelGraceTimer = undefined;
+            }
+            request.workerRequestId = undefined;
             this.pending.delete(requestId);
         }
     }
@@ -885,6 +939,10 @@ export class LateOnReranker implements Reranker {
         this.worker = null;
         if (this.readinessTimer) clearTimeout(this.readinessTimer);
         this.readinessTimer = undefined;
+        if (this.activeRequest?.cancelGraceTimer) {
+            clearTimeout(this.activeRequest.cancelGraceTimer);
+            this.activeRequest.cancelGraceTimer = undefined;
+        }
         if (!this.closed) this.workerState = "unhealthy";
         if (rejectReadiness) this.rejectReadiness(error);
         const pendingRequests = [...this.pending.values()];

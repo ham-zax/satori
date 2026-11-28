@@ -9,5 +9,5 @@ export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v2' as const;
 export const POTION_MODEL_ID =
     'minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b';
 export const POTION_DIMENSION = 256;
-export const LATEON_PROFILE_ID = 'lateon_offline_quality_projection_v6_d128_v1' as const;
-export const LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1' as const;
+export const LATEON_PROFILE_ID = 'lateon_offline_quality_projection_v7_d24' as const;
+export const LATEON_ACTIVATION_POLICY = 'lateon_context_v7_d24_owner_default' as const;

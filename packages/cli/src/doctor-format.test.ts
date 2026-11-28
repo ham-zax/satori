@@ -111,7 +111,7 @@ test("Doctor renders effective configuration for every supported client as a tab
     assert.match(text, /Applied runtime configuration:/);
     assert.match(text, /Antigravity\s+\| Not configured\s+\| —/);
     assert.match(text, /Client\s+\| Status\s+\| Profile\s+\| Embedding\s+\| Dim\s+\| Reranker\s+\| Storage\s+\| Source/);
-    assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn · Code-edge D128\s+\| LanceDB\s+\| Managed launcher/);
+    assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn · Code-edge D24\s+\| LanceDB\s+\| Managed launcher/);
     assert.match(text, /Claude Code\s+\| Not configured\s+\| —/);
     assert.match(text, /OpenCode\s+\| Needs repair\s+\| connected\s+\| VoyageAI \/ voyage-code-3\s+\| 1024\s+\| none\s+\| Milvus\s+\| Client config/);
     assert.doesNotMatch(text, /Online: search queries and code excerpts are sent to Voyage\./);

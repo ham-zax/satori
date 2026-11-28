@@ -94,3 +94,48 @@ test("neutral owner preference splits neutral queries by role without overriding
     }
     assert.deepEqual(prefer("cleanup", true, true).ordered, candidates);
 });
+
+test("implementation preference orders non-executable declarations behind executable code unless query seeks a declaration", () => {
+    const candidates = [
+        { path: "src/billing/stripe.ts", kind: "interface", name: "StripeWebhookResult" },
+        { path: "src/billing/stripe.ts", kind: "constant", name: "MAX_RETRIES" },
+        { path: "src/billing/stripe.ts", kind: "function", name: "handleWebhook" },
+        { path: "src/billing/stripe.ts", kind: "method", name: "verifySignature" },
+        { path: "tests/stripe.test.ts", kind: "function", name: "testWebhook" },
+    ];
+    const orderNames = (query: string) => {
+        const parsed = parseSearchOperators(query);
+        const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
+        return preferImplementationCandidates({
+            candidates,
+            relativePath: (candidate) => candidate.path,
+            symbolKind: (candidate) => candidate.kind,
+            answerFocus: resolveSearchAnswerFocus(plan).focus,
+            queryPlan: plan,
+            hasPathConstraint: false,
+        }).map((candidate) => candidate.name);
+    };
+
+    // Behavioral implementation query demotes interface/constant behind executable code.
+    assert.deepEqual(
+        orderNames("how does billing handle webhook signature verification"),
+        ["handleWebhook", "verifySignature", "StripeWebhookResult", "MAX_RETRIES", "testWebhook"],
+    );
+    // Behavioral query mentioning a domain noun like "union type" still prefers executable code.
+    assert.deepEqual(
+        orderNames("how does parser resolve a union type when parsing"),
+        ["handleWebhook", "verifySignature", "StripeWebhookResult", "MAX_RETRIES", "testWebhook"],
+    );
+    // Explicit declaration-seeking queries preserve non-executable declarations in place.
+    for (const query of [
+        "where is the StripeWebhookResult interface implemented",
+        "how is the RetryPolicy type definition structured",
+        "what is the MAX_RETRIES constant controls",
+    ]) {
+        assert.deepEqual(
+            orderNames(query),
+            ["StripeWebhookResult", "MAX_RETRIES", "handleWebhook", "verifySignature", "testWebhook"],
+            query,
+        );
+    }
+});

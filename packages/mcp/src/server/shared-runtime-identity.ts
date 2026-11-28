@@ -136,7 +136,7 @@ export function isSharedOfflineRuntimeEligible(
 }
 
 const LATEON_PROFILE_ASSET_PATH = fileURLToPath(
-    new URL("../../assets/lateon/runtime-profile-v6-d128.json", import.meta.url),
+    new URL("../../assets/lateon/runtime-profile-v7-d24.json", import.meta.url),
 );
 
 function resolveLateOnProfileDigest(env: NodeJS.ProcessEnv): string {
@@ -203,11 +203,11 @@ export function buildSharedRuntimeIdentity(
             : "",
         lateOnProfile: env.SATORI_LATEON_PROFILE
             ?? (env.SATORI_RERANKER_PROVIDER === "lateon"
-                ? LATEON_RUNTIME_PROFILE_IDS.contextV6D128
+                ? LATEON_RUNTIME_PROFILE_IDS.contextV7D24
                 : ""),
         lateOnActivationPolicy: env.SATORI_LATEON_ACTIVATION_POLICY
             ?? (env.SATORI_RERANKER_PROVIDER === "lateon" && env.SATORI_LATEON_PROFILE === undefined
-                ? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
+                ? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV7
                 : ""),
         lateOnProfileDigest: resolveLateOnProfileDigest(env),
         vectorStoreProvider: env.VECTOR_STORE_PROVIDER ?? "",

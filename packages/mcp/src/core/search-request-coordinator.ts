@@ -1833,11 +1833,21 @@ export class SearchRequestCoordinator {
                     supplementCandidates: async (candidates) => {
                         if (answerFocus !== "implementation" || !searchSymbolRegistry
                             || freshnessDecision.mode === "served_previous_generation") return [];
+                        const structuralContext = wantsStructuralContext && searchSymbolRegistryManifestHash
+                            ? await (structuralContextLoad ??= this.loadRerankStructuralContext(
+                                preparedReadState,
+                                searchSymbolRegistryManifestHash,
+                                readinessDebug.operations,
+                            ))
+                            : undefined;
                         return supplementSearchFileSymbols({
                             candidates,
                             lexicalTerms: queryPlan.lexicalTerms,
                             registry: searchSymbolRegistry,
                             codebaseRoot: effectiveRoot,
+                            ...(structuralContext?.preparedRelationships
+                                ? { preparedStructuralRelationships: structuralContext.preparedRelationships }
+                                : {}),
                         });
                     },
                     semanticSearch: (request) => {

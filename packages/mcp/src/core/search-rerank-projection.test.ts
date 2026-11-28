@@ -10,7 +10,9 @@ import {
     type SymbolRecord,
 } from "@satori-code/core";
 import type { CurrentSourceEvidence } from "./current-source-symbols.js";
-import { SEARCH_RERANK_DOCUMENT_POLICY } from "./search-rerank-document.js";
+import {
+    SEARCH_RERANK_DOCUMENT_POLICY,
+} from "./search-rerank-document.js";
 import type { SearchResultLike } from "./search-lexical-scoring.js";
 import {
     createSearchRerankProjectionRequestCache,
@@ -86,11 +88,8 @@ test("publication-bound projection adds same-file textual references without pub
     });
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
-    const document = JSON.parse(outcome.document);
-    assert.deepEqual(document.structural_context.direct_callers, []);
-    assert.deepEqual(document.source_references, [{ repository_relative_path: owner.file,
-        containing_symbol_label: "function useEffect", source_line: 5,
-        reference_source_excerpt: "function useEffect() { return owner(); }" }]);
+    assert.ok(!outcome.document.includes("\ncallers: "));
+    assert.match(outcome.document, /\nreferences:\nsrc\/owner\.ts:5 \(function useEffect\): function useEffect\(\) \{ return owner\(\); \}/);
 });
 
 function ownedResult(overrides: Partial<SearchResultLike> = {}): SearchResultLike {
@@ -291,10 +290,7 @@ test("canonical projection success carries bounded provenance fields", async () 
     );
     assert.equal(outcome.candidateRole, "implementation");
     assert.equal(outcome.projectionIdentity, SEARCH_RERANK_DOCUMENT_POLICY.id);
-    assert.equal(
-        (JSON.parse(outcome.document) as Record<string, unknown>).candidate_role,
-        "implementation",
-    );
+    assert.match(outcome.document, /\nrole: implementation \| /);
 });
 
 test("canonical projection keeps publication-bound source evidence when structural context is unavailable", async () => {
@@ -310,10 +306,9 @@ test("canonical projection keeps publication-bound source evidence when structur
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.structuralContextStatus, "unavailable");
-    assert.deepEqual(
-        (JSON.parse(outcome.document) as { structural_context: unknown }).structural_context,
-        { direct_callers: [], direct_callees: [], supporting_tests: [] },
-    );
+    assert.ok(!outcome.document.includes("\ncallers: "));
+    assert.ok(!outcome.document.includes("\ncallees: "));
+    assert.ok(!outcome.document.includes("\ntests: "));
 });
 
 test("canonical projection defaults missing structural preparation to unavailable", async () => {
@@ -640,4 +635,83 @@ test("rerank projection request cache coalesces duplicate reads and VerifiedRera
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test("canonical projection binds verified registry owner identity and recovers owner declaration for mid-function chunks", async () => {
+    const multiLines = [
+        "export async function undoAiBatch(batchId: string) {",
+        "  const header = loadBatch(batchId);",
+        "  const pre = (header.pre_state ?? {}) as CollectionPreState;",
+        "  if (hasRevisionConflict(pre)) throw new ConflictError();",
+        "  return rollbackBatch(batchId, pre);",
+        "}",
+    ];
+    const multiSource = multiLines.join("\n");
+    const multiHash = crypto.createHash("sha256").update(multiSource, "utf8").digest("hex");
+    const ownerRecord: SymbolRecord = {
+        symbolKey: "typescript:src/undo.ts:undoAiBatch",
+        symbolInstanceId: "sym-undo-ai-batch",
+        language: "typescript",
+        kind: "function",
+        name: "undoAiBatch",
+        qualifiedName: "undoAiBatch",
+        label: "function undoAiBatch",
+        file: "src/undo.ts",
+        span: { startLine: 1, endLine: 6 },
+        parentQualifiedNamePath: [],
+        fileHash: multiHash,
+        extractorVersion: "test",
+    };
+    const reg = buildSymbolRegistry({
+        manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath: "/repo",
+            rootFingerprint: "fp",
+            indexPolicyHash: "policy",
+            languageRouterVersion: "test",
+            extractorVersion: "test",
+            relationshipVersion: "test",
+            builtAt: "2026-11-28T00:00:00.000Z",
+            files: [{
+                path: ownerRecord.file,
+                hash: multiHash,
+                language: "typescript",
+                symbolCount: 1,
+                definitionStatus: "definitions_present",
+            }],
+        },
+        symbols: [ownerRecord],
+    });
+    // Chunk starts inside the body (line 3) and carries a mismatched stale chunk label/kind
+    // (mirroring ts13/ts4/ts8). Projection must emit the verified owner identity + real declaration.
+    const chunkResult: SearchResultLike = {
+        content: multiLines.slice(2, 5).join("\n"),
+        relativePath: ownerRecord.file,
+        language: "typescript",
+        score: 1,
+        startLine: 3,
+        endLine: 5,
+        symbolKind: "method",
+        symbolLabel: "function staleOuterFactory",
+        ownerSymbolInstanceId: ownerRecord.symbolInstanceId,
+    };
+    const readEvidence = async () => evidence({
+        relativeFile: ownerRecord.file,
+        source: multiSource,
+        sourceBytes: Buffer.from(multiSource, "utf8"),
+        observedHash: multiHash,
+    });
+
+    const outcome = await projectPublicationBoundSearchRerankDocument({
+        candidateId: searchRerankCandidateId(chunkResult),
+        codebaseRoot: "/repo",
+        semanticQuery: "check revision conflicts before rolling back AI mutation batch",
+        result: chunkResult,
+        registry: reg,
+        readSourceEvidence: readEvidence,
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.projectionIdentity, SEARCH_RERANK_DOCUMENT_POLICY.id);
+    assert.match(outcome.document, /^path: src\/undo\.ts\nrole: implementation \| kind: function \| symbol: function undoAiBatch\ndeclaration: export async function undoAiBatch\(batchId: string\) \{\nsource:\n/);
 });

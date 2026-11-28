@@ -10,8 +10,8 @@ import {
     type ModelSpec,
 } from "./model-store.js";
 
-const LATEON_PROFILE_FILE = "runtime-profile-v6-d128.json";
-const LATEON_ACQUISITION_FILE = "runtime-profile-v6-d128.acquisition.json";
+const LATEON_PROFILE_FILE = "runtime-profile-v7-d24.json";
+const LATEON_ACQUISITION_FILE = "runtime-profile-v7-d24.acquisition.json";
 const ACQUISITION_SCHEMA_VERSION = "satori_lateon_acquisition_v1";
 // 71,577,202 bytes at approximately 128 KiB/s takes about 546 seconds, leaving
 // roughly 54 seconds of the ten-minute deadline for requests and redirects.
@@ -29,7 +29,7 @@ type LateOnProfileArtifact = Readonly<{
 }>;
 
 type LateOnRuntimeProfile = Readonly<{
-    schemaVersion: "satori_lateon_runtime_profile_v6";
+    schemaVersion: "satori_lateon_runtime_profile_v7";
     profileId: string;
     qualificationStatus?: string;
     identity: Readonly<{
@@ -143,23 +143,23 @@ export function loadAcquisitionAuthority(runtimePackageRoot: string): LateOnAcqu
         manifest = readJson(acquisitionPath) as Partial<LateOnAcquisitionManifest>;
     } catch {
         throw new Error(
-            `The installed MCP package must contain the frozen LateOn D128 profile and acquisition manifest at '${path.dirname(profilePath)}'.`,
+            `The installed MCP package must contain the frozen LateOn D24 profile and acquisition manifest at '${path.dirname(profilePath)}'.`,
         );
     }
 
     const runtimeProfileSha256 = sha256Bytes(profileBytes);
     if (
-        profile.schemaVersion !== "satori_lateon_runtime_profile_v6"
+        profile.schemaVersion !== "satori_lateon_runtime_profile_v7"
         || typeof profile.profileId !== "string"
         || profile.profileId.length === 0
         || profile.identity?.repository !== DEFAULT_LATEON_REPOSITORY
         || profile.identity.revision !== DEFAULT_LATEON_REVISION
         || profile.identity.license !== "Apache-2.0"
-        || profile.inference?.candidateDepth !== 128
+        || profile.inference?.candidateDepth !== 24
         || !Array.isArray(profile.artifacts)
         || profile.artifacts.length === 0
     ) {
-        throw new Error("The installed MCP package does not contain the pinned LateOn D128 profile.");
+        throw new Error("The installed MCP package does not contain the pinned LateOn D24 profile.");
     }
     if (
         manifest.schemaVersion !== ACQUISITION_SCHEMA_VERSION

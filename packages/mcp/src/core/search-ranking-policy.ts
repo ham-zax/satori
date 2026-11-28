@@ -188,17 +188,50 @@ export type ImplementationCandidatePartition<T> = Readonly<{
     supporting: T[];
 }>;
 
+const NON_EXECUTABLE_DECLARATION_KINDS = new Set([
+    "type",
+    "type_alias",
+    "interface",
+    "enum",
+    "constant",
+    "property",
+    "variable",
+]);
+
+const EXPLICIT_DECLARATION_SEEKING_CUE =
+    /\b(?:what|which|where)\s+(?:is|are)\s+(?:the\s+)?(?:[a-z0-9_.\s-]{0,40}\b)?(?:type|types|typedef|interface|interfaces|enum|enums|const|constant|constants|struct|structs)\b|\b(?:type|interface|enum|struct|const|constant)\s+(?:definition|declaration|signature|fields|members|values|variants|alias)\b|\b(?:defined|declared)\s+as\s+(?:a|an)\s+(?:type|interface|enum|struct|constant)\b/i;
+
+function isExplicitDeclarationSeekingQuery(
+    plan: Pick<SearchQueryPlan, "semanticQuery">,
+): boolean {
+    const query = plan.semanticQuery?.trim();
+    return query ? EXPLICIT_DECLARATION_SEEKING_CUE.test(query) : false;
+}
+
+function isNonExecutableDeclarationCandidate<T>(
+    candidate: T,
+    symbolKind: ((candidate: T) => string | undefined) | undefined,
+): boolean {
+    if (!symbolKind) return false;
+    const kind = symbolKind(candidate)?.trim().toLowerCase();
+    return kind ? NON_EXECUTABLE_DECLARATION_KINDS.has(kind) : false;
+}
+
 /**
  * Partition candidates by implementation role using the single authoritative
  * answer-intent policy. Callers both before rerank selection and after rerank
  * ordering share this partition so skipped supporting candidates can never
- * outrank reranked implementations.
+ * outrank reranked implementations. Within implementation focus, verified
+ * non-executable declarations (types, interfaces, enums, constants, variables)
+ * rank behind executable implementation bodies without overriding explicit
+ * declaration/type/config/test/exact-path requests.
  */
 export function partitionImplementationCandidates<T>(input: {
     candidates: readonly T[];
     relativePath: (candidate: T) => string;
+    symbolKind?: (candidate: T) => string | undefined;
     answerFocus: SearchAnswerFocus;
-    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
+    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms"> & Partial<Pick<SearchQueryPlan, "semanticQuery">>;
     hasPathConstraint: boolean;
     neutralPrefersImplementation?: boolean;
 }): ImplementationCandidatePartition<T> {
@@ -216,8 +249,10 @@ export function partitionImplementationCandidates<T>(input: {
             supporting: [],
         };
     }
+    const declarationSeeking = isExplicitDeclarationSeekingQuery({ semanticQuery: plan.semanticQuery ?? "" });
     const queryTerms = new Set(plan.lexicalTerms.map((term) => term.value.toLowerCase()));
     const implementations: T[] = [];
+    const declarationRivals: T[] = [];
     const adapters: T[] = [];
     const supporting: T[] = [];
     for (const candidate of input.candidates) {
@@ -234,13 +269,15 @@ export function partitionImplementationCandidates<T>(input: {
             || category === "generated" || category === "example" || category === "artifact"
             || category === "landing" || isConfigurationPath(path)) {
             supporting.push(candidate);
+        } else if (!declarationSeeking && isNonExecutableDeclarationCandidate(candidate, input.symbolKind)) {
+            declarationRivals.push(candidate);
         } else {
             implementations.push(candidate);
         }
     }
     return {
         applies: true,
-        implementations,
+        implementations: [...implementations, ...declarationRivals],
         adapters,
         supporting,
     };
@@ -256,8 +293,9 @@ export function partitionImplementationCandidates<T>(input: {
 export function preferImplementationCandidates<T>(input: {
     candidates: readonly T[];
     relativePath: (candidate: T) => string;
+    symbolKind?: (candidate: T) => string | undefined;
     answerFocus: SearchAnswerFocus;
-    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
+    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms"> & Partial<Pick<SearchQueryPlan, "semanticQuery">>;
     hasPathConstraint: boolean;
     neutralPrefersImplementation?: boolean;
 }): T[] {

@@ -307,23 +307,23 @@ test("implementation focus puts runtime owners before tests and unrelated adapte
     assert.deepEqual(outcome.scored.map((entry) => entry.rerankerRank), [3, 4, 2, 1]);
 });
 
-test("neutral focus keeps provider order unless neutral_owner_preference is enabled", async () => {
+test("neutral focus prefers implementation owners by default and respects neutral_owner_preference=false", async () => {
     const results = [candidate("tests/cleanup.test.ts", 0.95), candidate("src/core/cleanup.ts", 0.80)];
     const reranker = rerankerReturning([{ index: 0, relevanceScore: 0.9 }, { index: 1, relevanceScore: 0.8 }]);
     const query = "stale cleanup effects";
     assert.equal(buildInput(query).answerFocus, "neutral");
     const byDefault = await run(buildInput(query), buildHost(results, reranker));
-    const preferred = await run(
-        buildInput(query, { neutral_owner_preference: true }),
+    const disabled = await run(
+        buildInput(query, { neutral_owner_preference: false }),
         buildHost(results, reranker),
     );
     assert.equal(byDefault.kind, "ok");
-    assert.equal(preferred.kind, "ok");
+    assert.equal(disabled.kind, "ok");
     assert.deepEqual(byDefault.scored.map((entry) => entry.result.relativePath), [
-        "tests/cleanup.test.ts", "src/core/cleanup.ts",
-    ]);
-    assert.deepEqual(preferred.scored.map((entry) => entry.result.relativePath), [
         "src/core/cleanup.ts", "tests/cleanup.test.ts",
+    ]);
+    assert.deepEqual(disabled.scored.map((entry) => entry.result.relativePath), [
+        "tests/cleanup.test.ts", "src/core/cleanup.ts",
     ]);
 });
 

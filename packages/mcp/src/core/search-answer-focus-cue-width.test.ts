@@ -44,10 +44,10 @@ const CUE_UNREACHABLE_QUERIES = [
     "where is the order of lifecycle callbacks decided",
 ] as const;
 
-test("focus_cue_wide is off by default", () => {
+test("focus_cue_wide is on by default for agent-oriented localization and can be disabled", () => {
     const flags = resolveSearchFlags();
-    assert.equal(flags.focus_cue_wide, false);
-    assert.equal(resolveSearchFlags({}).focus_cue_wide, false);
+    assert.equal(flags.focus_cue_wide, true);
+    assert.equal(resolveSearchFlags({}).focus_cue_wide, true);
     assert.equal(resolveSearchFlags({ focus_cue_wide: false }).focus_cue_wide, false);
 });
 
@@ -68,12 +68,9 @@ function reachesImplementationCue(plan: ReturnType<typeof buildSearchQueryPlan>)
         && !plan.implementationSeeking;
 }
 
-test("the default cue matches the pre-widening regex on every probe", () => {
-    // Probes are exercised through resolveSearchAnswerFocus, so this fails if
-    // the live default cue is edited, not merely if it diverges from the
-    // copied regex. Queries the old cue claims but an earlier branch also
-    // claims are excluded from the reason assertion, because the cue is not the
-    // reason that fires for them.
+test("focus_cue_wide=false matches the pre-widening regex on every probe", () => {
+    // Probes are exercised through resolveSearchAnswerFocus with focus_cue_wide: false,
+    // verifying the narrow cue remains exact when opted out.
     const probes = [
         ...DISCRIMINATING_QUERIES,
         "how does useState schedule a re-render when the setter is called",
@@ -87,18 +84,16 @@ test("the default cue matches the pre-widening regex on every probe", () => {
         const oldMatches = PRE_WIDENING_CUE.test(plan.semanticQuery.toLowerCase());
         const reaches = reachesImplementationCue(plan);
         if (!reaches) {
-            // The cue cannot be the deciding branch; only assert that a
-            // cue-matching query still ends up at implementation.
             if (oldMatches) {
-                assert.equal(resolveSearchAnswerFocus(plan).focus, "implementation", query);
+                assert.equal(resolveSearchAnswerFocus(plan, { focus_cue_wide: false }).focus, "implementation", query);
             }
             continue;
         }
-        const resolution = resolveSearchAnswerFocus(plan);
+        const resolution = resolveSearchAnswerFocus(plan, { focus_cue_wide: false });
         assert.equal(
             resolution.reasons.includes("implementation_question_cue"),
             oldMatches,
-            `${query}: the default cue must match exactly what the pre-widening regex matches`,
+            `${query}: narrow cue must match the pre-widening regex`,
         );
         if (oldMatches) {
             assert.deepEqual(resolution.reasons, ["implementation_question_cue"], query);
@@ -106,22 +101,20 @@ test("the default cue matches the pre-widening regex on every probe", () => {
     }
 });
 
-test("at default flags the discriminating queries do not resolve via the implementation cue", () => {
+test("at default flags the discriminating queries resolve via the widened implementation cue and can opt out", () => {
     for (const query of DISCRIMINATING_QUERIES) {
         const plan = buildSearchQueryPlan(query, true);
         const defaultResolution = resolveSearchAnswerFocus(plan);
         assert.equal(
             defaultResolution.reasons.includes("implementation_question_cue"),
-            false,
-            `${query}: focus_cue_wide is off, so the widened cue must not fire`,
-        );
-        // The widened flag is the only thing that turns these into
-        // implementation questions.
-        const wideResolution = resolveSearchAnswerFocus(plan, { focus_cue_wide: true });
-        assert.equal(
-            wideResolution.reasons.includes("implementation_question_cue"),
             true,
-            `${query}: focus_cue_wide must fire the widened cue`,
+            `${query}: focus_cue_wide is on by default, so the widened cue fires`,
+        );
+        const narrowResolution = resolveSearchAnswerFocus(plan, { focus_cue_wide: false });
+        assert.equal(
+            narrowResolution.reasons.includes("implementation_question_cue"),
+            false,
+            `${query}: focus_cue_wide=false disables the widened cue`,
         );
     }
 });
@@ -164,25 +157,25 @@ test("an env-set SATORI_SEARCH_FLAGS reaches resolveSearchAnswerFocus when no fl
         delete process.env.SATORI_SEARCH_FLAGS;
         assert.equal(
             resolveSearchAnswerFocus(plan).reasons.includes("implementation_question_cue"),
-            false,
+            true,
         );
-        process.env.SATORI_SEARCH_FLAGS = "focus_cue_wide";
+        process.env.SATORI_SEARCH_FLAGS = "no-focus_cue_wide";
         assert.equal(
             resolveSearchAnswerFocus(plan).reasons.includes("implementation_question_cue"),
-            true,
+            false,
         );
         // An explicit object that omits the key still inherits the env value,
         // because the object branch only overwrites keys it names.
         assert.equal(
             resolveSearchAnswerFocus(plan, { rerank_blend: true })
                 .reasons.includes("implementation_question_cue"),
-            true,
+            false,
         );
         // An explicit object that names the key wins over the env.
         assert.equal(
-            resolveSearchAnswerFocus(plan, { focus_cue_wide: false })
+            resolveSearchAnswerFocus(plan, { focus_cue_wide: true })
                 .reasons.includes("implementation_question_cue"),
-            false,
+            true,
         );
     } finally {
         if (previous === undefined) delete process.env.SATORI_SEARCH_FLAGS;

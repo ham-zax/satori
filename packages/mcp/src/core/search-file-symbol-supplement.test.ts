@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
+import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { supplementSearchFileSymbols } from "./search-file-symbol-supplement.js";
 import { buildSearchQueryPlan } from "./search-query-planning.js";
+import { prepareSearchRerankStructuralRelationships } from "./search-rerank-structural-context.js";
 
 function fixture(source: string, names: string[], file = "src/owner.ts") {
     const hash = crypto.createHash("sha256").update(source).digest("hex");
@@ -243,4 +244,131 @@ test("disjoint declaration files keep retrieval-lane selection and output unchan
     assert.deepEqual(results.map((result) => [result.relativePath, result.ownerSymbolInstanceId,
         result.startLine, result.endLine]),
     declarations.map((file) => [file.file, file.symbols[0].symbolInstanceId, 1, 1]));
+});
+
+test("long owners between 401 and 1,000 lines are admitted with bounded preview content", async () => {
+    const bodyLines = [
+        "export function createCloudSyncService() {",
+        ...Array.from({ length: 420 }, (_, index) => `  const step_${index} = enforceRateLimit(${index});`),
+        "  return { push, pull };",
+        "}",
+    ];
+    const source = bodyLines.join("\n");
+    const hash = crypto.createHash("sha256").update(source).digest("hex");
+    const symbol: SymbolRecord = {
+        symbolKey: "sync:createCloudSyncService",
+        symbolInstanceId: "inst-cloud-sync",
+        file: "apps/api/src/sync/sync-service.ts",
+        fileHash: hash,
+        name: "createCloudSyncService",
+        qualifiedName: "createCloudSyncService",
+        label: "function createCloudSyncService",
+        language: "typescript",
+        kind: "function",
+        parentQualifiedNamePath: [],
+        extractorVersion: "fixture",
+        span: { startLine: 1, endLine: bodyLines.length },
+    };
+    const registry = {
+        manifest: { files: [{ path: symbol.file, hash }] },
+        symbolsByFile: new Map([[symbol.file, [symbol]]]),
+        symbolsByInstanceId: new Map([[symbol.symbolInstanceId, symbol]]),
+    } as unknown as SymbolRegistry;
+    const results = await supplementSearchFileSymbols({
+        candidates: [{ relativePath: symbol.file }],
+        lexicalTerms: buildSearchQueryPlan("enforce sync rate limits push pull", true).lexicalTerms,
+        registry,
+        codebaseRoot: "/repo",
+        readSourceEvidence: async (_root, relativeFile) => ({
+            canonicalRoot: "/repo",
+            relativeFile,
+            source,
+            sourceBytes: Buffer.from(source),
+            observedHash: hash,
+        }),
+    });
+    assert.equal(results.length, 1);
+    assert.equal(results[0]!.ownerSymbolInstanceId, symbol.symbolInstanceId);
+    assert.equal(results[0]!.startLine, 1);
+    assert.equal(results[0]!.endLine, bodyLines.length);
+    assert.equal(String(results[0]!.content).split("\n").length, 400);
+});
+
+test("verified high-confidence CALLS edges admit matching callees from top retrieved owners", async () => {
+    const callerSource = "func FromData() { return permutateMatches(groups) }";
+    const calleeSource = "func permutateMatches(groups [][]string) [][]string { return buildCombinations(groups) }";
+    const callerHash = crypto.createHash("sha256").update(callerSource).digest("hex");
+    const calleeHash = crypto.createHash("sha256").update(calleeSource).digest("hex");
+    const callerSym: SymbolRecord = {
+        symbolKey: "go:FromData",
+        symbolInstanceId: "inst-from-data",
+        file: "pkg/custom_detectors/entry.go",
+        fileHash: callerHash,
+        name: "FromData",
+        qualifiedName: "FromData",
+        label: "function FromData",
+        language: "go",
+        kind: "function",
+        parentQualifiedNamePath: [],
+        extractorVersion: "fixture",
+        span: { startLine: 1, endLine: 1 },
+    };
+    const calleeSym: SymbolRecord = {
+        symbolKey: "go:permutateMatches",
+        symbolInstanceId: "inst-permutate",
+        file: "pkg/custom_detectors/combinator.go",
+        fileHash: calleeHash,
+        name: "permutateMatches",
+        qualifiedName: "permutateMatches",
+        label: "function permutateMatches",
+        language: "go",
+        kind: "function",
+        parentQualifiedNamePath: [],
+        extractorVersion: "fixture",
+        span: { startLine: 1, endLine: 1 },
+    };
+    const registry = {
+        manifest: { files: [{ path: callerSym.file, hash: callerHash }, { path: calleeSym.file, hash: calleeHash }] },
+        symbolsByFile: new Map([[callerSym.file, [callerSym]], [calleeSym.file, [calleeSym]]]),
+        symbolsByInstanceId: new Map([[callerSym.symbolInstanceId, callerSym], [calleeSym.symbolInstanceId, calleeSym]]),
+    } as unknown as SymbolRegistry;
+    const relationships: RelationshipRecord[] = [{
+        type: "CALLS",
+        sourceInstanceId: callerSym.symbolInstanceId,
+        targetInstanceId: calleeSym.symbolInstanceId,
+        sourceKey: callerSym.symbolKey,
+        targetKey: calleeSym.symbolKey,
+        sourceFile: callerSym.file,
+        targetFile: calleeSym.file,
+        confidence: "high",
+        resolutionAuthority: "direct_binding",
+    } as unknown as RelationshipRecord];
+    const preparedStructuralRelationships = prepareSearchRerankStructuralRelationships(relationships);
+    const readSourceEvidence = async (_root: string, relativeFile: string) => {
+        const source = relativeFile === callerSym.file ? callerSource : calleeSource;
+        const hash = relativeFile === callerSym.file ? callerHash : calleeHash;
+        return { canonicalRoot: "/repo", relativeFile, source, sourceBytes: Buffer.from(source), observedHash: hash };
+    };
+    const lexicalTerms = buildSearchQueryPlan("build combinations of multiple named capture groups", true).lexicalTerms;
+
+    // Without relationships: callee in a different file is not admitted.
+    const withoutGraph = await supplementSearchFileSymbols({
+        candidates: [{ relativePath: callerSym.file, ownerSymbolInstanceId: callerSym.symbolInstanceId }],
+        lexicalTerms,
+        registry,
+        codebaseRoot: "/repo",
+        readSourceEvidence,
+    });
+    assert.equal(withoutGraph.some((row) => row.ownerSymbolInstanceId === calleeSym.symbolInstanceId), false);
+
+    // With prepared high-confidence CALLS: callee is admitted cleanly.
+    const withGraph = await supplementSearchFileSymbols({
+        candidates: [{ relativePath: callerSym.file, ownerSymbolInstanceId: callerSym.symbolInstanceId }],
+        lexicalTerms,
+        registry,
+        codebaseRoot: "/repo",
+        preparedStructuralRelationships,
+        readSourceEvidence,
+    });
+    assert.equal(withGraph.some((row) => row.ownerSymbolInstanceId === calleeSym.symbolInstanceId), true);
 });

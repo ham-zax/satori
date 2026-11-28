@@ -95,8 +95,8 @@ const SHARED_RUNTIME_CONTRACT_NAMES = [
 ];
 
 const SHARED_RUNTIME_CONTRACT_OWNED_LITERALS = [
-  { name: 'LATEON_PROFILE_ID', value: 'lateon_offline_quality_projection_v6_d128_v1' },
-  { name: 'LATEON_ACTIVATION_POLICY', value: 'lateon_context_v6_d128_owner_default_v1' },
+  { name: 'LATEON_PROFILE_ID', value: 'lateon_offline_quality_projection_v7_d24' },
+  { name: 'LATEON_ACTIVATION_POLICY', value: 'lateon_context_v7_d24_owner_default' },
 ];
 
 const SHARED_RUNTIME_CONTRACT_CANONICAL_PATH = 'packages/core/src/runtime-contract.ts';

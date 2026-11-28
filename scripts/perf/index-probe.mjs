@@ -117,8 +117,8 @@ function probeEnv(home, cpuProf) {
         ...(lateon ? {
             SATORI_RERANKER_PROVIDER: 'lateon',
             SATORI_LATEON_MODEL_PATH: lateon,
-            SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v6_d128_v1',
-            SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v6_d128_owner_default_v1',
+            SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v7_d24',
+            SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v7_d24_owner_default',
         } : { SATORI_RERANKER_PROVIDER: 'none' }),
         ...(cpuProf ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${cpuProf}`.trim() } : {}),
     };

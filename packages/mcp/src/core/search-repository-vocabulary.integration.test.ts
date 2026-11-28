@@ -68,7 +68,7 @@ async function execute(lookup?: () => Promise<RepositoryVocabularyResult>, enabl
             const document = JSON.stringify({ repository_relative_path: result.relativePath, query_relevant_source_excerpt: result.content });
             return {
                 ok: true, document, utf8Bytes: Buffer.byteLength(document), sha256: 'fixture',
-                candidateRole: 'implementation', projectionIdentity: 'search_rerank_document_v5',
+                candidateRole: 'implementation', projectionIdentity: 'search_rerank_document_v6',
             };
         },
         shouldForceSearchPassFailure: () => false,

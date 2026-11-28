@@ -21,28 +21,28 @@ export function writeLateOnAcquisitionFixture(
     const assetsRoot = path.join(mcpRoot, "assets", "lateon");
     fs.mkdirSync(assetsRoot, { recursive: true });
     const profile = {
-        schemaVersion: "satori_lateon_runtime_profile_v6",
+        schemaVersion: "satori_lateon_runtime_profile_v7",
         profileId: LATEON_PROFILE_ID,
         identity: {
             repository: "lightonai/LateOn-Code-edge",
             revision: LATEON_REVISION,
             license: "Apache-2.0",
         },
-        inference: { candidateDepth: 128 },
+        inference: { candidateDepth: 24 },
         artifacts: Object.entries(artifacts).map(([artifactPath, content]) => ({
             path: artifactPath,
             sha256: digest(content),
         })),
     };
     const profileBytes = Buffer.from(JSON.stringify(profile, null, 2), "utf8");
-    fs.writeFileSync(path.join(assetsRoot, "runtime-profile-v6-d128.json"), profileBytes);
+    fs.writeFileSync(path.join(assetsRoot, "runtime-profile-v7-d24.json"), profileBytes);
     const entries = Object.entries(artifacts).map(([artifactPath, content]) => ({
         path: artifactPath,
         sizeBytes: Buffer.byteLength(content, "utf8"),
         sha256: digest(content),
     }));
     fs.writeFileSync(
-        path.join(assetsRoot, "runtime-profile-v6-d128.acquisition.json"),
+        path.join(assetsRoot, "runtime-profile-v7-d24.acquisition.json"),
         JSON.stringify({
             schemaVersion: "satori_lateon_acquisition_v1",
             runtimeProfileSha256: digest(profileBytes),

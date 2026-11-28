@@ -29,21 +29,21 @@ function writeAcquisitionFixture(
     const assetsRoot = path.join(runtimePackageRoot, "assets", "lateon");
     fs.mkdirSync(assetsRoot, { recursive: true });
     const profile = {
-        schemaVersion: "satori_lateon_runtime_profile_v6",
+        schemaVersion: "satori_lateon_runtime_profile_v7",
         profileId: LATEON_PROFILE_ID,
         identity: {
             repository: "lightonai/LateOn-Code-edge",
             revision: REVISION,
             license: "Apache-2.0",
         },
-        inference: { candidateDepth: 128 },
+        inference: { candidateDepth: 24 },
         artifacts: Object.entries(artifacts).map(([artifactPath, content]) => ({
             path: artifactPath,
             sha256: digest(content),
         })),
     };
     const profileBytes = Buffer.from(JSON.stringify(profile, null, 2), "utf8");
-    fs.writeFileSync(path.join(assetsRoot, "runtime-profile-v6-d128.json"), profileBytes);
+    fs.writeFileSync(path.join(assetsRoot, "runtime-profile-v7-d24.json"), profileBytes);
     const entries = Object.entries(artifacts).map(([artifactPath, content]) => ({
         path: artifactPath,
         sizeBytes: Buffer.byteLength(content, "utf8"),
@@ -63,7 +63,7 @@ function writeAcquisitionFixture(
         },
     };
     fs.writeFileSync(
-        path.join(assetsRoot, "runtime-profile-v6-d128.acquisition.json"),
+        path.join(assetsRoot, "runtime-profile-v7-d24.acquisition.json"),
         JSON.stringify(manifest, null, 2),
         "utf8",
     );
@@ -104,7 +104,7 @@ function stagingLeftovers(homeDir: string): string[] {
 
 test("shipped dry-run profile ID equals the frozen shipped profile ID", () => {
     const profile = JSON.parse(fs.readFileSync(
-        path.join(SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v6-d128.json"),
+        path.join(SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v7-d24.json"),
         "utf8",
     ));
     assert.equal(profile.profileId, LATEON_PROFILE_ID);
@@ -120,10 +120,10 @@ test("shipped dry-run profile ID equals the frozen shipped profile ID", () => {
 test("acquisition manifest binds the exact frozen profile digest", () => {
     const authority = readLateOnAcquisitionAuthority(SHIPPED_MCP_PACKAGE_ROOT);
     const profileBytes = fs.readFileSync(path.join(
-        SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v6-d128.json",
+        SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v7-d24.json",
     ));
     const acquisition = JSON.parse(fs.readFileSync(path.join(
-        SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v6-d128.acquisition.json",
+        SHIPPED_MCP_PACKAGE_ROOT, "assets", "lateon", "runtime-profile-v7-d24.acquisition.json",
     ), "utf8"));
     assert.equal(authority.runtimeProfileSha256, digest(profileBytes));
     assert.equal(acquisition.runtimeProfileSha256, digest(profileBytes));
@@ -209,20 +209,20 @@ test("LateOn model store replaces a corrupt cached copy with a verified download
     });
 });
 
-test("LateOn model store rejects a profile outside the pinned D128 authority", async () => {
+test("LateOn model store rejects a profile outside the pinned D24 authority", async () => {
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         const profilePath = path.join(
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.json",
+            "runtime-profile-v7-d24.json",
         );
         const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
         profile.identity.revision = "f".repeat(40);
         fs.writeFileSync(profilePath, JSON.stringify(profile), "utf8");
         await assert.rejects(
             ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
-            /does not contain the pinned LateOn D128 profile/,
+            /does not contain the pinned LateOn D24 profile/,
         );
     });
 });
@@ -233,7 +233,7 @@ test("LateOn model store rejects an acquisition manifest that does not bind the 
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.acquisition.json",
+            "runtime-profile-v7-d24.acquisition.json",
         );
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
         manifest.runtimeProfileSha256 = "0".repeat(64);
@@ -251,7 +251,7 @@ test("LateOn model store rejects an unsafe artifact path", async () => {
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.acquisition.json",
+            "runtime-profile-v7-d24.acquisition.json",
         );
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
         manifest.artifacts[0].path = "../escaped.onnx";
@@ -437,7 +437,7 @@ test("production model acquisition uses the verified target MCP profile bytes", 
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.json",
+            "runtime-profile-v7-d24.json",
         );
         const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
         const reserialized = Buffer.from(JSON.stringify(profile), "utf8");
@@ -446,7 +446,7 @@ test("production model acquisition uses the verified target MCP profile bytes", 
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.acquisition.json",
+            "runtime-profile-v7-d24.acquisition.json",
         );
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
         manifest.runtimeProfileSha256 = digest(reserialized);
@@ -469,7 +469,7 @@ test("production explicit model verification uses the verified target MCP profil
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.json",
+            "runtime-profile-v7-d24.json",
         );
         const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
         const reserialized = Buffer.from(JSON.stringify(profile), "utf8");
@@ -478,7 +478,7 @@ test("production explicit model verification uses the verified target MCP profil
             runtimePackageRoot,
             "assets",
             "lateon",
-            "runtime-profile-v6-d128.acquisition.json",
+            "runtime-profile-v7-d24.acquisition.json",
         );
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
         manifest.runtimeProfileSha256 = digest(reserialized);
